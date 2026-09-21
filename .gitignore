@@ -1,0 +1,14 @@
+.pytest_cache/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Generated BCNLT outputs and benchmark reports.
+*.json
+*.jsonl
+trace.*.txt
+side-by-side.*.txt
+work-units.*.jsonl
+wildcards*.jsonl

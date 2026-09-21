@@ -1,0 +1,13 @@
+[project]
+name = "bcnlt"
+version = "0.1.0"
+description = "Bosscrafts Coding Neural Learning Tokenizer prototype"
+requires-python = ">=3.10"
+readme = "README.md"
+
+[project.scripts]
+bcnlt = "bcnlt.cli:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
