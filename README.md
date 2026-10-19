@@ -201,3 +201,9 @@ The key rule is to avoid shared mutable state during parallel work. Workers shou
 5. Add type evidence retrieval for high-uncertainty member access and calls.
 6. Track whether UYR reduces downstream model mistakes on code explanation and transformation tasks.
 7. Ablate semantic history, UYR, wildcard, and IR mapping independently.
+
+<!-- archivist:begin -->
+## Archivist stewardship
+
+Updated: 2026-10-19T10:55:58-04:00. See [ledger](archivists_ledger.md), [inventory documentation](archivists_documentation.md), and [discovered tasks](archivists_todo.md).
+<!-- archivist:end -->
