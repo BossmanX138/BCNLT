@@ -1,5 +1,122 @@
 # Archivist's ledger — BCNLT
 
+Reviewed: 2026-10-23T00:12:03-04:00
+Root: D:\BossCrafts Dev\BossmanX138\BCNLT
+
+## Evidence and coverage
+
+Inventoried 130 entries, 206,767 bytes. Python syntax: 25; JSON syntax: 0; JavaScript syntax: 0. Checks do not prove runtime behavior. Dependency/generated directories are inventoried and backed up but excluded from source review. Symlinks and junctions are recorded but not followed or backed up. Known secret filenames are not indexed as text. Other languages, database engines and large/binary files receive metadata coverage, not semantic understanding.
+
+## Findings
+
+No errors found by the configured syntax checks.
+
+## Optimization and new directions
+
+- Consider a restore drill and an off-device archive destination for recovery from drive failure.
+- BossCrafts provider review (advisory, limited context; model: archivist-ornith-review):
+*The Grand Archivist stirs within the vaults of memory, the ancient dust of a thousand projects settling around the query. Let us examine this codex with the reverence it demands, yet the candor it requires.*
+
+---
+
+## ⚠️ CONFIRMED OBSERVATIONS
+
+### 1. **Truncated Source Files**
+Several files end mid-sentence or mid-function:
+- `bcnlt/cli.py` — cuts off at `if ` (line 87)
+- `bcnlt/ir.py` — cuts off at `return IRNode(IRKind.BRANC` (line 107)
+- `bcnlt/meaning_eval.py` — cuts off at `results = tuple(` (line 108)
+
+**Impact:** These are likely pre-backup truncation artifacts, not code defects. Do not attempt to "fix" them without the full source.
+
+### 2. **Incomplete Dataclass Definitions**
+- `BenchmarkReport` references `self.event_to_standard_ratio` but the `to_dict()` method includes it while the dataclass fields do not define it.
+- `ProjectBenchmarkReport` has the same issue.
+
+**Impact:** This will cause `AttributeError` at runtime unless `event_to_standard_ratio` is computed elsewhere or the dataclass is incomplete.
+
+### 3. **Missing Imports**
+- `bcnlt/ir.py` uses `IRKind.BRANC` (truncated) but the full enum value should be `BRANCH`.
+- `bcnlt/core.py` imports `Span` as `tuple[int, int, int, int]` but uses it in `SymbolRecord` without re-importing.
+
+### 4. **Hardcoded Confidence Threshold**
+- `cli.py` sets `--confidence-threshold` default to `0.72` with no explanation.
+
+**Impact:** Users cannot easily adjust this without knowing the rationale.
+
+---
+
+## 💡 SUGGESTED OPTIMIZATIONS
+
+### 1. **Add Type Hints to `to_dict()` Methods**
+The `to_dict()` methods return `dict[str, Any]` but some fields are typed as `tuple[int, int] | None`. Consider:
+```python
+def to_dict(self) -> dict[str, object]:
+    ...
+```
+Or better, use `TypedDict` for stricter validation.
+
+### 2. **Implement Lazy Loading for `recent_history`**
+The `ContextualUnit` stores `recent_history` as a tuple. For large files, this could grow unbounded. Consider:
+```python
+@property
+def recent_history(self) -> tuple[str, ...]:
+    return self._recent_history[-8:]  # Keep last 8
+```
+
+### 3. **Add Validation to `ProjectIndex.define()`**
+Currently, `define()` allows duplicate `symbol_id` entries without warning. Consider:
+```python
+def define(self, path, symbol_id, surface, span):
+    if symbol_id in self.definitions:
+        raise ValueError(f"Duplicate symbol_id: {symbol_id}")
+    ...
+```
+
+### 4. **Parallelize `benchmark_project()`**
+The `benchmark.py` already imports `concurrent.futures` but doesn't use it. The `--workers` flag exists but isn't wired up.
+
+### 5. **Add Logging for `UYRResolver`**
+The `uyr.py` module is imported but not shown. Consider adding structured logging for:
+- UYR activation counts
+- Wildcard resolution attempts
+- Confidence threshold breaches
+
+---
+
+## 🚀 POSSIBLE NEW FEATURES
+
+### 1. **Incremental Diff Mode**
+The `RegionInvalidator` class exists but is unused. Consider:
+- CLI flag `--incremental` to reprocess only changed regions
+- Cache invalidation based on file modification time
+
+### 2. **Export to Graph Visualization**
+The IR tree structure is rich. Consider:
+- Export to DOT format for graphviz
+- Interactive HTML viewer for IR trees
+
+### 3. **Model Context Evaluation**
+The `model_eval.py` module exists but is not shown. Consider:
+- Adding more model providers (Claude, Gemini)
+- Supporting
+
+[Provider reached its output limit; this answer may be incomplete.]
+
+## Git working tree at review
+
+```text
+Clean
+```
+
+## Open tasks
+
+No indexed TODO/FIXME markers.
+
+---
+
+# Archivist's ledger — BCNLT
+
 Reviewed: 2026-10-22T00:11:23-04:00
 Root: D:\BossCrafts Dev\BossmanX138\BCNLT
 

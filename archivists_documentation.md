@@ -1,14 +1,14 @@
 # Archivist-managed documentation — BCNLT
 
-Updated: 2026-10-22T00:11:23-04:00
+Updated: 2026-10-23T00:12:03-04:00
 
 Project root: `D:\BossCrafts Dev\BossmanX138\BCNLT`
 
-Inventory: 118 entries.
+Inventory: 130 entries.
 
 ## File types
 
-- (no extension): 71
+- (no extension): 83
 - .idx: 1
 - .md: 4
 - .pack: 1
