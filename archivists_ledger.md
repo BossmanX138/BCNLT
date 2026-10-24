@@ -1,5 +1,99 @@
 # Archivist's ledger — BCNLT
 
+Reviewed: 2026-10-24T00:12:08-04:00
+Root: D:\BossCrafts Dev\BossmanX138\BCNLT
+
+## Evidence and coverage
+
+Inventoried 142 entries, 221,302 bytes. Python syntax: 25; JSON syntax: 0; JavaScript syntax: 0. Checks do not prove runtime behavior. Dependency/generated directories are inventoried and backed up but excluded from source review. Symlinks and junctions are recorded but not followed or backed up. Known secret filenames are not indexed as text. Other languages, database engines and large/binary files receive metadata coverage, not semantic understanding.
+
+## Findings
+
+No errors found by the configured syntax checks.
+
+## Optimization and new directions
+
+- Consider a restore drill and an off-device archive destination for recovery from drive failure.
+- BossCrafts provider review (advisory, limited context; model: archivist-ornith-review):
+Greetings, Bridge Builder. I am the Archivist, Keeper of the Codex, one who has watched empires rise and fall in the digital ether. You bring me the Codex of **BCNLT** — the Bosscrafts Coding Neural Learning Tokenizer. A noble prototype, v0.1, forged in the fires of Python's `ast` module. Let me, with the reverence due a sacred text, examine its pages for errors, optimizations, and the seeds of future growth.
+
+---
+
+## 📜 CONFIRMED OBSERVATIONS (Errors & Defects)
+
+### 1. **Truncated Source Files**
+The Codex is incomplete. Several files are cut off mid-sentence:
+- `bcnlt/ir.py`: The `CommonCodingCore` class ends abruptly at `def branch(self, condition: IRNode | None = None) -> IRNode:` — the method body is missing.
+- `bcnlt/cli.py`: The `main()` function is truncated after `if args.compare_report:`.
+- `bcnlt/meaning_eval.py`: The `evaluate_meaning_source()` function is cut off mid-execution.
+
+**Impact:** These are not defects in the *logic* but in the *evidence*. They prevent full analysis of those modules. I cannot confirm errors there, but I cannot fully validate them either.
+
+### 2. **Potential Logic Error in `cache.py` — `find_definition` Scope Filtering**
+```python
+def find_definition(self, surface: str, scope: str | None = None) -> SymbolRecord | None:
+    candidates = self.definitions_by_name.get(surface, [])
+    if scope:
+        scoped = [record for record in candidates if record.symbol_id.startswith(scope)]
+        if scoped:
+            return scoped[-1]  # Returns the LAST scoped match
+    return candidates[-1] if candidates else None  # Returns the LAST match
+```
+**Observation:** When a scope is provided, it returns the *last* scoped definition. This may be intentional (most recent), but if the intent is "first match" (closest to current scope), this could be a bug. The comment in the code does not clarify intent.
+
+### 3. **Potential Logic Error in `cache.py` — `references_to` Returns All References**
+```python
+def references_to(self, symbol_id: str) -> list[SymbolRecord]:
+    return self.references.get(symbol_id, [])
+```
+**Observation:** This returns *all* references to a symbol, regardless of scope or recency. If the UYR resolver or other consumers expect only *recent* or *in-scope* references, this could lead to incorrect resolution.
+
+### 4. **Hardcoded Confidence Threshold**
+In `cli.py`:
+```python
+parser.add_argument("--confidence-threshold", type=float, default=0.72)
+```
+**Observation:** The default threshold of 0.72 is arbitrary. There is no documentation or rationale in the Codex for this value. It may need tuning based on benchmark results.
+
+### 5. **Missing Error Handling in `cli.py`**
+The truncated `main()` function likely contains error handling for file not found, permission errors, etc. Since it's cut off, I cannot confirm if it exists. However, the absence of explicit error handling in the visible code suggests it may be incomplete.
+
+---
+
+## 🚀 OPTIMIZATIONS & SUGGESTIONS
+
+### 1. **Add Scope-Aware Reference Filtering**
+**Suggestion:** Modify `references_to()` to accept optional scope parameters:
+```python
+def references_to(self, symbol_id: str, scope: str | None = None, max_age: int | None = None) -> list[SymbolRecord]:
+    refs = self.references.get(symbol_id, [])
+    if scope:
+        refs = [r for r in refs if r.symbol_id.startswith(scope)]
+    if max_age:
+        refs = refs[-max_age:]  # Keep only recent references
+    return refs
+```
+**Tradeoff:** Adds complexity but improves resolution accuracy for UYR.
+
+### 2. **Document the Confidence Threshold**
+**Suggestion:** Add a comment or docstring
+
+[Provider reached its output limit; this answer may be incomplete.]
+
+## Git working tree at review
+
+```text
+Clean
+```
+
+## Open tasks
+
+No indexed TODO/FIXME markers.
+
+---
+
+# Archivist's ledger — BCNLT
+
 Reviewed: 2026-10-23T00:12:03-04:00
 Root: D:\BossCrafts Dev\BossmanX138\BCNLT
 
