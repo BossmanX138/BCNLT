@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Sequence
+from pathlib import Path
 from typing import Any
 
 from .adapters.python import PythonAdapter
@@ -39,6 +40,19 @@ class BCNLTTokenizer:
 
     def encode_text(self, text: str) -> list[int]:
         return self._encode_base_mode("text", text)
+
+    def save_pretrained(self, path: str | Path) -> tuple[Path, ...]:
+        from .hf_tokenizer import save_tokenizer_artifact
+
+        return save_tokenizer_artifact(path, self.manifest)
+
+    @classmethod
+    def from_pretrained(
+        cls, path: str | Path, base_path: str | Path
+    ) -> "BCNLTTokenizer":
+        from .hf_tokenizer import load_tokenizer_artifact
+
+        return load_tokenizer_artifact(path, base_path)
 
     def encode_raw_code(self, source: str) -> list[int]:
         return self._encode_base_mode("raw_code", source)
