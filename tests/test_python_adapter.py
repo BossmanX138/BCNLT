@@ -1,6 +1,7 @@
 import ast
 
 from bcnlt.adapters.python import PythonAdapter
+from bcnlt.events import CURRENT_EVENT_VALUES
 from bcnlt.ir import IRKind
 
 
@@ -25,6 +26,7 @@ def test_python_adapter_emits_semantic_units_with_links_and_history():
     units = list(adapter.to_units(document))
 
     events = [unit.event for unit in units]
+    assert all(str(event) in CURRENT_EVENT_VALUES for event in events)
     assert "IMPORT" in events
     assert "DEFINE" in events
     assert "ASSIGN" in events

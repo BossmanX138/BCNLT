@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from .events import SemanticEvent
 from .ir import IRNode
 
 
@@ -20,7 +21,7 @@ class SourceDocument:
 @dataclass(frozen=True)
 class ContextualUnit:
     surface: str
-    event: str
+    event: str | SemanticEvent
     scope: str
     span: Span
     symbol_id: str | None = None
@@ -32,6 +33,7 @@ class ContextualUnit:
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
+        data["event"] = self.event.value if isinstance(self.event, SemanticEvent) else self.event
         data["span"] = {
             "start_line": self.span[0],
             "start_col": self.span[1],

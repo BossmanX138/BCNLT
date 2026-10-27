@@ -7,6 +7,7 @@ from typing import Any
 
 from bcnlt.cache import ProjectIndex
 from bcnlt.core import ContextualUnit, SourceDocument, Span
+from bcnlt.events import SemanticEvent
 from bcnlt.ir import IRKind, IRNode
 
 from .base import LanguageAdapter
@@ -77,33 +78,107 @@ class _PythonUnitVisitor(ast.NodeVisitor):
             )
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> Any:
+        self._visit_function(node, is_async=False)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> Any:
+        self._visit_function(node, is_async=True)
+
+    def _visit_function(
+        self, node: ast.FunctionDef | ast.AsyncFunctionDef, *, is_async: bool
+    ) -> None:
+        symbol_id = self._define(node.name, node)
+        if is_async:
+            self._emit(
+                node.name,
+                SemanticEvent.ASYNC,
+                node,
+                symbol_id=symbol_id,
+                ast_relation="AsyncFunctionDef",
+                ir=self.adapter.common_core.extension("python.async_function"),
+            )
+        self._emit(
+            node.name,
+            SemanticEvent.DEFINE,
+            node,
+            symbol_id=symbol_id,
+            ast_relation=f"{node.__class__.__name__}.name",
+            ir=self.adapter.common_core.function(node.name, [], []),
+        )
+        self._emit(
+            node.name,
+            SemanticEvent.SCOPE_ENTER,
+            node,
+            symbol_id=symbol_id,
+            ast_relation=node.__class__.__name__,
+        )
+        self.scopes.append(node.name)
+        self.scope_defs.append({})
+        try:
+            self._visit_arguments(node.args)
+            for stmt in node.body:
+                self.visit(stmt)
+        finally:
+            self.scope_defs.pop()
+            self.scopes.pop()
+            self._emit(
+                node.name,
+                SemanticEvent.SCOPE_EXIT,
+                node,
+                symbol_id=symbol_id,
+                ast_relation=node.__class__.__name__,
+            )
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> Any:
+        for decorator in node.decorator_list:
+            self.visit(decorator)
+        for base in node.bases:
+            self.visit(base)
+        for keyword in node.keywords:
+            self.visit(keyword.value)
         symbol_id = self._define(node.name, node)
         self._emit(
             node.name,
-            "DEFINE",
+            SemanticEvent.CLASS,
             node,
             symbol_id=symbol_id,
-            ast_relation="FunctionDef.name",
-            ir=self.adapter.common_core.function(node.name, [], []),
+            ast_relation="ClassDef.name",
+            ir=self.adapter.common_core.extension("python.class", {"name": node.name}),
         )
-        self._emit(node.name, "SCOPE_ENTER", node, symbol_id=symbol_id, ast_relation="FunctionDef")
+        self._emit(
+            node.name,
+            SemanticEvent.SCOPE_ENTER,
+            node,
+            symbol_id=symbol_id,
+            ast_relation="ClassDef",
+        )
         self.scopes.append(node.name)
         self.scope_defs.append({})
-        for arg in node.args.args:
-            param_id = self._define(arg.arg, arg)
+        try:
+            for stmt in node.body:
+                self.visit(stmt)
+        finally:
+            self.scope_defs.pop()
+            self.scopes.pop()
             self._emit(
-                arg.arg,
-                "DEFINE",
-                arg,
-                symbol_id=param_id,
-                ast_relation="arguments.args",
-                ir=self.adapter.common_core.parameter(arg.arg),
+                node.name,
+                SemanticEvent.SCOPE_EXIT,
+                node,
+                symbol_id=symbol_id,
+                ast_relation="ClassDef",
             )
-        for stmt in node.body:
-            self.visit(stmt)
-        self.scope_defs.pop()
-        self.scopes.pop()
-        self._emit(node.name, "SCOPE_EXIT", node, symbol_id=symbol_id, ast_relation="FunctionDef")
+
+    def visit_Lambda(self, node: ast.Lambda) -> Any:
+        name = self._anonymous_scope_name("lambda", node)
+        self._emit(name, SemanticEvent.SCOPE_ENTER, node, ast_relation="Lambda")
+        self.scopes.append(name)
+        self.scope_defs.append({})
+        try:
+            self._visit_arguments(node.args)
+            self.visit(node.body)
+        finally:
+            self.scope_defs.pop()
+            self.scopes.pop()
+            self._emit(name, SemanticEvent.SCOPE_EXIT, node, ast_relation="Lambda")
 
     def visit_Assign(self, node: ast.Assign) -> Any:
         self.visit(node.value)
@@ -160,6 +235,28 @@ class _PythonUnitVisitor(ast.NodeVisitor):
         for stmt in node.orelse:
             self.visit(stmt)
 
+    def visit_AsyncFor(self, node: ast.AsyncFor) -> Any:
+        self._emit(
+            "for",
+            SemanticEvent.ASYNC,
+            node,
+            ast_relation="AsyncFor",
+            ir=self.adapter.common_core.extension("python.async_for"),
+        )
+        self.visit(node.iter)
+        self._define_target(node.target, "AsyncFor.target")
+        self._emit(
+            self._target_name(node.target),
+            SemanticEvent.LOOP,
+            node,
+            ast_relation="AsyncFor",
+            ir=self.adapter.common_core.loop(self._target_name(node.target)),
+        )
+        for stmt in node.body:
+            self.visit(stmt)
+        for stmt in node.orelse:
+            self.visit(stmt)
+
     def visit_While(self, node: ast.While) -> Any:
         self.visit(node.test)
         self._emit("while", "LOOP", node, ast_relation="While", ir=self.adapter.common_core.loop())
@@ -178,6 +275,132 @@ class _PythonUnitVisitor(ast.NodeVisitor):
         if node.value:
             self.visit(node.value)
         self._emit("return", "RETURN", node, ast_relation="Return", ir=self.adapter.common_core.return_value())
+
+    def visit_With(self, node: ast.With) -> Any:
+        self._visit_with(node, is_async=False)
+
+    def visit_AsyncWith(self, node: ast.AsyncWith) -> Any:
+        self._visit_with(node, is_async=True)
+
+    def _visit_with(self, node: ast.With | ast.AsyncWith, *, is_async: bool) -> None:
+        surface = "async with" if is_async else "with"
+        if is_async:
+            self._emit(surface, SemanticEvent.ASYNC, node, ast_relation="AsyncWith")
+        self._emit(
+            surface,
+            SemanticEvent.CONTEXT_ENTER,
+            node,
+            ast_relation=node.__class__.__name__,
+            ir=self.adapter.common_core.extension("python.context_manager"),
+        )
+        for item in node.items:
+            self.visit(item.context_expr)
+            if item.optional_vars is not None:
+                self._define_target(item.optional_vars, f"{node.__class__.__name__}.optional_vars")
+        for stmt in node.body:
+            self.visit(stmt)
+        self._emit(
+            surface,
+            SemanticEvent.CONTEXT_EXIT,
+            node,
+            ast_relation=node.__class__.__name__,
+            ir=self.adapter.common_core.extension("python.context_manager"),
+        )
+
+    def visit_Try(self, node: ast.Try) -> Any:
+        self._visit_try(node)
+
+    def visit_TryStar(self, node: ast.TryStar) -> Any:
+        self._visit_try(node)
+
+    def _visit_try(self, node: ast.Try | ast.TryStar) -> None:
+        self._emit(
+            "try",
+            SemanticEvent.TRY,
+            node,
+            ast_relation=node.__class__.__name__,
+            ir=self.adapter.common_core.extension("python.try"),
+        )
+        for stmt in node.body:
+            self.visit(stmt)
+        for handler in node.handlers:
+            self._emit(
+                self._surface(handler.type) if handler.type is not None else "except",
+                SemanticEvent.EXCEPT,
+                handler,
+                ast_relation="ExceptHandler",
+                ir=self.adapter.common_core.extension("python.except"),
+            )
+            if handler.type is not None:
+                self.visit(handler.type)
+            if handler.name:
+                symbol_id = self._define(handler.name, handler)
+                self._emit(
+                    handler.name,
+                    SemanticEvent.DEFINE,
+                    handler,
+                    symbol_id=symbol_id,
+                    ast_relation="ExceptHandler.name",
+                    ir=self.adapter.common_core.variable(handler.name),
+                )
+            for stmt in handler.body:
+                self.visit(stmt)
+        for stmt in node.orelse:
+            self.visit(stmt)
+        if node.finalbody:
+            self._emit(
+                "finally",
+                SemanticEvent.FINALLY,
+                node,
+                ast_relation=f"{node.__class__.__name__}.finalbody",
+                ir=self.adapter.common_core.extension("python.finally"),
+            )
+            for stmt in node.finalbody:
+                self.visit(stmt)
+
+    def visit_Raise(self, node: ast.Raise) -> Any:
+        self._emit(
+            "raise",
+            SemanticEvent.RAISE,
+            node,
+            ast_relation="Raise",
+            ir=IRNode(IRKind.ERROR, name="raise"),
+        )
+        if node.exc is not None:
+            self.visit(node.exc)
+        if node.cause is not None:
+            self.visit(node.cause)
+
+    def visit_Yield(self, node: ast.Yield) -> Any:
+        self._emit(
+            "yield",
+            SemanticEvent.YIELD,
+            node,
+            ast_relation="Yield",
+            ir=self.adapter.common_core.extension("python.yield"),
+        )
+        if node.value is not None:
+            self.visit(node.value)
+
+    def visit_YieldFrom(self, node: ast.YieldFrom) -> Any:
+        self._emit(
+            "yield from",
+            SemanticEvent.YIELD,
+            node,
+            ast_relation="YieldFrom",
+            ir=self.adapter.common_core.extension("python.yield_from"),
+        )
+        self.visit(node.value)
+
+    def visit_Await(self, node: ast.Await) -> Any:
+        self._emit(
+            "await",
+            SemanticEvent.AWAIT,
+            node,
+            ast_relation="Await",
+            ir=self.adapter.common_core.extension("python.await"),
+        )
+        self.visit(node.value)
 
     def visit_Call(self, node: ast.Call) -> Any:
         self.visit(node.func)
@@ -273,19 +496,73 @@ class _PythonUnitVisitor(ast.NodeVisitor):
             self.visit(value)
         self._emit("dict", "LITERAL", node, ast_relation="Dict", ir=IRNode(IRKind.DATA_STRUCTURE, name="dict"))
 
+    def visit_ListComp(self, node: ast.ListComp) -> Any:
+        self._visit_comprehension(node, (node.elt,))
+
+    def visit_SetComp(self, node: ast.SetComp) -> Any:
+        self._visit_comprehension(node, (node.elt,))
+
+    def visit_GeneratorExp(self, node: ast.GeneratorExp) -> Any:
+        self._visit_comprehension(node, (node.elt,))
+
+    def visit_DictComp(self, node: ast.DictComp) -> Any:
+        self._visit_comprehension(node, (node.key, node.value))
+
+    def _visit_comprehension(
+        self,
+        node: ast.ListComp | ast.SetComp | ast.GeneratorExp | ast.DictComp,
+        result_nodes: tuple[ast.AST, ...],
+    ) -> None:
+        name = self._anonymous_scope_name("comprehension", node)
+        self._emit(
+            self._surface(node),
+            SemanticEvent.COMPREHENSION,
+            node,
+            ast_relation=node.__class__.__name__,
+            ir=self.adapter.common_core.extension(f"python.{node.__class__.__name__.lower()}"),
+        )
+        self._emit(name, SemanticEvent.SCOPE_ENTER, node, ast_relation=node.__class__.__name__)
+        self.scopes.append(name)
+        self.scope_defs.append({})
+        try:
+            for generator in node.generators:
+                self.visit(generator.iter)
+                self._define_target(generator.target, "comprehension.target")
+                for condition in generator.ifs:
+                    self.visit(condition)
+            for result in result_nodes:
+                self.visit(result)
+        finally:
+            self.scope_defs.pop()
+            self.scopes.pop()
+            self._emit(name, SemanticEvent.SCOPE_EXIT, node, ast_relation=node.__class__.__name__)
+
     def visit_Match(self, node: ast.Match) -> Any:
         self.visit(node.subject)
         self._emit(
             "match",
-            "UNKNOWN_SEMANTIC",
+            SemanticEvent.MATCH,
             node,
             ast_relation="Match",
             ir=self.adapter.common_core.extension("python.match", {"surface": self._surface(node)}),
-            metadata={"unknown_node": "Match"},
         )
         for case in node.cases:
+            if case.guard is not None:
+                self.visit(case.guard)
             for stmt in case.body:
                 self.visit(stmt)
+
+    def visit_Delete(self, node: ast.Delete) -> Any:
+        self._emit(
+            self._surface(node),
+            SemanticEvent.UNKNOWN_SEMANTIC,
+            node,
+            ast_relation="Delete",
+            ir=self.adapter.common_core.extension("python.unknown", {"node": "Delete"}),
+            metadata={"unknown_node": "Delete"},
+        )
+        for target in node.targets:
+            self.visit(target)
 
     def _define_target(
         self, target: ast.AST, relation: str, dynamic_binding: bool = False
@@ -324,10 +601,40 @@ class _PythonUnitVisitor(ast.NodeVisitor):
         record = self.document.index.find_definition(name)
         return record.symbol_id if record else None
 
+    def _visit_arguments(self, arguments: ast.arguments) -> None:
+        positional = [*arguments.posonlyargs, *arguments.args]
+        keyword_only = list(arguments.kwonlyargs)
+        for arg in [*positional, *keyword_only]:
+            param_id = self._define(arg.arg, arg)
+            self._emit(
+                arg.arg,
+                SemanticEvent.DEFINE,
+                arg,
+                symbol_id=param_id,
+                ast_relation="arguments.args",
+                ir=self.adapter.common_core.parameter(arg.arg),
+            )
+        for arg in (arguments.vararg, arguments.kwarg):
+            if arg is not None:
+                param_id = self._define(arg.arg, arg)
+                self._emit(
+                    arg.arg,
+                    SemanticEvent.DEFINE,
+                    arg,
+                    symbol_id=param_id,
+                    ast_relation="arguments.vararg" if arg is arguments.vararg else "arguments.kwarg",
+                    ir=self.adapter.common_core.parameter(arg.arg),
+                )
+        for default in [*arguments.defaults, *(item for item in arguments.kw_defaults if item)]:
+            self.visit(default)
+
+    def _anonymous_scope_name(self, prefix: str, node: ast.AST) -> str:
+        return f"{prefix}@{getattr(node, 'lineno', 1)}:{getattr(node, 'col_offset', 0)}"
+
     def _emit(
         self,
         surface: str,
-        event: str,
+        event: str | SemanticEvent,
         node: ast.AST,
         *,
         symbol_id: str | None = None,
@@ -336,9 +643,10 @@ class _PythonUnitVisitor(ast.NodeVisitor):
         ir: IRNode | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> None:
+        event_value = SemanticEvent(event).value
         unit = ContextualUnit(
             surface=surface,
-            event=event,
+            event=event_value,
             scope=self.scope,
             symbol_id=symbol_id,
             defines=defines,
@@ -349,7 +657,7 @@ class _PythonUnitVisitor(ast.NodeVisitor):
             metadata=metadata or {},
         )
         self.units.append(unit)
-        self.history.append(f"{event}:{surface}")
+        self.history.append(f"{event_value}:{surface}")
 
     def _span(self, node: ast.AST) -> Span:
         return (

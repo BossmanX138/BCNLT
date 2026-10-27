@@ -41,9 +41,7 @@ def test_cli_appends_wildcard_memory(tmp_path: Path):
     sample = tmp_path / "ambiguous.py"
     sample.write_text(
         "payload = {'kind': 'demo'}\n"
-        "match payload:\n"
-        "    case {'kind': kind}:\n"
-        "        outcome = kind\n",
+        "del payload\n",
         encoding="utf-8",
     )
     jsonl = tmp_path / "units.jsonl"
@@ -67,7 +65,7 @@ def test_cli_appends_wildcard_memory(tmp_path: Path):
 
     records = [json.loads(line) for line in memory.read_text(encoding="utf-8").splitlines()]
     assert records
-    assert records[0]["category"] == "pattern_matching"
+    assert records[0]["category"] == "extension"
     assert records[0]["seen_count"] == 1
 
 

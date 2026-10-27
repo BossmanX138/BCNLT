@@ -12,9 +12,7 @@ def run(plugin, payload):
     handler = getattr(plugin, payload["name"])
     return handler(payload)
 
-match payload:
-    case {"kind": kind}:
-        outcome = kind
+del payload
 """
 
 
@@ -64,7 +62,7 @@ def test_wildcard_resolver_returns_hypothesis_with_evidence():
 
     provisional = resolver.resolve(unknown, document.index)
 
-    assert provisional.category in {"pattern_matching", "extension", "control_flow"}
+    assert provisional.category == "extension"
     assert provisional.confidence > 0
     assert provisional.hypotheses
     assert provisional.evidence
