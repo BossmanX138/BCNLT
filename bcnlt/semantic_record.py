@@ -158,7 +158,7 @@ def _record_from_unit(unit: ContextualUnit, score: UncertaintyScore) -> Semantic
         ast_relation=_normalize_optional(unit.ast_relation),
         ir=canonical_ir_from_node(unit.ir) if unit.ir is not None else None,
         recent_history=tuple(_normalize(item) for item in unit.recent_history[-8:]),
-        metadata=tuple(metadata),
+        metadata=tuple(sorted(metadata, key=lambda item: item[0])),
         confidence_band=classify_confidence(score.confidence),
         uncertainty_band=classify_uncertainty(score.uncertainty),
     )

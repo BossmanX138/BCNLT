@@ -160,9 +160,7 @@ def load_manifest(
         raise ValueError("Tokenizer manifest digest mismatch")
     manifest = _manifest_from_payload(payload)
     _validate_manifest(manifest)
-    vocab = _validated_base_vocab(base)
-    if base.vocab_size != manifest.base_vocab_size or _vocabulary_hash(vocab) != manifest.base_vocabulary_sha256:
-        raise ValueError("Tokenizer manifest base vocabulary mismatch")
+    validate_manifest_for_base(manifest, base)
     if identity is not None and identity.sha256 != manifest.base_tokenizer_sha256:
         raise ValueError("Tokenizer manifest base tokenizer source hash mismatch")
     expected_tokens = _load_inventory(DEFAULT_INVENTORY_PATH)
@@ -174,6 +172,19 @@ def load_manifest(
     if source.read_text(encoding="utf-8") != canonical:
         raise ValueError("Tokenizer manifest is not in canonical form")
     return manifest
+
+
+def validate_manifest_for_base(manifest: TokenizerManifest, base: BaseTokenizer) -> None:
+    _validate_manifest(manifest)
+    vocab = _validated_base_vocab(base)
+    if (
+        base.vocab_size != manifest.base_vocab_size
+        or _vocabulary_hash(vocab) != manifest.base_vocabulary_sha256
+    ):
+        raise ValueError("Tokenizer manifest base vocabulary mismatch")
+    collisions = sorted(set(manifest.token_to_id).intersection(vocab))
+    if collisions:
+        raise ValueError(f"BCNLT structural token collides with base vocabulary: {collisions[0]}")
 
 
 def _load_inventory(path: Path) -> tuple[str, ...]:
