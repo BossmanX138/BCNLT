@@ -139,11 +139,13 @@ class OllamaChatModel:
         model: str,
         base_url: str = "http://127.0.0.1:11434",
         timeout: float = 120.0,
+        max_output_tokens: int = 64,
         transport: Transport | None = None,
     ) -> None:
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.max_output_tokens = max_output_tokens
         self.transport = transport or _urlopen_transport
         self.name = f"ollama:{model}"
 
@@ -151,7 +153,7 @@ class OllamaChatModel:
         payload: dict[str, object] = {
             "model": self.model,
             "stream": False,
-            "options": {"temperature": 0},
+            "options": {"temperature": 0, "num_predict": self.max_output_tokens},
             "messages": [
                 {
                     "role": "system",
@@ -336,7 +338,14 @@ def _python_line_defines_symbol(line: str, symbol: str) -> bool:
 
 
 def _answer_matches_line(answer: str, line: int) -> bool:
-    return any(int(match) == line for match in re.findall(r"\d+", answer))
+    explicit = {
+        int(match)
+        for match in re.findall(r"(?i)(?:\bline\s*|\bL)(\d+)\b", answer)
+    }
+    if explicit:
+        return explicit == {line}
+    bare = re.fullmatch(r"\s*(\d+)\s*[.!]?\s*", answer)
+    return bare is not None and int(bare.group(1)) == line
 
 
 def _urlopen_transport(

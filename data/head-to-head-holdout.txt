@@ -1,0 +1,8 @@
+C:\Users\bossm\Documents\Codex\BCNLT\bcnlt\adapters\base.py
+C:\Users\bossm\Documents\Codex\BCNLT\bcnlt\adapters\python.py
+C:\Users\bossm\Documents\Codex\BCNLT\bcnlt\benchmark.py
+C:\Users\bossm\Documents\Codex\BCNLT\bcnlt\cache.py
+C:\Users\bossm\Documents\Codex\BCNLT\bcnlt\cli.py
+C:\Users\bossm\Documents\Codex\BCNLT\bcnlt\core.py
+C:\Users\bossm\Documents\Codex\BCNLT\bcnlt\incremental.py
+C:\Users\bossm\Documents\Codex\BCNLT\bcnlt\ir.py

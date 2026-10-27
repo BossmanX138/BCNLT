@@ -1,0 +1,21 @@
+FROM D:/Wizard-Phi-3.5-v0.1/outputs/runtime-runeforge-mk2/Runeforge-Mk2-7B-Q4_K_M.gguf
+
+TEMPLATE """{{- $system := "" -}}
+{{- range .Messages }}
+{{- if eq .Role "system" }}{{- $system = .Content -}}
+{{- else if eq .Role "user" }}Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.
+
+### Instruction:
+{{ $system }}
+
+### Input:
+{{ .Content }}
+
+### Response:
+{{- else if eq .Role "assistant" }}{{ .Content }}</s>
+{{- end }}
+{{- end }}{{ .Response }}"""
+
+PARAMETER temperature 0
+PARAMETER num_ctx 8192
+PARAMETER stop </s>

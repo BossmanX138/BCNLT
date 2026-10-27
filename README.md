@@ -109,6 +109,32 @@ To use a local Ollama model:
 python -m bcnlt.cli path\to\file.py --model-eval-report model-ollama.json --model-eval-provider ollama --model-eval-model qwen2.5-coder:7b --model-eval-max-probes 10
 ```
 
+The checked-in Wizard-Phi v0.2 profile validates and imports the promoted local release, performs a real readiness completion, and runs this evaluation end to end:
+
+```powershell
+.\scripts\connect_wizard_phi_v02.ps1
+```
+
+See `integrations/wizard_phi_v02/README.md` for its pinned source lineage and runtime settings.
+
+The Runeforge Mk2 7B profile preserves the merged FP16 source, validates the pinned
+Q4_K_M runtime, registers `runeforge-mk2:7b`, and requires a real readiness
+completion before evaluation:
+
+```powershell
+.\scripts\connect_runeforge_mk2.ps1
+```
+
+Run the controlled 46-probe comparison against Wizard-Phi v0.2 with:
+
+```powershell
+python .\scripts\run_bcnlt_head_to_head_mk2.py
+```
+
+The comparison writes `outputs/head-to-head-wizard-v02-vs-runeforge-mk2/`.
+Use `scripts/import_bcnlt_observations.py` to add its answers to the semantic-pair
+database without deleting observations from earlier runs.
+
 The output compares:
 
 - Standard raw-text context answer accuracy.

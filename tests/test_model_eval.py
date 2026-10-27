@@ -7,6 +7,7 @@ from bcnlt.model_eval import (
     OllamaChatModel,
     OpenAICompatibleChatModel,
     OracleDefinitionLineModel,
+    _answer_matches_line,
     evaluate_model_source,
 )
 
@@ -128,6 +129,7 @@ def test_ollama_model_uses_local_chat_transport():
     assert calls[0][1]["Content-Type"] == "application/json"
     assert calls[0][2]["model"] == "qwen2.5-coder:latest"
     assert calls[0][2]["stream"] is False
+    assert calls[0][2]["options"]["num_predict"] == 64
     assert "L7: DEFINE thing" in calls[0][2]["messages"][-1]["content"]
 
 
@@ -162,3 +164,11 @@ def test_openai_compatible_model_uses_chat_completion_transport():
     assert calls[0][2]["model"] == "gpt-test"
     assert calls[0][2]["temperature"] == 0
     assert "L42: DEFINE thing" in calls[0][2]["messages"][-1]["content"]
+
+
+def test_line_grader_rejects_ambiguous_multi_line_answers():
+    assert _answer_matches_line("line 7", 7)
+    assert _answer_matches_line("L7: DEFINE thing", 7)
+    assert _answer_matches_line("7", 7)
+    assert not _answer_matches_line("L7: value\nL8: DEFINE thing\nL9: value", 8)
+    assert not _answer_matches_line("the value is 7", 7)
