@@ -28,6 +28,32 @@ python -m bcnlt.cli fixtures/sample.py --model-eval-report model-context.json
 python -m bcnlt.cli fixtures/ambiguous.py --jsonl ambiguous.jsonl --wildcard-memory wildcards.jsonl
 ```
 
+## BCNLT Tokenizer v1
+
+The `bcnlt-tokenizer-v1` artifact combines an immutable Hugging Face base
+vocabulary with a deterministic BCNLT structural-token inventory. The three
+explicit modes are text, raw_code, and semantic_code. Existing base token IDs
+remain unchanged; BCNLT structural IDs are appended contiguously after the base
+vocabulary.
+
+Text and raw code preserve their base-token payloads. In semantic mode,
+canonical semantic records round-trip exactly through IDs and back to canonical
+JSONL. Python source does not round-trip from semantic mode because parsing
+intentionally converts source into meaning-bearing records rather than retaining
+all formatting, comments, and spelling choices.
+
+Build and verify a local artifact with:
+
+```powershell
+python -m bcnlt.tokenizer_cli build --base path\to\base-tokenizer --output path\to\bcnlt-artifact --name organization/model --revision pinned-revision
+python -m bcnlt.tokenizer_cli verify --artifact path\to\bcnlt-artifact --base path\to\base-tokenizer
+```
+
+The artifact contains a canonical manifest and the exact structural inventory;
+it does not copy model weights. See `docs/bcnlt-tokenizer-v1.md` for the token
+classes, canonical field order, score bands, persistence contract, and failure
+conditions.
+
 ## Architecture
 
 - `bcnlt.ir`: common coding core IR. It keeps universal programming concepts in the core and leaves language-specific oddities to extensions.
@@ -41,6 +67,9 @@ python -m bcnlt.cli fixtures/ambiguous.py --jsonl ambiguous.jsonl --wildcard-mem
 - `bcnlt.preprocessing`: single-file and parallel multi-file preprocessing helpers.
 - `bcnlt.incremental`: changed-file and changed-region invalidation hooks.
 - `bcnlt.cli`: JSONL and trace command-line interface.
+- `bcnlt.tokenizer`: explicit-mode hybrid tokenizer and strict semantic decoder.
+- `bcnlt.hf_tokenizer`: local Hugging Face base adapter and artifact persistence.
+- `bcnlt.tokenizer_cli`: build, inspect, encode, and verify commands.
 - `bcnlt.benchmark`: lexical-token count versus BCNLT event count and latency.
 
 ## BCNLT vs Standard Tokenizer Report

@@ -32,3 +32,15 @@ def test_readme_documents_model_context_eval():
     assert "--model-eval-report" in readme
     assert "--model-eval-provider openai" in readme
     assert "--model-eval-provider ollama" in readme
+
+
+def test_readme_documents_bcnlt_tokenizer_v1_contract():
+    readme = " ".join(Path("README.md").read_text(encoding="utf-8").split())
+
+    assert "bcnlt-tokenizer-v1" in readme
+    assert "text, raw_code, and semantic_code" in readme
+    assert "base token IDs remain unchanged" in readme
+    assert "semantic records round-trip exactly" in readme
+    assert "Python source does not round-trip" in readme
+    assert "bcnlt.tokenizer_cli verify" in readme
+    assert "docs/bcnlt-tokenizer-v1.md" in readme
