@@ -1,5 +1,11 @@
 # BCNLT Multilingual Semantic Training Design
 
+> **Architecture amendment (2026-10-28):** The later per-language cartridge
+> implementation details in this document are superseded by
+> `2026-10-28-bcnlt-common-core-learning-design.md`. The target grammars now
+> provide declarative syntax aliases to one Common Coding Core and one shared
+> learned-definition loop; they are not separate semantic implementations.
+
 ## Intent
 
 BCNLT will expand from its Python-first semantic corpus pipeline into a native,

@@ -134,7 +134,8 @@ def test_unhandled_semantic_node_is_visible_as_unknown_and_still_traverses_child
     )
 
     assert unknown.surface == "del value"
-    assert unknown.metadata == {"unknown_node": "Delete"}
+    assert unknown.metadata["unknown_node"] == "Delete"
+    assert unknown.metadata["knowledge_state"] == "provisional"
     assert reference.defines == "module.value"
 
 
@@ -221,4 +222,5 @@ def test_other_unsupported_statement_nodes_emit_unknown_semantic():
     )
 
     assert unknown.surface == "assert ready"
-    assert unknown.metadata == {"unknown_node": "Assert"}
+    assert unknown.metadata["unknown_node"] == "Assert"
+    assert unknown.metadata["knowledge_state"] == "provisional"

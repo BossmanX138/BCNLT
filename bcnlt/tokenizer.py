@@ -7,7 +7,7 @@ from typing import Any
 
 from .adapters.python import PythonAdapter
 from .canonical import canonical_record_bytes, record_from_canonical_bytes
-from .semantic_record import SemanticTokenRecord, records_from_units
+from .semantic_record import SemanticTokenRecord, records_from_assessments
 from .tokenizer_base import BaseTokenizer
 from .tokenizer_manifest import TokenizerManifest, validate_manifest_for_base
 
@@ -31,12 +31,21 @@ _SCORE_FIELDS = {"confidence", "uncertainty"}
 
 
 class BCNLTTokenizer:
-    def __init__(self, base: BaseTokenizer, manifest: TokenizerManifest) -> None:
+    def __init__(
+        self,
+        base: BaseTokenizer,
+        manifest: TokenizerManifest,
+        *,
+        learned_memory_path: str | Path | None = None,
+    ) -> None:
         validate_manifest_for_base(manifest, base)
         self.base = base
         self.manifest = manifest
         self._token_to_id = manifest.token_to_id
         self._id_to_token = manifest.id_to_token
+        self._semantic_adapter = PythonAdapter(
+            wildcard_memory_path=learned_memory_path
+        )
 
     def encode_text(self, text: str) -> list[int]:
         return self._encode_base_mode("text", text)
@@ -71,9 +80,10 @@ class BCNLTTokenizer:
         return result
 
     def encode_source(self, source: str, path: str = "<memory>") -> list[int]:
-        adapter = PythonAdapter()
-        document = adapter.parse(source, path=path)
-        records = records_from_units(adapter.to_units(document), document.index)
+        document = self._semantic_adapter.parse(source, path=path)
+        records = records_from_assessments(
+            self._semantic_adapter.extract(document).assessments
+        )
         return self.encode_records(records)
 
     def decode(self, ids: Sequence[int]) -> str:

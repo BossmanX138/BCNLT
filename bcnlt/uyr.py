@@ -1,9 +1,35 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from typing import Protocol
 
 from .core import ContextualUnit, SourceDocument
+from .ir import IRKind, IRNode
 from .uncertainty import HeuristicUncertaintyScorer, UncertaintyScore
+
+
+class LearnedDefinitionRecord(Protocol):
+    signature: str
+    definition_state: object
+    target_event: str | None
+    target_ir_kind: str | None
+    evidence: tuple[str, ...]
+    confidence: float
+    extension_name: str | None
+
+
+class LearnedDefinitionStore(Protocol):
+    def lookup(self, unit: ContextualUnit) -> LearnedDefinitionRecord | None:
+        raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class LearnedProjection:
+    signature: str
+    target_event: str
+    target_ir_kind: IRKind
+    evidence: tuple[str, ...]
+    extension_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -32,6 +58,28 @@ class UYRResult:
     expanded_context: tuple[ContextualUnit, ...] = field(default_factory=tuple)
     retrievals: tuple[str, ...] = field(default_factory=tuple)
     scores: tuple[UncertaintyScore, ...] = field(default_factory=tuple)
+    learned_projection: LearnedProjection | None = None
+
+    def projected_unit(self) -> ContextualUnit:
+        projection = self.learned_projection
+        if projection is None:
+            return self.unit
+        metadata = dict(self.unit.metadata)
+        metadata["learned_definition_signature"] = projection.signature
+        metadata["learned_definition_state"] = "validated"
+        if projection.extension_name is not None:
+            metadata["learned_extension_name"] = projection.extension_name
+        ir = IRNode(
+            projection.target_ir_kind,
+            name=projection.extension_name or self.unit.surface,
+            metadata={"learned_definition_signature": projection.signature},
+        )
+        return replace(
+            self.unit,
+            event=projection.target_event,
+            ir=ir,
+            metadata=metadata,
+        )
 
 
 class UYRResolver:
@@ -46,6 +94,8 @@ class UYRResolver:
         unit: ContextualUnit,
         document: SourceDocument,
         all_units: list[ContextualUnit],
+        *,
+        learned_definitions: LearnedDefinitionStore | None = None,
     ) -> UYRResult:
         initial = self.scorer.score(unit, document.index)
         confidence = initial.confidence
@@ -54,6 +104,34 @@ class UYRResolver:
         scores = [initial]
         expanded: list[ContextualUnit] = []
         rounds = 0
+        learned_projection = None
+
+        learned = learned_definitions.lookup(unit) if learned_definitions is not None else None
+        if learned is not None:
+            state = getattr(learned.definition_state, "value", str(learned.definition_state))
+            retrievals.append(f"learned-definition:{state}:{learned.signature}")
+            retrievals.extend(f"learned-evidence:{item}" for item in learned.evidence)
+            if (
+                state == "validated"
+                and learned.target_event is not None
+                and learned.target_ir_kind is not None
+            ):
+                learned_projection = LearnedProjection(
+                    signature=learned.signature,
+                    target_event=learned.target_event,
+                    target_ir_kind=IRKind(learned.target_ir_kind),
+                    evidence=learned.evidence,
+                    extension_name=learned.extension_name,
+                )
+                confidence = max(
+                    confidence,
+                    self.config.confidence_threshold,
+                    learned.confidence,
+                )
+                uncertainty = 1.0 - confidence
+            else:
+                confidence = min(0.71, max(confidence, learned.confidence))
+                uncertainty = 1.0 - confidence
 
         target_index = all_units.index(unit)
         window = 2
@@ -106,4 +184,5 @@ class UYRResolver:
             expanded_context=tuple(expanded[: self.config.max_context_units]),
             retrievals=tuple(retrievals),
             scores=tuple(scores),
+            learned_projection=learned_projection,
         )

@@ -179,7 +179,11 @@ def load_tokenizer_artifact(
     )
     manifest = load_manifest(manifest_path, base, identity)
     _verify_inventory(inventory_path, manifest.structural_inventory_sha256)
-    return BCNLTTokenizer(base, manifest)
+    return BCNLTTokenizer(
+        base,
+        manifest,
+        learned_memory_path=artifact / "bcnlt_learned_definitions.jsonl",
+    )
 
 
 def _verify_inventory(path: Path, expected_sha256: str) -> None:

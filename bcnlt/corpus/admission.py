@@ -12,7 +12,7 @@ from typing import Any, Iterable, Protocol, Sequence
 
 from bcnlt.adapters.python import PythonAdapter
 from bcnlt.canonical import canonical_record_bytes, record_from_canonical_bytes
-from bcnlt.semantic_record import SemanticTokenRecord, records_from_units
+from bcnlt.semantic_record import SemanticTokenRecord, records_from_assessments
 
 from .curriculum import CurriculumRecord
 from .database import SourceDocumentRecord
@@ -272,8 +272,8 @@ def _canonical_records(
     result: dict[str, tuple[SemanticTokenRecord, ...]] = {}
     for document in documents:
         parsed = adapter.parse(document.content, path=document.relative_path)
-        units = tuple(adapter.to_units(parsed))
-        result[document.document_id] = records_from_units(units, parsed.index)
+        extraction = adapter.extract(parsed)
+        result[document.document_id] = records_from_assessments(extraction.assessments)
     return result
 
 

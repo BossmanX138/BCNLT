@@ -11,7 +11,11 @@ from .core import ContextualUnit, Span
 from .events import SemanticEvent
 from .ir import IRKind, IRNode
 from .semantic_schema import UNCERTAINTY_METADATA_KEYS, validate_uncertainty_metadata
-from .uncertainty import HeuristicUncertaintyScorer, UncertaintyScore
+from .uncertainty import (
+    HeuristicUncertaintyScorer,
+    KnowledgeBoundaryAssessment,
+    UncertaintyScore,
+)
 
 
 class ScoreBand(str, Enum):
@@ -88,6 +92,20 @@ def records_from_units(
         _validate_score(score.confidence)
         _validate_score(score.uncertainty)
         records.append(_record_from_unit(unit, score))
+    return tuple(records)
+
+
+def records_from_assessments(
+    assessments: Iterable[KnowledgeBoundaryAssessment],
+) -> tuple[SemanticTokenRecord, ...]:
+    """Admit already-scored preprocessing results without recomputing uncertainty."""
+
+    records = []
+    for assessment in assessments:
+        score = assessment.final_score
+        _validate_score(score.confidence)
+        _validate_score(score.uncertainty)
+        records.append(_record_from_unit(assessment.annotated_unit(), score))
     return tuple(records)
 
 

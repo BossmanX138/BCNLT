@@ -11,6 +11,8 @@ class NodeRule:
     event: str
     ir_kind: str
     surface_field: str | None = None
+    surface_equals: str | None = None
+    surface_prefix: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

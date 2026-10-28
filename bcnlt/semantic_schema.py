@@ -16,6 +16,9 @@ UNCERTAINTY_METADATA_KEYS = (
     "uyr_rounds",
     "uncertainty_signals",
     "wildcard_category",
+    "learned_definition_signature",
+    "learned_definition_state",
+    "learned_extension_name",
 )
 
 
@@ -33,9 +36,19 @@ def validate_uncertainty_metadata(key: str, value: Any) -> None:
         if not isinstance(value, bool):
             raise ValueError(f"{key} metadata must be bool")
         return
-    if key in {"preprocessor_condition", "unknown_node", "wildcard_category"}:
+    if key in {
+        "preprocessor_condition",
+        "unknown_node",
+        "wildcard_category",
+        "learned_definition_signature",
+        "learned_extension_name",
+    }:
         if not isinstance(value, str):
             raise ValueError(f"{key} metadata must be str")
+        return
+    if key == "learned_definition_state":
+        if value != "validated":
+            raise ValueError("learned_definition_state metadata must be validated")
         return
     if key == "knowledge_state":
         if not isinstance(value, str) or value not in {state.value for state in KnowledgeState}:

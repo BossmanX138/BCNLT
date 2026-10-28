@@ -142,6 +142,9 @@ def test_v2_schema_adds_uncertainty_keys_without_changing_token_inventory():
         "uyr_rounds",
         "uncertainty_signals",
         "wildcard_category",
+        "learned_definition_signature",
+        "learned_definition_state",
+        "learned_extension_name",
     )
     assert hashlib.sha256(inventory.read_bytes()).hexdigest() == (
         "1745a81d29dbe617bd7c2c87f83567a1aa056953a5ff62e7e5946ebb054f64a0"

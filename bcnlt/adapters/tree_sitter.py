@@ -11,14 +11,9 @@ from bcnlt.cache import ProjectIndex
 from bcnlt.core import ContextualUnit, SourceDocument, Span
 from bcnlt.ir import CommonCodingCore, IRKind, IRNode
 from bcnlt.parsers.bundle import MAX_SOURCE_BYTES, PARSE_TIMEOUT_MS, assert_clean_parse_tree
-from bcnlt.semantic_schema import KnowledgeState, SEMANTIC_SCHEMA_VERSION
-from bcnlt.uncertainty import (
-    HeuristicUncertaintyScorer,
-    KnowledgeBoundaryAssessment,
-    UncertaintyScore,
-)
-from bcnlt.uyr import UYRResolver
-from bcnlt.wildcard import WildcardMemory, WildcardResolver
+from bcnlt.preprocessing import SemanticPreprocessor
+from bcnlt.semantic_schema import SEMANTIC_SCHEMA_VERSION
+from bcnlt.uncertainty import KnowledgeBoundaryAssessment
 
 from .carousel import LanguageCartridge
 from .coverage import SemanticCoverage, SemanticExtraction
@@ -72,8 +67,7 @@ class TreeSitterSemanticEngine:
             Path(wildcard_memory_root) if wildcard_memory_root is not None else None
         )
         self._core = CommonCodingCore()
-        self._scorer = HeuristicUncertaintyScorer()
-        self._uyr = UYRResolver(self._scorer)
+        self._preprocessor = SemanticPreprocessor(memory_root=self._wildcard_memory_root)
 
     def parse(
         self,
@@ -120,9 +114,11 @@ class TreeSitterSemanticEngine:
         excluded = set(spec.resolved_excluded_node_types)
         symbols = LexicalSymbolTable(language=document.language, path=document.path)
         raw_units: list[ContextualUnit] = []
+        named_nodes: set[tuple[int, int, str]] = set()
         mapped_nodes: set[tuple[int, int, str]] = set()
         excluded_nodes: set[tuple[int, int, str]] = set()
         unknown_nodes: set[tuple[int, int, str]] = set()
+        definition_owned_nodes: set[tuple[int, int, str]] = set()
         total_named_nodes = 0
         scope_enters = 0
         scope_exits = 0
@@ -143,7 +139,28 @@ class TreeSitterSemanticEngine:
             return (row + 1, column, row + 1, column)
 
         def field(node: Any, name: str | None) -> Any | None:
-            return node.child_by_field_name(name) if name else None
+            if not name:
+                return None
+            current = node
+            for segment in name.split("."):
+                if segment.startswith("#"):
+                    try:
+                        index = int(segment[1:])
+                    except ValueError:
+                        return None
+                    named_children = [
+                        child
+                        for child in current.children
+                        if bool(getattr(child, "is_named", False))
+                    ]
+                    if index < 0 or index >= len(named_children):
+                        return None
+                    current = named_children[index]
+                else:
+                    current = current.child_by_field_name(segment)
+                if current is None:
+                    return None
+            return current
 
         def metadata_for(node_type: str) -> dict[str, object]:
             metadata: dict[str, object] = {}
@@ -189,6 +206,7 @@ class TreeSitterSemanticEngine:
             is_named = bool(getattr(node, "is_named", False))
             if is_named:
                 total_named_nodes += 1
+                named_nodes.add(key)
 
             roles: dict[str, tuple[str, str | None, Any]] = {}
             for role_rule in role_rules.get(str(node.type), ()):
@@ -196,10 +214,12 @@ class TreeSitterSemanticEngine:
                 if child is None:
                     continue
                 child_key = node_key(child)
-                mapped_nodes.add(child_key)
+                if bool(getattr(child, "is_named", False)):
+                    mapped_nodes.add(child_key)
                 name = text(child)
                 child_span = span(child)
                 if role_rule.role == "definition":
+                    definition_owned_nodes.add(child_key)
                     symbol_id = symbols.define(name, child_span)
                     document.index.define(document.path, symbol_id, name, child_span)
                     roles[role_rule.field_name] = (name, symbol_id, child)
@@ -211,10 +231,28 @@ class TreeSitterSemanticEngine:
                     raise ValueError(f"Unsupported identifier role: {role_rule.role}")
 
             rules = node_rules.get(str(node.type), ())
+            matching_rules: list[tuple[NodeRule, Any | None, str]] = []
             for rule in rules:
-                mapped_nodes.add(key)
                 surface_node = field(node, rule.surface_field)
                 surface = text(surface_node or node)
+                if rule.surface_equals is not None and surface != rule.surface_equals:
+                    continue
+                if rule.surface_prefix is not None and not surface.startswith(rule.surface_prefix):
+                    continue
+                matching_rules.append((rule, surface_node, surface))
+            conditional_matches = [
+                item
+                for item in matching_rules
+                if item[0].surface_equals is not None or item[0].surface_prefix is not None
+            ]
+            if conditional_matches:
+                matching_rules = conditional_matches
+            if key in definition_owned_nodes:
+                matching_rules = [
+                    item for item in matching_rules if item[0].event != "REFERENCE"
+                ]
+            for rule, surface_node, surface in matching_rules:
+                mapped_nodes.add(key)
                 role = roles.get(rule.surface_field or "")
                 symbol_id = role[1] if role else None
                 defines = symbol_id if role and _role_for(role_rules, node.type, rule.surface_field) == "reference" else None
@@ -322,7 +360,11 @@ class TreeSitterSemanticEngine:
             for unit in assessed_units
             if unit.ir is not None and unit.ir.kind is not IRKind.EXTENSION
         )
-        unknown_units = sum(unit.event == "UNKNOWN_SEMANTIC" for unit in assessed_units)
+        unknown_units = sum(
+            unit.event == "UNKNOWN_SEMANTIC"
+            and unit.metadata.get("learned_definition_state") != "validated"
+            for unit in assessed_units
+        )
         links_valid = all(
             unit.defines is None or unit.defines in document.index.definitions
             for unit in assessed_units
@@ -332,9 +374,9 @@ class TreeSitterSemanticEngine:
             common_core_units=common_core_units,
             unknown_units=unknown_units,
             total_named_nodes=total_named_nodes,
-            excluded_named_nodes=len(excluded_nodes),
-            mapped_named_nodes=len(mapped_nodes),
-            unknown_named_nodes=len(unknown_nodes),
+            excluded_named_nodes=len(excluded_nodes.intersection(named_nodes)),
+            mapped_named_nodes=len(mapped_nodes.intersection(named_nodes)),
+            unknown_named_nodes=len(unknown_nodes.intersection(named_nodes)),
             scopes_balanced=scope_enters == scope_exits and symbols.depth == 1,
             links_valid=links_valid,
         )
@@ -354,75 +396,12 @@ class TreeSitterSemanticEngine:
         cartridge: LanguageCartridge,
         units: list[ContextualUnit],
     ) -> tuple[list[ContextualUnit], list[KnowledgeBoundaryAssessment]]:
-        memory_path = None
-        if self._wildcard_memory_root is not None:
-            memory_path = self._wildcard_memory_root / f"{document.language}.jsonl"
-        wildcard = WildcardResolver(
-            WildcardMemory(
-                memory_path,
-                language=document.language,
-                semantic_spec_sha256=cartridge.spec.canonical_hash,
-            )
+        result = self._preprocessor.process(
+            document,
+            units,
+            semantic_spec_sha256=cartridge.spec.canonical_hash,
         )
-        annotated: list[ContextualUnit] = []
-        assessments: list[KnowledgeBoundaryAssessment] = []
-        for unit in units:
-            initial = self._scorer.score(unit, document.index)
-            if initial.confidence >= self._uyr.config.confidence_threshold:
-                assessment = KnowledgeBoundaryAssessment(
-                    unit=unit,
-                    initial_score=initial,
-                    final_score=initial,
-                    state=KnowledgeState.KNOWN,
-                    rounds=0,
-                    evidence=(),
-                )
-            else:
-                result = self._uyr.resolve(unit, document, units)
-                final = UncertaintyScore(
-                    uncertainty=result.final_uncertainty,
-                    confidence=result.final_confidence,
-                    signals=result.scores[-1].signals,
-                )
-                if result.retrievals and result.final_confidence >= self._uyr.config.confidence_threshold:
-                    assessment = KnowledgeBoundaryAssessment(
-                        unit=unit,
-                        initial_score=initial,
-                        final_score=final,
-                        state=KnowledgeState.RETRIEVED,
-                        rounds=result.rounds,
-                        evidence=result.retrievals,
-                    )
-                else:
-                    meaning = wildcard.resolve_and_remember(unit, document.index)
-                    assessment = KnowledgeBoundaryAssessment.from_wildcard(
-                        unit=unit,
-                        initial=initial,
-                        meaning=meaning,
-                        rounds=result.rounds,
-                    )
-                    assessment = replace(
-                        assessment,
-                        final_score=UncertaintyScore(
-                            uncertainty=1.0
-                            - max(result.final_confidence, assessment.final_score.confidence),
-                            confidence=max(
-                                result.final_confidence,
-                                assessment.final_score.confidence,
-                            ),
-                            signals=tuple(
-                                dict.fromkeys(
-                                    (*result.scores[-1].signals, *assessment.final_score.signals)
-                                )
-                            ),
-                        ),
-                        evidence=tuple(dict.fromkeys((*result.retrievals, *assessment.evidence))),
-                    )
-                    if not meaning.hypotheses or not meaning.evidence:
-                        assessment = replace(assessment, state=KnowledgeState.UNRESOLVED)
-            assessments.append(assessment)
-            annotated.append(assessment.annotated_unit())
-        return annotated, assessments
+        return list(result.units), list(result.assessments)
 
     def _ir_for(
         self,

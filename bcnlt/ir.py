@@ -27,6 +27,35 @@ class IRKind(str, Enum):
     EXTENSION = "extension"
 
 
+@dataclass(frozen=True, slots=True)
+class CommonConceptDefinition:
+    concept_id: str
+    event: str
+    ir_kind: IRKind
+
+
+COMMON_CODING_CONCEPTS = (
+    CommonConceptDefinition("literal", "LITERAL", IRKind.VALUE),
+    CommonConceptDefinition("variable_definition", "DEFINE", IRKind.VARIABLE),
+    CommonConceptDefinition("reference", "REFERENCE", IRKind.VARIABLE),
+    CommonConceptDefinition("parameter", "DEFINE", IRKind.PARAMETER),
+    CommonConceptDefinition("function", "DEFINE", IRKind.FUNCTION),
+    CommonConceptDefinition("call", "CALL", IRKind.CALL),
+    CommonConceptDefinition("assignment", "ASSIGN", IRKind.ASSIGNMENT),
+    CommonConceptDefinition("state", "ASSIGN", IRKind.STATE),
+    CommonConceptDefinition("loop", "LOOP", IRKind.LOOP),
+    CommonConceptDefinition("branch", "BRANCH", IRKind.BRANCH),
+    CommonConceptDefinition("comparison", "OPERATOR", IRKind.COMPARISON),
+    CommonConceptDefinition("data_structure", "LITERAL", IRKind.DATA_STRUCTURE),
+    CommonConceptDefinition("io", "CALL", IRKind.IO),
+    CommonConceptDefinition("error", "RAISE", IRKind.ERROR),
+    CommonConceptDefinition("return", "RETURN", IRKind.RETURN),
+    CommonConceptDefinition("operator", "OPERATOR", IRKind.OPERATOR),
+    CommonConceptDefinition("member_access", "MEMBER_ACCESS", IRKind.MEMBER_ACCESS),
+    CommonConceptDefinition("import", "IMPORT", IRKind.IMPORT),
+)
+
+
 @dataclass(frozen=True)
 class IRNode:
     kind: IRKind

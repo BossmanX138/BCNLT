@@ -10,7 +10,6 @@ from typing import Iterable
 
 from .adapters.python import PythonAdapter
 from .model_eval import _bcnlt_context, _generate_definition_probes, _standard_context
-from .uncertainty import HeuristicUncertaintyScorer
 
 
 SCHEMA_VERSION = "1"
@@ -162,8 +161,9 @@ def build_database(
     run_id = f"ingest-{manifest_sha[:16]}"
     now = datetime.now(timezone.utc).isoformat()
     connection = open_database(database_path)
-    adapter = PythonAdapter()
-    scorer = HeuristicUncertaintyScorer()
+    adapter = PythonAdapter(
+        wildcard_memory_path=database_path.with_suffix(".learned-definitions.jsonl")
+    )
     pair_total = 0
     unit_total = 0
     try:
@@ -204,9 +204,12 @@ def build_database(
                     document = adapter.parse(source, path=str(path))
                 except SyntaxError:
                     continue
-                units = list(adapter.to_units(document))
-                for ordinal, unit in enumerate(units):
-                    score = scorer.score(unit, document.index)
+                extraction = adapter.extract(document)
+                units = list(extraction.units)
+                for ordinal, (unit, assessment) in enumerate(
+                    zip(units, extraction.assessments)
+                ):
+                    score = assessment.final_score
                     connection.execute(
                         """
                         INSERT INTO semantic_units(

@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .adapters.python import PythonAdapter
-from .uncertainty import HeuristicUncertaintyScorer
 
 
 @dataclass(frozen=True)
@@ -114,9 +113,9 @@ def benchmark_source(
     start = time.perf_counter()
     adapter = PythonAdapter()
     document = adapter.parse(source, path=path)
-    units = list(adapter.to_units(document))
-    scorer = HeuristicUncertaintyScorer()
-    scores = [scorer.score(unit, document.index) for unit in units]
+    extraction = adapter.extract(document)
+    units = list(extraction.units)
+    scores = [assessment.final_score for assessment in extraction.assessments]
     standard = standard_token_count(source)
     elapsed_ms = (time.perf_counter() - start) * 1000
     return BenchmarkReport(

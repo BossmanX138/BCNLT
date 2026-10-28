@@ -1,5 +1,10 @@
 # BCNLT Multilingual Adapter Carousel Implementation Plan
 
+> **Superseded after Task 5:** Tasks 6-11 are replaced by
+> `2026-10-28-bcnlt-common-core-learning.md`. BCNLT uses one concept-centered
+> registry and declarative grammar aliases instead of per-language adapter
+> implementation modules.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Expand the existing Python BCNLT semantic module into one multilingual adapter with a 14-language semantic carousel, then train one balanced multilingual Runeforge adapter from the admitted records.

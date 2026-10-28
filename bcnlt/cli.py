@@ -9,9 +9,6 @@ from .adapters.python import PythonAdapter
 from .benchmark import benchmark_project, benchmark_source, trace_comparison
 from .meaning_eval import evaluate_meaning_file
 from .model_eval import OllamaChatModel, OpenAICompatibleChatModel, evaluate_model_file
-from .uncertainty import HeuristicUncertaintyScorer
-from .uyr import UYRResolver
-from .wildcard import WildcardMemory, WildcardResolver
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -114,29 +111,28 @@ def main(argv: list[str] | None = None) -> int:
         print(f"BCNLT model-context eval report written to {args.model_eval_report}")
 
     source = path.read_text(encoding="utf-8")
-    adapter = PythonAdapter()
+    adapter = PythonAdapter(wildcard_memory_path=args.wildcard_memory)
     document = adapter.parse(source, path=str(path))
-    units = list(adapter.to_units(document))
-    scorer = HeuristicUncertaintyScorer()
-    uyr = UYRResolver(scorer=scorer)
-    wildcard_memory = WildcardMemory(args.wildcard_memory) if args.wildcard_memory else WildcardMemory()
-    wildcard = WildcardResolver(memory=wildcard_memory)
+    extraction = adapter.extract(document)
+    units = list(extraction.units)
+    assessments = list(extraction.assessments)
 
     if args.jsonl:
         with Path(args.jsonl).open("w", encoding="utf-8") as handle:
-            for unit in units:
-                score = scorer.score(unit, document.index)
+            for unit, assessment in zip(units, assessments):
+                score = assessment.final_score
                 payload = unit.to_dict()
                 payload["uncertainty"] = score.uncertainty
                 payload["confidence"] = score.confidence
                 payload["uncertainty_signals"] = list(score.signals)
-                if score.confidence < args.confidence_threshold:
-                    payload["uyr"] = _uyr_payload(uyr.resolve(unit, document, units))
-                if unit.event == "UNKNOWN_SEMANTIC":
-                    meaning = wildcard.resolve(unit, document.index)
-                    payload["wildcard"] = meaning.__dict__
-                    if args.wildcard_memory:
-                        wildcard.remember(unit, meaning)
+                if assessment.initial_score.confidence < args.confidence_threshold:
+                    payload["uyr"] = _uyr_payload(assessment)
+                if assessment.wildcard_category is not None:
+                    payload["wildcard"] = {
+                        "category": assessment.wildcard_category,
+                        "state": assessment.state.value,
+                        "evidence": list(assessment.evidence),
+                    }
                 handle.write(json.dumps(payload, sort_keys=True) + "\n")
 
     if args.trace:
@@ -165,11 +161,10 @@ def main(argv: list[str] | None = None) -> int:
 
 def _uyr_payload(result) -> dict[str, object]:
     return {
-        "initial_confidence": result.initial_confidence,
-        "final_confidence": result.final_confidence,
+        "initial_confidence": result.initial_score.confidence,
+        "final_confidence": result.final_score.confidence,
         "rounds": result.rounds,
-        "retrievals": list(result.retrievals),
-        "expanded_context_count": len(result.expanded_context),
+        "retrievals": list(result.evidence),
     }
 
 
