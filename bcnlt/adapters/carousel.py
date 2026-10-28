@@ -49,11 +49,17 @@ class LanguageCarousel:
 
     @classmethod
     def default(cls) -> "LanguageCarousel":
+        from .python import build_python_spec
+
         return cls(
             tuple(
                 LanguageCartridge(
                     definition=definition,
-                    spec=LanguageSemanticSpec(definition.semantic_spec_version),
+                    spec=(
+                        build_python_spec()
+                        if definition.canonical_id == "python"
+                        else LanguageSemanticSpec(definition.semantic_spec_version)
+                    ),
                 )
                 for definition in LANGUAGE_DEFINITIONS
             )

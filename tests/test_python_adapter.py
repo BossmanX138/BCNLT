@@ -25,6 +25,8 @@ def test_python_adapter_emits_semantic_units_with_links_and_history():
     document = adapter.parse(SAMPLE, path="sample.py")
     units = list(adapter.to_units(document))
 
+    assert document.language == "python"
+    assert document.dialect is None
     events = [unit.event for unit in units]
     assert all(str(event) in CURRENT_EVENT_VALUES for event in events)
     assert "IMPORT" in events

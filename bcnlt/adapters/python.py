@@ -9,20 +9,104 @@ from bcnlt.cache import ProjectIndex
 from bcnlt.core import ContextualUnit, SourceDocument, Span
 from bcnlt.events import SemanticEvent
 from bcnlt.ir import IRKind, IRNode
+from bcnlt.languages import LANGUAGE_BY_ID
+from bcnlt.semantic_schema import SEMANTIC_SCHEMA_VERSION
 
 from .base import LanguageAdapter
+from .carousel import BCNLTMultilingualAdapter, LanguageCarousel, LanguageCartridge
+from .coverage import SemanticCoverage, SemanticExtraction
+from .spec import IdentifierRoleRule, LanguageSemanticSpec, NodeRule, ScopeRule
+
+
+def build_python_spec() -> LanguageSemanticSpec:
+    """Return Python-only mappings for the shared BCNLT cartridge contract."""
+
+    return LanguageSemanticSpec(
+        semantic_spec_version=LANGUAGE_BY_ID["python"].semantic_spec_version,
+        node_rules=(
+            NodeRule("import_statement", "IMPORT", "import"),
+            NodeRule("import_from_statement", "IMPORT", "import"),
+            NodeRule("function_definition", "DEFINE", "function", "name"),
+            NodeRule("class_definition", "CLASS", "extension", "name"),
+            NodeRule("assignment", "ASSIGN", "assignment", "left"),
+            NodeRule("augmented_assignment", "ASSIGN", "assignment", "left"),
+            NodeRule("for_statement", "LOOP", "loop", "left"),
+            NodeRule("while_statement", "LOOP", "loop"),
+            NodeRule("if_statement", "BRANCH", "branch"),
+            NodeRule("return_statement", "RETURN", "return"),
+            NodeRule("call", "CALL", "call", "function"),
+            NodeRule("attribute", "MEMBER_ACCESS", "member_access", "attribute"),
+            NodeRule("binary_operator", "OPERATOR", "operator", "operator"),
+            NodeRule("comparison_operator", "OPERATOR", "comparison", "operators"),
+            NodeRule("string", "LITERAL", "value"),
+            NodeRule("integer", "LITERAL", "value"),
+            NodeRule("float", "LITERAL", "value"),
+            NodeRule("list", "LITERAL", "data_structure"),
+            NodeRule("dictionary", "LITERAL", "data_structure"),
+            NodeRule("set", "LITERAL", "data_structure"),
+            NodeRule("tuple", "LITERAL", "data_structure"),
+            NodeRule("with_statement", "CONTEXT_ENTER", "extension"),
+            NodeRule("try_statement", "TRY", "error"),
+            NodeRule("except_clause", "EXCEPT", "error"),
+            NodeRule("finally_clause", "FINALLY", "error"),
+            NodeRule("raise_statement", "RAISE", "error"),
+            NodeRule("yield", "YIELD", "extension"),
+            NodeRule("await", "AWAIT", "extension"),
+            NodeRule("list_comprehension", "COMPREHENSION", "extension"),
+            NodeRule("dictionary_comprehension", "COMPREHENSION", "extension"),
+            NodeRule("set_comprehension", "COMPREHENSION", "extension"),
+            NodeRule("generator_expression", "COMPREHENSION", "extension"),
+            NodeRule("match_statement", "MATCH", "branch"),
+        ),
+        identifier_roles=(
+            IdentifierRoleRule("function_definition", "name", "definition"),
+            IdentifierRoleRule("class_definition", "name", "definition"),
+            IdentifierRoleRule("assignment", "left", "definition"),
+            IdentifierRoleRule("for_statement", "left", "definition"),
+            IdentifierRoleRule("call", "function", "reference"),
+        ),
+        scope_rules=(
+            ScopeRule("function_definition", "function", "name"),
+            ScopeRule("class_definition", "class", "name"),
+            ScopeRule("lambda", "lambda"),
+            ScopeRule("list_comprehension", "comprehension"),
+            ScopeRule("dictionary_comprehension", "comprehension"),
+            ScopeRule("set_comprehension", "comprehension"),
+            ScopeRule("generator_expression", "comprehension"),
+        ),
+        excluded_node_types=(
+            "module",
+            "block",
+            "parameters",
+            "argument_list",
+            "expression_statement",
+            "identifier",
+            "comment",
+            "keyword_argument",
+            "pair",
+            "case_clause",
+            "pattern_list",
+        ),
+    )
 
 
 class PythonAdapter(LanguageAdapter):
     language = "python"
 
+    def __init__(self) -> None:
+        super().__init__()
+        carousel = LanguageCarousel.default()
+        self.cartridge = carousel.for_language("python")
+        self._facade = BCNLTMultilingualAdapter(
+            engine=_PythonCompatibilityEngine(self),
+            carousel=carousel,
+        )
+
     def parse(self, source: str, path: str = "<memory>") -> SourceDocument:
-        tree = ast.parse(source, filename=path)
-        return SourceDocument(path=path, source=source, tree=tree, index=ProjectIndex())
+        return self._facade.parse(source, language="python", path=path)
 
     def to_units(self, document: SourceDocument) -> Iterable[ContextualUnit]:
-        visitor = _PythonUnitVisitor(self, document)
-        return visitor.collect()
+        return self._facade.extract(document).units
 
     def render(self, node: IRNode) -> str:
         renderer = _PythonIRRenderer()
@@ -30,6 +114,62 @@ class PythonAdapter(LanguageAdapter):
         ast.parse(code)
         compile(code, "<bcnlt-rendered>", "exec")
         return code
+
+
+class _PythonCompatibilityEngine:
+    """Keeps established Python records stable behind the multilingual facade."""
+
+    def __init__(self, adapter: PythonAdapter) -> None:
+        self.adapter = adapter
+
+    def parse(
+        self,
+        source: str,
+        *,
+        cartridge: LanguageCartridge,
+        path: str,
+        dialect: str | None,
+    ) -> SourceDocument:
+        tree = ast.parse(source, filename=path)
+        return SourceDocument(
+            path=path,
+            source=source,
+            tree=tree,
+            index=ProjectIndex(),
+            language=cartridge.definition.canonical_id,
+            dialect=dialect,
+        )
+
+    def extract(
+        self,
+        document: SourceDocument,
+        *,
+        cartridge: LanguageCartridge,
+    ) -> SemanticExtraction:
+        units = tuple(_PythonUnitVisitor(self.adapter, document).collect())
+        scope_enters = sum(unit.event == "SCOPE_ENTER" for unit in units)
+        scope_exits = sum(unit.event == "SCOPE_EXIT" for unit in units)
+        unknown_units = sum(unit.event == "UNKNOWN_SEMANTIC" for unit in units)
+        common_core_units = sum(
+            unit.ir is not None and unit.ir.kind is not IRKind.EXTENSION for unit in units
+        )
+        return SemanticExtraction(
+            schema_version=SEMANTIC_SCHEMA_VERSION,
+            language=document.language,
+            dialect=document.dialect,
+            document=document,
+            units=units,
+            coverage=SemanticCoverage(
+                total_units=len(units),
+                common_core_units=common_core_units,
+                unknown_units=unknown_units,
+                scopes_balanced=scope_enters == scope_exits,
+                links_valid=all(
+                    unit.defines is None or unit.defines in document.index.definitions
+                    for unit in units
+                ),
+            ),
+        )
 
 
 class _PythonUnitVisitor(ast.NodeVisitor):

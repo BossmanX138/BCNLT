@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import sys
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -29,9 +31,30 @@ ParserProvider = Callable[[str], Any]
 
 def _default_parser_provider(grammar_id: str) -> Any:
     try:
-        from tree_sitter_language_pack import get_parser
+        from tree_sitter_language_pack import PackConfig, cache_dir, configure, get_parser
     except ImportError as exc:  # pragma: no cover - exercised by deployment preflight
         raise ValueError("Install the pinned BCNLT multilingual parser dependencies") from exc
+
+    library_name = (
+        f"tree_sitter_{grammar_id}.dll"
+        if sys.platform == "win32"
+        else f"libtree_sitter_{grammar_id}.so"
+    )
+    configured_cache = os.environ.get("BCNLT_PARSER_CACHE")
+    candidates = [
+        Path(configured_cache).expanduser() if configured_cache else None,
+        Path.home() / ".cache" / "bcnlt-parser-offline-verify",
+        Path.home() / ".cache" / "bcnlt-parser-freezer",
+    ]
+    active_library = Path(cache_dir()) / library_name
+    if active_library.is_file():
+        return get_parser(grammar_id)
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        configure(PackConfig(cache_dir=str(candidate)))
+        if (Path(cache_dir()) / library_name).is_file():
+            return get_parser(grammar_id)
     return get_parser(grammar_id)
 
 
@@ -414,6 +437,11 @@ class TreeSitterSemanticEngine:
             return self._core.extension(
                 f"{language}.{node_type}",
                 {"declared_ir_kind": rule.ir_kind},
+            )
+        if kind is IRKind.EXTENSION:
+            return self._core.extension(
+                f"{language}.{node_type}",
+                {"surface": surface},
             )
         return IRNode(kind=kind, name=surface)
 
