@@ -1,0 +1,42 @@
+{
+  "base": {
+    "name": "BossCrafts/Runeforge-Mk2-7B",
+    "required_file_sha256": {
+      "chat_template.jinja": "796853172235ab3aaa4810013ddfe2eab481bda3306dad4f700c00d436eed596",
+      "config.json": "7655d95eb9e52953e51848fb95412272b7ee4c9ca84b81b7b6bc7698f1411433",
+      "tokenizer.json": "835cf54bb933752267652500a9243a9002107bbb4501b99f8d2f46ccfdad2567",
+      "tokenizer_config.json": "78719954c981aef3938965057409fdc9c0ddeb6cbd3a40566e9be494ee998a24"
+    },
+    "revision": "merged-16bit-2026-10-24",
+    "windows_path": "//wsl.localhost/Ubuntu/home/bossm/models/Runeforge-Mk2-7B",
+    "wsl_distribution": "Ubuntu",
+    "wsl_path": "/home/bossm/models/Runeforge-Mk2-7B"
+  },
+  "hf_sources": [
+    {
+      "dataset": "bigcode/the-stack-dedup",
+      "probe_path": "data/python",
+      "revision": "17cad72c886a2858e08d4c349a00d6466f54df63"
+    },
+    {
+      "dataset": "nvidia/OpenCodeInstruct",
+      "probe_path": "data",
+      "revision": "8f3ba5bafe4d6e8db46082cf7ae6741bc370604d"
+    }
+  ],
+  "preflight": {
+    "min_disk_free_bytes": 107374182400,
+    "min_gpu_memory_mib": 7500,
+    "python_executable": "/home/bossm/.venvs/wizard-phi-eval/bin/python",
+    "required_packages": [
+      "torch",
+      "transformers",
+      "peft",
+      "bitsandbytes",
+      "unsloth",
+      "datasets",
+      "huggingface_hub"
+    ]
+  },
+  "schema_version": "runeforge-mk2-bcnlt-v1"
+}

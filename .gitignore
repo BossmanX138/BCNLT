@@ -9,6 +9,7 @@ venv/
 # Generated BCNLT outputs and benchmark reports.
 *.json
 !bcnlt/vocab/*.json
+!configs/*.json
 *.jsonl
 *.sqlite3
 *.sqlite3-shm
