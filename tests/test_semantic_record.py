@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+from dataclasses import replace
 
 import pytest
 
@@ -159,3 +160,25 @@ def test_semantic_token_record_is_frozen():
     with pytest.raises(Exception):
         record.surface = "changed"  # type: ignore[misc]
     assert isinstance(record, SemanticTokenRecord)
+
+
+@pytest.mark.parametrize("surface", ["cafe\u0301", "first\r\nsecond"])
+def test_direct_record_encoding_rejects_noncanonical_strings(surface: str):
+    record = records_from_units([_unit()], ProjectIndex())[0]
+
+    with pytest.raises(ValueError, match="NFC|line endings|canonical"):
+        canonical_record_bytes(replace(record, surface=surface))
+
+
+@pytest.mark.parametrize("surface", ["cafe\u0301", "first\r\nsecond"])
+def test_canonical_decoder_rejects_noncanonical_strings(surface: str):
+    record = records_from_units([_unit()], ProjectIndex())[0]
+    payload = json.loads(canonical_record_bytes(record))
+    payload["surface"] = surface
+    encoded = (
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        + "\n"
+    ).encode("utf-8")
+
+    with pytest.raises(ValueError, match="NFC|line endings|canonical"):
+        record_from_canonical_bytes(encoded)

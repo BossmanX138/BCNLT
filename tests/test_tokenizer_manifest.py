@@ -116,7 +116,26 @@ def test_load_rejects_wrong_base_vocabulary(tmp_path: Path):
     other = FakeBaseTokenizer({"a": 0, "different": 1, "c": 2, "<unk>": 3})
 
     with pytest.raises(ValueError, match="base vocabulary"):
-        load_manifest(path, other)
+        load_manifest(path, other, _identity())
+
+
+def test_load_requires_a_verified_base_source_identity(tmp_path: Path):
+    path = _manifest_path(tmp_path)
+
+    with pytest.raises(ValueError, match="identity"):
+        load_manifest(path, FakeBaseTokenizer(), None)  # type: ignore[arg-type]
+
+
+def test_load_rejects_changed_base_source_identity(tmp_path: Path):
+    path = _manifest_path(tmp_path)
+    changed = BaseTokenizerIdentity.from_files(
+        name="fixture/base",
+        revision="abc123",
+        files={"tokenizer.json": b'{"fixture":false}', "tokenizer_config.json": b"{}"},
+    )
+
+    with pytest.raises(ValueError, match="source hash"):
+        load_manifest(path, FakeBaseTokenizer(), changed)
 
 
 @pytest.mark.parametrize(
@@ -147,7 +166,7 @@ def test_load_rejects_invalid_manifest_structure(tmp_path: Path, mutation, messa
     _rewrite(path, mutation)
 
     with pytest.raises(ValueError, match=message):
-        load_manifest(path, FakeBaseTokenizer())
+        load_manifest(path, FakeBaseTokenizer(), _identity())
 
 
 def test_load_rejects_changed_digest(tmp_path: Path):
@@ -157,4 +176,4 @@ def test_load_rejects_changed_digest(tmp_path: Path):
     path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(ValueError, match="digest"):
-        load_manifest(path, FakeBaseTokenizer())
+        load_manifest(path, FakeBaseTokenizer(), _identity())

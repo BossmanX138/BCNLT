@@ -140,3 +140,85 @@ def test_unhandled_semantic_node_is_visible_as_unknown_and_still_traverses_child
 
 def test_empty_module_has_no_semantic_units():
     assert _units("") == []
+
+
+def test_popped_function_locals_do_not_resolve_at_module_scope():
+    units = _units("def make():\n    local = 1\nprint(local)\n")
+
+    reference = [
+        unit for unit in units if unit.event == "REFERENCE" and unit.surface == "local"
+    ][-1]
+
+    assert reference.scope == "module"
+    assert reference.defines is None
+
+
+def test_method_bodies_do_not_close_over_class_namespace():
+    units = _units("class Box:\n    value = 1\n    def read(self):\n        return value\n")
+
+    reference = next(
+        unit for unit in units if unit.event == "REFERENCE" and unit.surface == "value"
+    )
+
+    assert reference.scope == "module.Box.read"
+    assert reference.defines is None
+
+
+def test_function_and_lambda_defaults_resolve_in_the_defining_scope():
+    units = _units("outer = 1\ndef read(outer=outer):\n    return outer\nfn = lambda outer=outer: outer\n")
+    references = [
+        unit for unit in units if unit.event == "REFERENCE" and unit.surface == "outer"
+    ]
+
+    assert references[0].scope == "module"
+    assert references[0].defines == "module.outer"
+    assert references[1].scope == "module.read"
+    assert references[1].defines == "module.read.outer"
+    assert references[2].scope == "module"
+    assert references[2].defines == "module.outer"
+    assert references[3].scope.startswith("module.lambda@")
+
+
+def test_match_patterns_define_capture_names_before_guards_and_bodies():
+    units = _units(
+        "match subject:\n"
+        "    case {'x': mapped} if mapped:\n        use(mapped)\n"
+        "    case [first, *rest]:\n        use(first, rest)\n"
+        "    case Point(x=coordinate) as point:\n        use(coordinate, point)\n"
+        "    case ('left', choice) | ('right', choice):\n        use(choice)\n"
+    )
+    definitions = {
+        unit.surface: unit.symbol_id
+        for unit in units
+        if unit.event == "DEFINE" and unit.surface in {
+            "mapped", "first", "rest", "coordinate", "point", "choice"
+        }
+    }
+
+    assert definitions == {
+        "mapped": "module.mapped",
+        "first": "module.first",
+        "rest": "module.rest",
+        "coordinate": "module.coordinate",
+        "point": "module.point",
+        "choice": "module.choice",
+    }
+    for name, symbol_id in definitions.items():
+        references = [
+            unit for unit in units if unit.event == "REFERENCE" and unit.surface == name
+        ]
+        assert references
+        assert all(unit.defines == symbol_id for unit in references)
+
+
+def test_other_unsupported_statement_nodes_emit_unknown_semantic():
+    units = _units("ready = True\nassert ready\n")
+
+    unknown = next(
+        unit
+        for unit in units
+        if unit.event == "UNKNOWN_SEMANTIC" and unit.ast_relation == "Assert"
+    )
+
+    assert unknown.surface == "assert ready"
+    assert unknown.metadata == {"unknown_node": "Assert"}

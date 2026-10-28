@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import unicodedata
 from typing import Any
 
 from .events import SemanticEvent
@@ -34,6 +35,8 @@ _IR_FIELDS = {"kind", "name", "value", "children", "metadata"}
 
 def canonical_record_bytes(record: SemanticTokenRecord) -> bytes:
     payload = _record_to_payload(record)
+    if _normalize_json_strings(payload) != payload:
+        raise ValueError("Semantic record strings must use NFC and LF line endings")
     return (
         json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
     ).encode("utf-8")
@@ -47,6 +50,8 @@ def record_from_canonical_bytes(payload: bytes) -> SemanticTokenRecord:
         raise ValueError(f"Invalid canonical semantic record: {exc}") from exc
     if not isinstance(raw, dict):
         raise ValueError("Canonical semantic record must be a JSON object")
+    if _normalize_json_strings(raw) != raw:
+        raise ValueError("Canonical semantic record strings must use NFC and LF line endings")
     _require_exact_fields(raw, _RECORD_FIELDS, "semantic record")
     span = raw["span"]
     if (
@@ -159,3 +164,17 @@ def _require_exact_fields(raw: dict[str, Any], expected: set[str], label: str) -
         raise ValueError(f"{label} is missing required fields: {sorted(missing)}")
     if extra:
         raise ValueError(f"{label} has unsupported fields: {sorted(extra)}")
+
+
+def _normalize_json_strings(value: Any) -> Any:
+    if isinstance(value, str):
+        normalized_lines = value.replace("\r\n", "\n").replace("\r", "\n")
+        return unicodedata.normalize("NFC", normalized_lines)
+    if isinstance(value, list):
+        return [_normalize_json_strings(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            _normalize_json_strings(key): _normalize_json_strings(item)
+            for key, item in value.items()
+        }
+    return value

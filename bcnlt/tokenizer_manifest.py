@@ -129,8 +129,10 @@ def write_manifest(path: str | Path, manifest: TokenizerManifest) -> None:
 def load_manifest(
     path: str | Path,
     base: BaseTokenizer,
-    identity: BaseTokenizerIdentity | None = None,
+    identity: BaseTokenizerIdentity,
 ) -> TokenizerManifest:
+    if identity is None:
+        raise ValueError("Loading a tokenizer manifest requires a verified base identity")
     source = Path(path)
     try:
         payload = json.loads(source.read_text(encoding="utf-8"))
@@ -161,7 +163,7 @@ def load_manifest(
     manifest = _manifest_from_payload(payload)
     _validate_manifest(manifest)
     validate_manifest_for_base(manifest, base)
-    if identity is not None and identity.sha256 != manifest.base_tokenizer_sha256:
+    if identity.sha256 != manifest.base_tokenizer_sha256:
         raise ValueError("Tokenizer manifest base tokenizer source hash mismatch")
     expected_tokens = _load_inventory(DEFAULT_INVENTORY_PATH)
     if tuple(item.token for item in manifest.added_tokens) != expected_tokens:

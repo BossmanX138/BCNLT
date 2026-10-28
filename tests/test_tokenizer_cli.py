@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from argparse import Namespace
 from pathlib import Path
 
+from bcnlt import tokenizer_cli
 from tests.tokenizer_fixtures import write_byte_level_tokenizer
 
 
@@ -146,3 +148,35 @@ def test_cli_returns_nonzero_for_base_mismatch(tmp_path: Path):
 
     assert result.returncode != 0
     assert "base tokenizer" in result.stderr.lower() or "base vocabulary" in result.stderr.lower()
+
+
+def test_cli_build_uses_resolved_hub_snapshot_and_commit(
+    tmp_path: Path, monkeypatch, capsys
+):
+    snapshot = write_byte_level_tokenizer(tmp_path / "snapshot")
+    artifact = tmp_path / "artifact"
+    calls: list[tuple[str, str | None]] = []
+
+    def fake_resolve(source: str, *, revision: str | None):
+        calls.append((source, revision))
+        return snapshot, "b" * 40
+
+    monkeypatch.setattr(tokenizer_cli, "resolve_tokenizer_source", fake_resolve)
+
+    result = tokenizer_cli._build(
+        Namespace(
+            base="organization/model",
+            output=str(artifact),
+            name="organization/model",
+            revision="release-v1",
+        )
+    )
+    output = json.loads(capsys.readouterr().out)
+    manifest = json.loads(
+        (artifact / "bcnlt_tokenizer_manifest.json").read_text(encoding="utf-8")
+    )
+
+    assert result == 0
+    assert calls == [("organization/model", "release-v1")]
+    assert output["manifest_sha256"] == manifest["manifest_sha256"]
+    assert manifest["base_tokenizer"]["revision"] == "b" * 40

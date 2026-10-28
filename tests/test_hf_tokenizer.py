@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from bcnlt.hf_tokenizer import HuggingFaceBaseTokenizer, identity_from_directory
+from bcnlt.hf_tokenizer import (
+    HuggingFaceBaseTokenizer,
+    identity_from_directory,
+    resolve_tokenizer_source,
+)
 from bcnlt.tokenizer import BCNLTTokenizer
 from bcnlt.tokenizer_manifest import build_manifest
 from tests.tokenizer_fixtures import write_byte_level_tokenizer
@@ -72,3 +76,39 @@ def test_save_refuses_to_mix_with_existing_files(tmp_path: Path):
         tokenizer.save_pretrained(artifact)
 
     assert (artifact / "unrelated.txt").read_text(encoding="utf-8") == "keep"
+
+
+def test_hub_tokenizer_source_requires_an_explicit_revision():
+    with pytest.raises(ValueError, match="revision"):
+        resolve_tokenizer_source("organization/model", revision=None)
+
+
+def test_hub_tokenizer_source_resolves_revision_to_immutable_commit(
+    tmp_path: Path, monkeypatch
+):
+    import huggingface_hub
+
+    snapshot = write_byte_level_tokenizer(tmp_path / "snapshot")
+    calls: dict[str, object] = {}
+
+    class FakeApi:
+        def model_info(self, repo_id: str, revision: str):
+            calls["model_info"] = (repo_id, revision)
+            return type("ModelInfo", (), {"sha": "a" * 40})()
+
+    def fake_snapshot_download(**kwargs):
+        calls["snapshot_download"] = kwargs
+        return str(snapshot)
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", lambda: FakeApi())
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", fake_snapshot_download)
+
+    resolved, commit = resolve_tokenizer_source(
+        "organization/model", revision="release-v1"
+    )
+
+    assert resolved == snapshot
+    assert commit == "a" * 40
+    assert calls["model_info"] == ("organization/model", "release-v1")
+    assert calls["snapshot_download"]["revision"] == "a" * 40
+    assert calls["snapshot_download"]["repo_id"] == "organization/model"

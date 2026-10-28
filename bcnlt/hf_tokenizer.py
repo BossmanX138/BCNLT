@@ -17,6 +17,7 @@ from .tokenizer_manifest import (
 MANIFEST_FILENAME = "bcnlt_tokenizer_manifest.json"
 INVENTORY_FILENAME = "bcnlt-tokenizer-v1.tokens.json"
 _TOKENIZER_FILES = (
+    "config.json",
     "tokenizer.json",
     "tokenizer_config.json",
     "special_tokens_map.json",
@@ -26,6 +27,43 @@ _TOKENIZER_FILES = (
     "tokenizer.model",
     "spiece.model",
 )
+
+
+def resolve_tokenizer_source(
+    source: str | Path,
+    *,
+    revision: str | None,
+) -> tuple[Path, str]:
+    """Resolve a local directory or a revision-pinned Hub model to local files."""
+
+    local = Path(source)
+    if local.is_dir():
+        if not revision or not revision.strip():
+            raise ValueError("A base tokenizer revision is required")
+        return local, revision
+    if not revision or not revision.strip():
+        raise ValueError("A Hugging Face Hub tokenizer requires an explicit revision")
+
+    from huggingface_hub import HfApi, snapshot_download
+
+    info = HfApi().model_info(repo_id=str(source), revision=revision)
+    commit = getattr(info, "sha", None)
+    if (
+        not isinstance(commit, str)
+        or len(commit) != 40
+        or any(character not in "0123456789abcdefABCDEF" for character in commit)
+    ):
+        raise ValueError("Hugging Face did not resolve the tokenizer revision to a commit SHA")
+    snapshot = Path(
+        snapshot_download(
+            repo_id=str(source),
+            revision=commit,
+            allow_patterns=list(_TOKENIZER_FILES),
+        )
+    )
+    if not snapshot.is_dir():
+        raise ValueError("Hugging Face tokenizer snapshot was not materialized locally")
+    return snapshot, commit.lower()
 
 
 class HuggingFaceBaseTokenizer:

@@ -39,12 +39,18 @@ class _PythonUnitVisitor(ast.NodeVisitor):
         self.units: list[ContextualUnit] = []
         self.history: deque[str] = deque(maxlen=8)
         self.scopes: list[str] = ["module"]
+        self.scope_kinds: list[str] = ["module"]
         self.scope_defs: list[dict[str, str]] = [{}]
         self.dynamic_symbols: set[str] = set()
 
     def collect(self) -> list[ContextualUnit]:
         self.visit(self.document.tree)
         return self.units
+
+    def generic_visit(self, node: ast.AST) -> Any:
+        if isinstance(node, (ast.stmt, ast.expr)):
+            self._emit_unknown(node)
+        return super().generic_visit(node)
 
     @property
     def scope(self) -> str:
@@ -86,6 +92,11 @@ class _PythonUnitVisitor(ast.NodeVisitor):
     def _visit_function(
         self, node: ast.FunctionDef | ast.AsyncFunctionDef, *, is_async: bool
     ) -> None:
+        for decorator in node.decorator_list:
+            self.visit(decorator)
+        self._visit_argument_expressions(node.args)
+        if node.returns is not None:
+            self.visit(node.returns)
         symbol_id = self._define(node.name, node)
         if is_async:
             self._emit(
@@ -112,13 +123,15 @@ class _PythonUnitVisitor(ast.NodeVisitor):
             ast_relation=node.__class__.__name__,
         )
         self.scopes.append(node.name)
+        self.scope_kinds.append("function")
         self.scope_defs.append({})
         try:
-            self._visit_arguments(node.args)
+            self._define_arguments(node.args)
             for stmt in node.body:
                 self.visit(stmt)
         finally:
             self.scope_defs.pop()
+            self.scope_kinds.pop()
             self.scopes.pop()
             self._emit(
                 node.name,
@@ -152,12 +165,14 @@ class _PythonUnitVisitor(ast.NodeVisitor):
             ast_relation="ClassDef",
         )
         self.scopes.append(node.name)
+        self.scope_kinds.append("class")
         self.scope_defs.append({})
         try:
             for stmt in node.body:
                 self.visit(stmt)
         finally:
             self.scope_defs.pop()
+            self.scope_kinds.pop()
             self.scopes.pop()
             self._emit(
                 node.name,
@@ -168,17 +183,23 @@ class _PythonUnitVisitor(ast.NodeVisitor):
             )
 
     def visit_Lambda(self, node: ast.Lambda) -> Any:
+        self._visit_argument_expressions(node.args)
         name = self._anonymous_scope_name("lambda", node)
         self._emit(name, SemanticEvent.SCOPE_ENTER, node, ast_relation="Lambda")
         self.scopes.append(name)
+        self.scope_kinds.append("lambda")
         self.scope_defs.append({})
         try:
-            self._visit_arguments(node.args)
+            self._define_arguments(node.args)
             self.visit(node.body)
         finally:
             self.scope_defs.pop()
+            self.scope_kinds.pop()
             self.scopes.pop()
             self._emit(name, SemanticEvent.SCOPE_EXIT, node, ast_relation="Lambda")
+
+    def visit_Expr(self, node: ast.Expr) -> Any:
+        self.visit(node.value)
 
     def visit_Assign(self, node: ast.Assign) -> Any:
         self.visit(node.value)
@@ -523,6 +544,7 @@ class _PythonUnitVisitor(ast.NodeVisitor):
         )
         self._emit(name, SemanticEvent.SCOPE_ENTER, node, ast_relation=node.__class__.__name__)
         self.scopes.append(name)
+        self.scope_kinds.append("comprehension")
         self.scope_defs.append({})
         try:
             for generator in node.generators:
@@ -534,6 +556,7 @@ class _PythonUnitVisitor(ast.NodeVisitor):
                 self.visit(result)
         finally:
             self.scope_defs.pop()
+            self.scope_kinds.pop()
             self.scopes.pop()
             self._emit(name, SemanticEvent.SCOPE_EXIT, node, ast_relation=node.__class__.__name__)
 
@@ -547,20 +570,24 @@ class _PythonUnitVisitor(ast.NodeVisitor):
             ir=self.adapter.common_core.extension("python.match", {"surface": self._surface(node)}),
         )
         for case in node.cases:
+            self._visit_pattern_expressions(case.pattern)
+            for name, capture_node in self._pattern_captures(case.pattern):
+                symbol_id = self._define(name, capture_node)
+                self._emit(
+                    name,
+                    SemanticEvent.DEFINE,
+                    capture_node,
+                    symbol_id=symbol_id,
+                    ast_relation=f"{capture_node.__class__.__name__}.name",
+                    ir=self.adapter.common_core.variable(name),
+                )
             if case.guard is not None:
                 self.visit(case.guard)
             for stmt in case.body:
                 self.visit(stmt)
 
     def visit_Delete(self, node: ast.Delete) -> Any:
-        self._emit(
-            self._surface(node),
-            SemanticEvent.UNKNOWN_SEMANTIC,
-            node,
-            ast_relation="Delete",
-            ir=self.adapter.common_core.extension("python.unknown", {"node": "Delete"}),
-            metadata={"unknown_node": "Delete"},
-        )
+        self._emit_unknown(node)
         for target in node.targets:
             self.visit(target)
 
@@ -595,13 +622,35 @@ class _PythonUnitVisitor(ast.NodeVisitor):
         return symbol_id
 
     def _resolve(self, name: str) -> str | None:
-        for scope in reversed(self.scope_defs):
-            if name in scope:
-                return scope[name]
-        record = self.document.index.find_definition(name)
-        return record.symbol_id if record else None
+        inside_function_scope = False
+        for definitions, kind in reversed(list(zip(self.scope_defs, self.scope_kinds))):
+            if kind in {"function", "lambda", "comprehension"}:
+                inside_function_scope = True
+            if kind == "class" and inside_function_scope:
+                continue
+            if name in definitions:
+                return definitions[name]
+        return None
 
-    def _visit_arguments(self, arguments: ast.arguments) -> None:
+    def _visit_argument_expressions(self, arguments: ast.arguments) -> None:
+        all_arguments = [
+            *arguments.posonlyargs,
+            *arguments.args,
+            *arguments.kwonlyargs,
+        ]
+        for argument in all_arguments:
+            if argument.annotation is not None:
+                self.visit(argument.annotation)
+        for argument in (arguments.vararg, arguments.kwarg):
+            if argument is not None and argument.annotation is not None:
+                self.visit(argument.annotation)
+        for default in [
+            *arguments.defaults,
+            *(item for item in arguments.kw_defaults if item is not None),
+        ]:
+            self.visit(default)
+
+    def _define_arguments(self, arguments: ast.arguments) -> None:
         positional = [*arguments.posonlyargs, *arguments.args]
         keyword_only = list(arguments.kwonlyargs)
         for arg in [*positional, *keyword_only]:
@@ -625,8 +674,73 @@ class _PythonUnitVisitor(ast.NodeVisitor):
                     ast_relation="arguments.vararg" if arg is arguments.vararg else "arguments.kwarg",
                     ir=self.adapter.common_core.parameter(arg.arg),
                 )
-        for default in [*arguments.defaults, *(item for item in arguments.kw_defaults if item)]:
-            self.visit(default)
+
+    def _visit_pattern_expressions(self, pattern: ast.pattern) -> None:
+        if isinstance(pattern, ast.MatchValue):
+            self.visit(pattern.value)
+        elif isinstance(pattern, ast.MatchSequence):
+            for child in pattern.patterns:
+                self._visit_pattern_expressions(child)
+        elif isinstance(pattern, ast.MatchMapping):
+            for key in pattern.keys:
+                self.visit(key)
+            for child in pattern.patterns:
+                self._visit_pattern_expressions(child)
+        elif isinstance(pattern, ast.MatchClass):
+            self.visit(pattern.cls)
+            for child in [*pattern.patterns, *pattern.kwd_patterns]:
+                self._visit_pattern_expressions(child)
+        elif isinstance(pattern, ast.MatchAs) and pattern.pattern is not None:
+            self._visit_pattern_expressions(pattern.pattern)
+        elif isinstance(pattern, ast.MatchOr):
+            for child in pattern.patterns:
+                self._visit_pattern_expressions(child)
+
+    def _pattern_captures(self, pattern: ast.pattern) -> list[tuple[str, ast.pattern]]:
+        captures: list[tuple[str, ast.pattern]] = []
+
+        def collect(current: ast.pattern) -> None:
+            if isinstance(current, ast.MatchStar) and current.name is not None:
+                captures.append((current.name, current))
+            elif isinstance(current, ast.MatchAs):
+                if current.pattern is not None:
+                    collect(current.pattern)
+                if current.name is not None:
+                    captures.append((current.name, current))
+            elif isinstance(current, ast.MatchSequence):
+                for child in current.patterns:
+                    collect(child)
+            elif isinstance(current, ast.MatchMapping):
+                for child in current.patterns:
+                    collect(child)
+                if current.rest is not None:
+                    captures.append((current.rest, current))
+            elif isinstance(current, ast.MatchClass):
+                for child in [*current.patterns, *current.kwd_patterns]:
+                    collect(child)
+            elif isinstance(current, ast.MatchOr):
+                for child in current.patterns:
+                    collect(child)
+
+        collect(pattern)
+        unique: list[tuple[str, ast.pattern]] = []
+        seen: set[str] = set()
+        for name, capture_node in captures:
+            if name not in seen:
+                unique.append((name, capture_node))
+                seen.add(name)
+        return unique
+
+    def _emit_unknown(self, node: ast.AST) -> None:
+        node_name = node.__class__.__name__
+        self._emit(
+            self._surface(node),
+            SemanticEvent.UNKNOWN_SEMANTIC,
+            node,
+            ast_relation=node_name,
+            ir=self.adapter.common_core.extension("python.unknown", {"node": node_name}),
+            metadata={"unknown_node": node_name},
+        )
 
     def _anonymous_scope_name(self, prefix: str, node: ast.AST) -> str:
         return f"{prefix}@{getattr(node, 'lineno', 1)}:{getattr(node, 'col_offset', 0)}"

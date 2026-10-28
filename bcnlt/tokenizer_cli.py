@@ -10,6 +10,7 @@ from .hf_tokenizer import (
     HuggingFaceBaseTokenizer,
     identity_from_directory,
     load_tokenizer_artifact,
+    resolve_tokenizer_source,
 )
 from .tokenizer import BCNLTTokenizer
 from .tokenizer_manifest import build_manifest
@@ -63,11 +64,15 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _build(args: argparse.Namespace) -> int:
-    base = HuggingFaceBaseTokenizer.from_pretrained(args.base)
-    identity = identity_from_directory(
+    resolved_base, resolved_revision = resolve_tokenizer_source(
         args.base,
-        name=args.name,
         revision=args.revision,
+    )
+    base = HuggingFaceBaseTokenizer.from_pretrained(resolved_base)
+    identity = identity_from_directory(
+        resolved_base,
+        name=args.name,
+        revision=resolved_revision,
     )
     tokenizer = BCNLTTokenizer(base, build_manifest(base, identity))
     files = tokenizer.save_pretrained(args.output)
