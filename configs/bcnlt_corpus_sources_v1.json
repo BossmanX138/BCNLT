@@ -1,0 +1,28 @@
+{
+  "schema_version": "bcnlt-corpus-sources-v1",
+  "sources": [
+    {
+      "enabled": false,
+      "name": "BossCrafts/BCNLT",
+      "note": "Enable only after exporting a clean owner-approved snapshot at this revision.",
+      "ownership": "owner_provided",
+      "provider": "local",
+      "revision": "dfdd283fa719f841bae3d503b336b3add7b7ceaa",
+      "root": "C:/Users/bossm/Documents/Codex/BCNLT",
+      "upstream_url": "owner-provided"
+    },
+    {
+      "data_dir": "data/python",
+      "name": "bigcode/the-stack-dedup",
+      "provider": "huggingface",
+      "revision": "17cad72c886a2858e08d4c349a00d6466f54df63",
+      "upstream_url": "https://huggingface.co/datasets/bigcode/the-stack-dedup"
+    },
+    {
+      "name": "nvidia/OpenCodeInstruct",
+      "provider": "huggingface",
+      "revision": "8f3ba5bafe4d6e8db46082cf7ae6741bc370604d",
+      "upstream_url": "https://huggingface.co/datasets/nvidia/OpenCodeInstruct"
+    }
+  ]
+}
