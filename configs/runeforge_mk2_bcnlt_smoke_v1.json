@@ -1,0 +1,18 @@
+{
+  "alpha": 32,
+  "dropout": 0.0,
+  "gradient_accumulation_steps": 8,
+  "learning_rate": 0.0002,
+  "maximum_sequence_tokens": 4096,
+  "rank": 16,
+  "schema_version": "runeforge-mk2-bcnlt-smoke-v1",
+  "target_modules": [
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+    "gate_proj",
+    "up_proj",
+    "down_proj"
+  ]
+}

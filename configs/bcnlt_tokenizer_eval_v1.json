@@ -1,0 +1,40 @@
+{
+  "cases": [
+    {
+      "case_id": "tokenizer-unicode-roundtrip",
+      "category": "tokenizer",
+      "expected": "value = \"λ\"\n",
+      "prompt": "Return exactly this one Python line, including the final newline: value = \"λ\""
+    },
+    {
+      "case_id": "structural-definition-link",
+      "category": "structural",
+      "expected": "module::rate",
+      "prompt": "A BCNLT REFERENCE record has defines=module::rate. Return only the exact definition identity."
+    },
+    {
+      "case_id": "semantic-to-code-add",
+      "category": "semantic_to_code",
+      "expected": "def add(a, b):\n    return a + b\n",
+      "prompt": "Reconstruct parseable Python for a function named add with parameters a and b whose RETURN record contains the operator a + b."
+    },
+    {
+      "case_id": "raw-code-control",
+      "category": "raw_code",
+      "expected": "items = [1, 2, 3]\n",
+      "prompt": "Return exactly this Python assignment and a final newline: items = [1, 2, 3]"
+    },
+    {
+      "case_id": "ordinary-instruction-control",
+      "category": "ordinary_instruction",
+      "expected": "ready",
+      "prompt": "Reply with the single word ready."
+    }
+  ],
+  "schema_version": "bcnlt-tokenizer-eval-v1",
+  "settings": {
+    "max_new_tokens": 256,
+    "seed": 1729,
+    "temperature": 0.0
+  }
+}

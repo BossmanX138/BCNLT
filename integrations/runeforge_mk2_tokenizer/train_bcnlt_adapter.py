@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
+import math
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -336,3 +338,100 @@ def hash_artifact(path_value: str | Path) -> str:
         file_digest = bytes.fromhex(_sha256(item))
         digest.update(file_digest)
     return digest.hexdigest()
+
+
+def _default_definition(token: str) -> str:
+    body = token.removeprefix("<|bcnlt:").removesuffix("|>")
+    return "BCNLT structural token for " + body.replace(":", " ").replace("_", " ")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Run bounded Runeforge BCNLT adapter training")
+    parser.add_argument("--base-model", required=True)
+    parser.add_argument("--tokenizer-artifact", required=True)
+    parser.add_argument("--packed-dataset", required=True)
+    parser.add_argument("--training-config", required=True)
+    parser.add_argument("--expected-lineage", required=True)
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--split", default="train")
+    parser.add_argument("--maximum-optimizer-steps", type=int, required=True)
+    parser.add_argument("--seed", type=int, default=1729)
+    parser.add_argument("--engine", default="auto")
+    args = parser.parse_args(argv)
+
+    from bcnlt.tokenizer_manifest import load_manifest
+
+    config_raw = json.loads(Path(args.training_config).read_text(encoding="utf-8"))
+    config = QLoRAConfig(
+        target_modules=tuple(config_raw["target_modules"]),
+        rank=int(config_raw.get("rank", 16)),
+        alpha=int(config_raw.get("alpha", 32)),
+        dropout=float(config_raw.get("dropout", 0.0)),
+        maximum_sequence_tokens=int(config_raw.get("maximum_sequence_tokens", 4096)),
+        learning_rate=float(config_raw.get("learning_rate", 2e-4)),
+        gradient_accumulation_steps=int(
+            config_raw.get("gradient_accumulation_steps", 8)
+        ),
+    )
+    tokenizer_root = Path(args.tokenizer_artifact)
+    tokenizer_manifest_path = tokenizer_root / "bcnlt_tokenizer_manifest.json"
+    manifest = load_manifest(tokenizer_manifest_path)
+    definitions = {
+        item.token: _default_definition(item.token) for item in manifest.added_tokens
+    }
+    model, engine = load_qlora_model(
+        args.base_model,
+        manifest=manifest,
+        definitions=definitions,
+        config=config,
+        seed=args.seed,
+        engine=args.engine,
+    )
+    corpus_manifest = Path(args.packed_dataset) / "dataset_manifest.json"
+    observed = TrainingLineage.from_artifacts(
+        base_model=args.base_model,
+        tokenizer_manifest=tokenizer_manifest_path,
+        corpus_manifest=corpus_manifest,
+        training_config=args.training_config,
+        engine=engine,
+    )
+    expected = TrainingLineage(
+        **json.loads(Path(args.expected_lineage).read_text(encoding="utf-8"))
+    )
+    verify_training_preflight(
+        model,
+        expected=expected,
+        observed=observed,
+        cuda_available=torch.cuda.is_available(),
+    )
+    dataset = PackedBCNLTDataset(
+        args.packed_dataset,
+        args.split,
+        expected_tokenizer_digest=manifest.manifest_sha256,
+    )
+    losses = run_training_steps(
+        model,
+        dataset,
+        config,
+        maximum_optimizer_steps=args.maximum_optimizer_steps,
+    )
+    artifact = save_bcnlt_adapter(model, args.output, tokenizer_root, observed)
+    smoke_manifest = {
+        "schema_version": "bcnlt-smoke-manifest-v1",
+        "lineage": observed.to_dict(),
+        "maximum_optimizer_steps": args.maximum_optimizer_steps,
+        "completed_training_examples": len(losses),
+        "losses": losses,
+        "finite_loss": all(math.isfinite(value) for value in losses),
+        "adapter_weights_sha256": artifact.weights_sha256,
+    }
+    (artifact.root / "smoke_manifest.json").write_text(
+        json.dumps(smoke_manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
