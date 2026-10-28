@@ -256,3 +256,9 @@ The key rule is to avoid shared mutable state during parallel work. Workers shou
 5. Add type evidence retrieval for high-uncertainty member access and calls.
 6. Track whether UYR reduces downstream model mistakes on code explanation and transformation tasks.
 7. Ablate semantic history, UYR, wildcard, and IR mapping independently.
+
+## Runeforge Mk2 native tokenizer training
+
+The repository now includes the BCNLT hybrid tokenizer, provenance-gated corpus pipeline, deterministic curriculum and admission gates, packed-dataset loader, sparse embedding/output extensions, and guarded Runeforge Mk2 training handoff. The preserved Mk2 checkpoint remains immutable, and validation-only is the default for the full-run launcher.
+
+See [docs/bcnlt-runeforge-training.md](docs/bcnlt-runeforge-training.md) for the exact WSL build order, artifact boundaries, current Hugging Face access blocker, smoke requirements, and explicit full-run launch gate.

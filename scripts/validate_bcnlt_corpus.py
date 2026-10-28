@@ -42,6 +42,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tokenizer-artifact", required=True)
     parser.add_argument("--base-tokenizer", required=True)
     parser.add_argument("--report", required=True)
+    parser.add_argument("--accepted-output")
     parser.add_argument("--holdout-hashes")
     args = parser.parse_args(argv)
 
@@ -71,6 +72,19 @@ def main(argv: list[str] | None = None) -> int:
         encoding="utf-8",
         newline="\n",
     )
+    if args.accepted_output:
+        accepted_path = Path(args.accepted_output)
+        if accepted_path.exists():
+            parser.error(f"accepted output already exists: {accepted_path}")
+        accepted_path.parent.mkdir(parents=True, exist_ok=True)
+        accepted_path.write_text(
+            "".join(
+                json.dumps(item.to_dict(), ensure_ascii=False, sort_keys=True) + "\n"
+                for item in report.accepted_records
+            ),
+            encoding="utf-8",
+            newline="\n",
+        )
     print(json.dumps({"passed": report.passed, "report": str(report_path)}, sort_keys=True))
     return 0 if report.passed else 2
 
