@@ -11,6 +11,10 @@ tokenizer = [
     "tokenizers>=0.19",
     "transformers>=4.40",
 ]
+multilingual = [
+    "tree-sitter==0.26.0",
+    "tree-sitter-language-pack==1.22.1",
+]
 
 [project.scripts]
 bcnlt = "bcnlt.cli:main"
