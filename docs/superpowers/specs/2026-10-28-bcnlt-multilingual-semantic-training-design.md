@@ -160,6 +160,24 @@ the language maps and golden fixtures described below.
 
 ## Adapter architecture
 
+### One adapter with a language carousel
+
+The public integration is one `BCNLTMultilingualAdapter` connected to the whole
+BCNLT tokenizer, corpus, and training pipeline. Inside it, a `LanguageCarousel`
+selects one of the 14 semantic cartridges from trusted source metadata. The
+cartridges contain grammar IDs and language-specific node mappings; they are not
+separate model adapters or separately trained LoRAs.
+
+The flow is therefore:
+
+`source record -> language carousel -> shared semantic engine -> canonical BCNLT records -> one multilingual Runeforge adapter`.
+
+`PythonAdapter` remains as a compatibility facade that selects the Python
+cartridge, so existing Python callers and regression tests continue to work.
+New corpus code calls the single multilingual facade with an explicit language
+ID. Runeforge receives one multilingual LoRA/embedding extension trained across
+the combined admitted corpus, not one LoRA per language.
+
 ### Shared runtime
 
 `TreeSitterAdapter` implements the language-neutral part of
