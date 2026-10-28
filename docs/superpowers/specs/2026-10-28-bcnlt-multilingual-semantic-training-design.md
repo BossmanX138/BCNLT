@@ -23,6 +23,14 @@ lineage back to that preserved core and to BCNLT tokenizer v1.
 
 - Give all 14 selected languages first-class BCNLT semantic coverage rather than
   Python semantics plus raw-code fallbacks.
+- Route every existing BCNLT subsystem through the single multilingual facade:
+  cache/incremental processing, uncertainty/UYR/wildcard analysis, semantic-pair
+  storage, preprocessing, tokenizer/CLI paths, benchmarking, model evaluation,
+  Runeforge embedding integration, and guarded training.
+- Make the Common Coding Core the primary cross-language meaning layer, and make
+  knowledge boundaries first-class training data: what BCNLT knows, what UYR can
+  resolve through targeted retrieval, what remains provisional, and what is
+  still unknown.
 - Reuse the existing 73 BCNLT structural tokens and preserve all 32,000 original
   Runeforge token IDs. Language identity is record provenance, not a new token-ID
   range.
@@ -177,6 +185,41 @@ cartridge, so existing Python callers and regression tests continue to work.
 New corpus code calls the single multilingual facade with an explicit language
 ID. Runeforge receives one multilingual LoRA/embedding extension trained across
 the combined admitted corpus, not one LoRA per language.
+
+### Common Coding Core and knowledge-boundary loop
+
+Every cartridge maps shared concepts into `CommonCodingCore` before using a
+language extension. Functions, parameters, values, variables, calls,
+assignments, loops, branches, comparisons, data structures, I/O, errors,
+returns, operators, member access, and imports have the same IR meaning across
+languages. A language-prefixed `IRKind.EXTENSION` is used only when the common
+core cannot represent the construct. Admission reports common-core coverage and
+blocks a language whose required shared concepts bypass it. Golden fixtures must
+map 100% of required shared concepts to common-core IR, and at least 80% of each
+language's admitted non-scope, non-unknown semantic units must use common-core IR
+rather than an extension.
+
+Every emitted unit also passes through the same knowledge-boundary loop:
+
+1. The uncertainty scorer records initial confidence, uncertainty, and evidence
+   signals.
+2. Units below confidence `0.72` enter UYR for at most four rounds and eight
+   added context units. UYR may retrieve lexical definitions and nearby semantic
+   context, but it may not invent a definition link.
+3. A construct still outside the common core enters the wildcard resolver. The
+   resolver stores a provisional category, hypotheses, evidence, confidence,
+   language, grammar revision, and semantic-spec hash in append-only memory.
+4. Repeated wildcard observations may raise confidence only when the stored
+   evidence matches. A hypothesis never becomes a canonical fact merely because
+   it was seen repeatedly.
+5. The final record is labeled `known`, `retrieved`, `provisional`, or
+   `unresolved`, with initial/final score bands and the evidence path preserved
+   in its training envelope.
+
+UYR and wildcard results are part of corpus identity and training/evaluation,
+not inference-only diagnostics. Wildcard signatures include language and
+semantic-spec identity so unrelated syntax cannot collide, while their
+provisional meanings may still project into a shared Common Coding Core category.
 
 ### Shared runtime
 
@@ -342,13 +385,18 @@ coverage report so a spec cannot inflate coverage by ignoring hard constructs.
 
 ### Curriculum
 
-The five existing families remain:
+The five existing families remain, and knowledge-boundary learning becomes a
+sixth required family:
 
 1. semantic continuation;
 2. semantic-to-code reconstruction;
 3. code-to-semantic alignment;
 4. structural reasoning; and
 5. mixed instruction use.
+6. knowledge-boundary reasoning: predict initial uncertainty, decide whether
+   retrieval is needed, select the UYR evidence that resolves a unit, or preserve
+   an evidence-backed wildcard hypothesis/explicit unknown when it cannot be
+   resolved.
 
 Every example includes language, source-document ID, repository identity,
 parser-bundle hash, semantic-spec hash, source span, task family, and tokenizer
@@ -382,7 +430,7 @@ The full-corpus gate requires:
 - at least 140,000 admitted packed training records total;
 - at least 50,000,000 encoded training tokens total;
 - no language above 12% of admitted records or tokens;
-- all five task families represented for every language;
+- all six task families represented for every language;
 - no task family above 40% of one language's records; and
 - no language above 7.5% `UNKNOWN_SEMANTIC` events in aggregate;
 - no single source document above 0.5% of the complete admitted corpus.
@@ -477,6 +525,13 @@ must individually reach 80%; the language macro must reach 90%. A null or
 uncertain resolution earns credit only when the frozen golden target also marks
 that fact unresolved. Parseable but semantically different output does not earn
 exact credit, though it is reported as a diagnostic secondary metric.
+
+Knowledge-boundary evaluation is a separate required gate so it cannot be hidden
+inside structural accuracy. Each language must reach at least 90% accuracy on
+known/retrieved/provisional/unresolved classification, at least 85% correct UYR
+resolution on resolvable probes, and at most 5% false certainty on intentionally
+unresolvable probes. Wildcard repeat probes must reuse matching evidence and
+raise confidence without changing a provisional hypothesis into a fact.
 
 Semantic-to-code reconstruction is exact at the canonical-semantic level rather
 than at the source-byte level. The emitted code must parse with the pinned target
@@ -576,12 +631,17 @@ canonical semantics. Any cross-platform semantic difference blocks the bundle.
 - Multilingual source registry, admission database, rejection log, and
   content-addressed training shards.
 - Per-language and aggregate corpus validation reports.
+- Common-core coverage, UYR resolution, wildcard-memory, and false-certainty
+  reports for every language.
 - Equal-language smoke corpus, smoke adapter, logs, and evaluation evidence.
 - Guarded full-corpus and Runeforge adaptation launchers.
 - Standalone multilingual adapter and, only after evaluation and explicit merge
   authorization, a derived merged Runeforge checkpoint.
 - Lineage documentation from every derived artifact back to the preserved
   Runeforge core, tokenizer v1, parser bundle, semantic specs, and source rows.
+- A component coverage matrix naming every existing BCNLT module, whether it is
+  carousel-connected or language-neutral, and the regression test that protects
+  it.
 
 ## Acceptance criteria
 
