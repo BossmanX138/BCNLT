@@ -1,0 +1,338 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import shutil
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Sequence
+
+import torch
+from torch import nn
+
+from bcnlt.corpus.packing import PackedBCNLTDataset
+
+from .embedding_extension import attach_bcnlt_extension
+
+
+@dataclass(frozen=True)
+class TrainingLineage:
+    base_model_sha256: str
+    tokenizer_manifest_sha256: str
+    corpus_manifest_sha256: str
+    training_config_sha256: str
+    engine: str
+
+    def __post_init__(self) -> None:
+        for name in (
+            "base_model_sha256",
+            "tokenizer_manifest_sha256",
+            "corpus_manifest_sha256",
+            "training_config_sha256",
+        ):
+            value = getattr(self, name)
+            if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+                raise ValueError(f"{name} must be a lowercase SHA-256 digest")
+        if not self.engine.strip():
+            raise ValueError("training engine must be recorded")
+
+    def to_dict(self) -> dict[str, str]:
+        return self.__dict__.copy()
+
+    @classmethod
+    def from_artifacts(
+        cls,
+        *,
+        base_model: str | Path,
+        tokenizer_manifest: str | Path,
+        corpus_manifest: str | Path,
+        training_config: str | Path,
+        engine: str,
+    ) -> "TrainingLineage":
+        return cls(
+            base_model_sha256=hash_artifact(base_model),
+            tokenizer_manifest_sha256=hash_artifact(tokenizer_manifest),
+            corpus_manifest_sha256=hash_artifact(corpus_manifest),
+            training_config_sha256=hash_artifact(training_config),
+            engine=engine,
+        )
+
+
+@dataclass(frozen=True)
+class TrainingPreflightReport:
+    passed: bool
+    extension_trainable_parameters: int
+    lora_trainable_parameters: int
+    frozen_base_parameters: int
+    lineage: TrainingLineage
+
+
+@dataclass(frozen=True)
+class AdapterArtifact:
+    root: Path
+    weights_path: Path
+    lineage_path: Path
+    weights_sha256: str
+
+
+@dataclass(frozen=True)
+class QLoRAConfig:
+    target_modules: tuple[str, ...]
+    rank: int = 16
+    alpha: int = 32
+    dropout: float = 0.0
+    maximum_sequence_tokens: int = 4096
+    learning_rate: float = 2e-4
+    gradient_accumulation_steps: int = 8
+
+
+def load_qlora_model(
+    base_model_path: str | Path,
+    *,
+    manifest: Any,
+    definitions: dict[str, str],
+    config: QLoRAConfig,
+    seed: int,
+    engine: str = "auto",
+) -> tuple[nn.Module, str]:
+    """Load a 4-bit base and attach LoRA plus the sparse BCNLT tables.
+
+    Unsloth is selected when importable. The fallback uses the equivalent
+    Transformers, PEFT, and bitsandbytes path. Imports remain lazy so corpus
+    tooling does not require the GPU training environment.
+    """
+    if not config.target_modules:
+        raise ValueError("at least one proven Runeforge LoRA target module is required")
+    selected = engine
+    if selected == "auto":
+        try:
+            import unsloth  # noqa: F401
+        except ImportError:
+            selected = "transformers-peft-bitsandbytes"
+        else:
+            selected = "unsloth"
+    if selected == "unsloth":
+        from unsloth import FastLanguageModel
+
+        model, _ = FastLanguageModel.from_pretrained(
+            model_name=str(base_model_path),
+            max_seq_length=config.maximum_sequence_tokens,
+            load_in_4bit=True,
+        )
+        model = FastLanguageModel.get_peft_model(
+            model,
+            r=config.rank,
+            target_modules=list(config.target_modules),
+            lora_alpha=config.alpha,
+            lora_dropout=config.dropout,
+            bias="none",
+            use_gradient_checkpointing="unsloth",
+            random_state=seed,
+        )
+    elif selected == "transformers-peft-bitsandbytes":
+        from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+        from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+
+        quantization = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            str(base_model_path),
+            quantization_config=quantization,
+            device_map="auto",
+            trust_remote_code=False,
+        )
+        model = prepare_model_for_kbit_training(
+            model, use_gradient_checkpointing=True
+        )
+        model = get_peft_model(
+            model,
+            LoraConfig(
+                r=config.rank,
+                lora_alpha=config.alpha,
+                lora_dropout=config.dropout,
+                bias="none",
+                task_type="CAUSAL_LM",
+                target_modules=list(config.target_modules),
+            ),
+        )
+    else:
+        raise ValueError(f"unsupported training engine: {selected}")
+    attach_bcnlt_extension(model, manifest, definitions, seed)
+    return model, selected
+
+
+def run_training_steps(
+    model: nn.Module,
+    dataset: PackedBCNLTDataset,
+    config: QLoRAConfig,
+    *,
+    maximum_optimizer_steps: int,
+) -> list[float]:
+    """Run a bounded, explicit optimizer loop over packed rows."""
+    if maximum_optimizer_steps <= 0:
+        raise ValueError("maximum_optimizer_steps must be positive")
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is required for Runeforge BCNLT training")
+    if not len(dataset):
+        raise ValueError("training dataset is empty")
+    optimizer = torch.optim.AdamW(
+        list(trainable_parameters(model)), lr=config.learning_rate
+    )
+    model.train()
+    device = next(model.parameters()).device
+    optimizer.zero_grad(set_to_none=True)
+    losses: list[float] = []
+    optimizer_steps = 0
+    for sample_index in range(len(dataset)):
+        sample = dataset[sample_index]
+        input_ids = torch.tensor([sample["input_ids"]], dtype=torch.long, device=device)
+        labels = torch.tensor([sample["labels"]], dtype=torch.long, device=device)
+        attention_mask = torch.tensor(
+            [sample["attention_mask"]], dtype=torch.long, device=device
+        )
+        output = model(
+            input_ids=input_ids,
+            labels=labels,
+            attention_mask=attention_mask,
+            use_cache=False,
+        )
+        loss = output.loss / config.gradient_accumulation_steps
+        if not torch.isfinite(loss):
+            raise FloatingPointError("non-finite BCNLT training loss")
+        loss.backward()
+        losses.append(float(loss.detach().cpu()) * config.gradient_accumulation_steps)
+        boundary = (sample_index + 1) % config.gradient_accumulation_steps == 0
+        final_sample = sample_index + 1 == len(dataset)
+        if boundary or final_sample:
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+            optimizer_steps += 1
+            if optimizer_steps >= maximum_optimizer_steps:
+                break
+    return losses
+
+
+def verify_training_preflight(
+    model: nn.Module,
+    *,
+    expected: TrainingLineage,
+    observed: TrainingLineage,
+    cuda_available: bool,
+    resume: TrainingLineage | None = None,
+) -> TrainingPreflightReport:
+    _compare_lineage("", expected, observed)
+    if resume is not None:
+        _compare_lineage("resume ", expected, resume)
+    if not cuda_available:
+        raise RuntimeError("CUDA is required for Runeforge BCNLT training")
+
+    extension = 0
+    lora = 0
+    frozen_base = 0
+    for name, parameter in model.named_parameters():
+        if ".base.weight" in name:
+            if parameter.requires_grad:
+                raise ValueError(f"whole base table is trainable: {name}")
+            frozen_base += parameter.numel()
+        elif ".extension.weight" in name:
+            if parameter.requires_grad:
+                extension += parameter.numel()
+        elif "lora_" in name.lower() and parameter.requires_grad:
+            lora += parameter.numel()
+    if extension <= 0:
+        raise ValueError("no trainable BCNLT extension parameters")
+    if lora <= 0:
+        raise ValueError("no trainable LoRA parameters")
+    if frozen_base <= 0:
+        raise ValueError("no frozen base embedding/output parameters detected")
+    return TrainingPreflightReport(True, extension, lora, frozen_base, observed)
+
+
+def trainable_parameters(model: nn.Module):
+    for parameter in model.parameters():
+        if parameter.requires_grad:
+            yield parameter
+
+
+def save_bcnlt_adapter(
+    model: nn.Module,
+    output_path: str | Path,
+    tokenizer_artifact: str | Path,
+    lineage: TrainingLineage,
+) -> AdapterArtifact:
+    output = Path(output_path)
+    if output.exists():
+        raise FileExistsError(f"adapter output already exists: {output}")
+    tokenizer_source = Path(tokenizer_artifact)
+    if not tokenizer_source.is_dir():
+        raise FileNotFoundError(f"tokenizer artifact is missing: {tokenizer_source}")
+    state = {
+        name: tensor.detach().cpu()
+        for name, tensor in model.state_dict().items()
+        if "extension" in name or "lora_" in name.lower()
+    }
+    if not state or not any("extension" in name for name in state):
+        raise ValueError("adapter state has no BCNLT extension weights")
+    output.mkdir(parents=True)
+    weights_path = output / "adapter_model.pt"
+    torch.save(state, weights_path)
+    lineage_path = output / "lineage.json"
+    lineage_path.write_text(
+        json.dumps(lineage.to_dict(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    shutil.copytree(tokenizer_source, output / "tokenizer")
+    digest = _sha256(weights_path)
+    (output / "artifact_manifest.json").write_text(
+        json.dumps(
+            {
+                "adapter_weights": weights_path.name,
+                "adapter_weights_sha256": digest,
+                "lineage": lineage.to_dict(),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    return AdapterArtifact(output, weights_path, lineage_path, digest)
+
+
+def _compare_lineage(prefix: str, expected: TrainingLineage, observed: TrainingLineage) -> None:
+    for field in expected.__dataclass_fields__:
+        if getattr(expected, field) != getattr(observed, field):
+            raise ValueError(f"{prefix}{field} does not match expected lineage")
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def hash_artifact(path_value: str | Path) -> str:
+    path = Path(path_value)
+    if path.is_file():
+        return _sha256(path)
+    if not path.is_dir():
+        raise FileNotFoundError(f"lineage artifact is missing: {path}")
+    digest = hashlib.sha256()
+    files = sorted(item for item in path.rglob("*") if item.is_file())
+    if not files:
+        raise ValueError(f"lineage directory is empty: {path}")
+    for item in files:
+        relative = item.relative_to(path).as_posix().encode("utf-8")
+        digest.update(len(relative).to_bytes(8, "big"))
+        digest.update(relative)
+        file_digest = bytes.fromhex(_sha256(item))
+        digest.update(file_digest)
+    return digest.hexdigest()
