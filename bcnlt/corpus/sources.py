@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -156,9 +157,21 @@ def ingest_opencodeinstruct_stream(
                 f"average_test_score={score}",
             )
             continue
-        statuses = row.get("test_execution_status", ())
+        statuses = row.get(
+            "tests_execution_status",
+            row.get("test_execution_status", ()),
+        )
         if isinstance(statuses, str):
-            statuses = [statuses]
+            try:
+                decoded_statuses = json.loads(statuses)
+            except json.JSONDecodeError:
+                statuses = [statuses]
+            else:
+                statuses = (
+                    decoded_statuses
+                    if isinstance(decoded_statuses, list)
+                    else [decoded_statuses]
+                )
         status_values = [str(item).strip().lower() for item in statuses] if statuses else []
         if not status_values or any(value not in {"pass", "passed", "success"} for value in status_values):
             _reject(

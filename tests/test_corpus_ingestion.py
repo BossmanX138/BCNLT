@@ -272,3 +272,21 @@ def test_opencodeinstruct_requires_parseable_perfect_passing_python(tmp_path: Pa
         "instruction_test_failure",
         "python_parse_failure",
     }
+
+
+def test_opencodeinstruct_accepts_pinned_plural_string_status_schema(tmp_path: Path):
+    db = CorpusDatabase(tmp_path / "corpus.sqlite3")
+    rows = [
+        {
+            "id": "pinned-schema",
+            "output": f"```python\n{_code()}\n```",
+            "average_test_score": "1",
+            "tests_execution_status": '["pass", "pass"]',
+        }
+    ]
+
+    admitted = ingest_opencodeinstruct_stream(db, _nvidia_spec(), rows)
+
+    assert len(admitted) == 1
+    assert admitted[0].relative_path == "pinned-schema.py"
+    assert admitted[0].content == _code()

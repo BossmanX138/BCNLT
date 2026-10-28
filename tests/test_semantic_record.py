@@ -15,9 +15,24 @@ from bcnlt.semantic_record import (
     SemanticTokenRecord,
     classify_confidence,
     classify_uncertainty,
+    freeze_json,
     records_from_units,
+    thaw_json,
 )
 from bcnlt.uncertainty import UncertaintyScore
+
+
+def test_freeze_json_canonicalizes_non_json_python_literals():
+    assert thaw_json(freeze_json(b"\x00\xff")) == {
+        "$bcnlt_type": "bytes",
+        "hex": "00ff",
+    }
+    assert thaw_json(freeze_json(2 + 3j)) == {
+        "$bcnlt_type": "complex",
+        "imag": 3.0,
+        "real": 2.0,
+    }
+    assert thaw_json(freeze_json(Ellipsis)) == {"$bcnlt_type": "ellipsis"}
 
 
 def _unit(**overrides) -> ContextualUnit:

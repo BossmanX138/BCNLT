@@ -15,7 +15,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tokenizer-artifact", required=True)
     parser.add_argument("--base-tokenizer", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--maximum-sequence-tokens", type=int, default=8192)
+    parser.add_argument("--maximum-sequence-tokens", type=int, default=4096)
     parser.add_argument("--shard-token-limit", type=int, default=8_000_000)
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args(argv)

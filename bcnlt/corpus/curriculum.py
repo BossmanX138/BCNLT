@@ -12,6 +12,10 @@ from bcnlt.semantic_record import SemanticTokenRecord
 from .database import SourceDocumentRecord
 
 
+MAX_CURRICULUM_PAIR_CHARACTERS = 16_000
+MAX_CONTINUATION_CONTEXT_RECORDS = 8
+
+
 @dataclass(frozen=True)
 class CurriculumRecord:
     record_id: str
@@ -42,6 +46,10 @@ class CurriculumRecord:
 
 def canonical_record_stream(records: Sequence[SemanticTokenRecord]) -> str:
     return b"".join(canonical_record_bytes(record) for record in records).decode("utf-8")
+
+
+def pair_within_character_budget(*parts: str) -> bool:
+    return sum(len(part) for part in parts) <= MAX_CURRICULUM_PAIR_CHARACTERS
 
 
 def make_curriculum_record(

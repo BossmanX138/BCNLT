@@ -176,6 +176,8 @@ $Evidence = [ordered]@{
     python_packages = $Probe.python_packages
     base_file_sha256 = $Probe.base_file_sha256
     hf_dataset_access = $Probe.hf_dataset_access
+    hf_probe_host = if ($Probe.PSObject.Properties['hf_probe_host']) { [string]$Probe.hf_probe_host } else { 'wsl' }
+    hf_authenticated_identity = if ($Probe.PSObject.Properties['hf_authenticated_identity']) { [string]$Probe.hf_authenticated_identity } else { '' }
     completed_at = [DateTimeOffset]::UtcNow.ToString("o")
 }
 $EvidenceDirectory = Split-Path -Parent $ResolvedEvidence

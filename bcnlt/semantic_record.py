@@ -108,6 +108,25 @@ def freeze_json(value: Any) -> FrozenJSON:
         return value
     if isinstance(value, str):
         return _normalize(value)
+    if isinstance(value, (bytes, bytearray)):
+        return FrozenMap(
+            (
+                ("$bcnlt_type", "bytes"),
+                ("hex", bytes(value).hex()),
+            )
+        )
+    if isinstance(value, complex):
+        if not math.isfinite(value.real) or not math.isfinite(value.imag):
+            raise ValueError("IR complex values must contain only finite components")
+        return FrozenMap(
+            (
+                ("$bcnlt_type", "complex"),
+                ("imag", value.imag),
+                ("real", value.real),
+            )
+        )
+    if value is Ellipsis:
+        return FrozenMap((("$bcnlt_type", "ellipsis"),))
     if isinstance(value, (list, tuple)):
         return tuple(freeze_json(item) for item in value)
     if isinstance(value, dict):

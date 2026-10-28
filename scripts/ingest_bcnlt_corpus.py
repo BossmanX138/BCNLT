@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+import sys
 from pathlib import Path
 
 from bcnlt.corpus import (
@@ -67,6 +68,13 @@ def main(argv: list[str] | None = None) -> int:
                 holdout_hashes=holdouts,
             )
         else:
+            if sys.platform == "win32":
+                try:
+                    import truststore
+                except ImportError:
+                    pass
+                else:
+                    truststore.inject_into_ssl()
             from datasets import load_dataset
 
             kwargs = {

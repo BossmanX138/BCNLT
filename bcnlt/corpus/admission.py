@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import heapq
 import json
 import math
 import re
@@ -54,6 +55,7 @@ class AdmissionPolicy:
     maximum_document_fraction: float = 0.005
     maximum_template_family_fraction: float = 0.10
     near_duplicate_threshold: float = 0.90
+    maximum_sequence_tokens: int = 4096
     holdout_hashes: frozenset[str] = frozenset()
     minimum_event_types: int = 8
     minimum_scope_depths: int = 3
@@ -63,7 +65,7 @@ class AdmissionPolicy:
     minimum_uncertainty_bands: int = 2
 
     def __post_init__(self) -> None:
-        for name in ("minimum_records", "minimum_encoded_tokens"):
+        for name in ("minimum_records", "minimum_encoded_tokens", "maximum_sequence_tokens"):
             if getattr(self, name) < 0:
                 raise ValueError(f"{name} must be non-negative")
         for name in (
@@ -137,22 +139,18 @@ def validate_corpus(
         database.documents, records_by_document, active_policy.holdout_hashes
     )
     candidates = list(database.candidates)
-    family_totals = Counter(item.family for item in candidates)
     document_limit = max(1, math.floor(len(candidates) * active_policy.maximum_document_fraction))
-    template_limits = {
-        family: max(
-            1,
-            math.floor(total * active_policy.maximum_template_family_fraction),
-        )
-        for family, total in family_totals.items()
-    }
+    template_limit = max(
+        1,
+        math.floor(len(candidates) * active_policy.maximum_template_family_fraction),
+    )
 
     accepted: list[CurriculumRecord] = []
     decisions: list[AdmissionDecision] = []
     seen_record_ids: set[str] = set()
     seen_pairs: set[str] = set()
     seen_semantic: set[tuple[str, str]] = set()
-    near_by_family: dict[str, list[frozenset[tuple[str, ...]]]] = defaultdict(list)
+    near_buckets: dict[str, dict[int, list[int]]] = defaultdict(lambda: defaultdict(list))
     document_counts: Counter[str] = Counter()
     template_counts: Counter[tuple[str, str]] = Counter()
 
@@ -176,17 +174,20 @@ def validate_corpus(
                 reason = "exact_pair_duplicate"
             elif semantic_hash and (candidate.family, semantic_hash) in seen_semantic:
                 reason = "canonical_semantic_duplicate"
-            elif any(
-                _jaccard(shingles, previous) >= active_policy.near_duplicate_threshold
-                for previous in near_by_family[candidate.family]
+            elif _is_near_duplicate(
+                candidate,
+                shingles,
+                accepted,
+                near_buckets[candidate.family],
+                active_policy.near_duplicate_threshold,
             ):
                 reason = "near_duplicate_pair"
             elif any(document_counts[source_id] >= document_limit for source_id in source_ids):
                 reason = "document_cap_exceeded"
-            elif template_counts[(candidate.family, candidate.template_id)] >= template_limits[
-                candidate.family
-            ]:
+            elif template_counts[(candidate.family, candidate.template_id)] >= template_limit:
                 reason = "template_family_cap_exceeded"
+            elif _encoded_length(candidate, tokenizer) > active_policy.maximum_sequence_tokens:
+                reason = "sequence_too_long"
 
         is_accepted = reason is None
         reason_code = "accepted" if is_accepted else reason
@@ -209,9 +210,9 @@ def validate_corpus(
         semantic_hash = _semantic_payload_hash(candidate)
         if semantic_hash:
             seen_semantic.add((candidate.family, semantic_hash))
-        near_by_family[candidate.family].append(
-            _five_grams(candidate.prompt + "\n" + candidate.target)
-        )
+        accepted_index = len(accepted) - 1
+        for signature_value in _minhash_signature(shingles):
+            near_buckets[candidate.family][signature_value].append(accepted_index)
         for source_id in source_ids:
             document_counts[source_id] += 1
         template_counts[(candidate.family, candidate.template_id)] += 1
@@ -387,6 +388,38 @@ def _jaccard(left: frozenset[tuple[str, ...]], right: frozenset[tuple[str, ...]]
     if not left and not right:
         return 1.0
     return len(left & right) / len(left | right)
+
+
+def _minhash_signature(
+    shingles: frozenset[tuple[str, ...]], *, size: int = 64
+) -> tuple[int, ...]:
+    values = {
+        int.from_bytes(
+            hashlib.blake2b("\x1f".join(shingle).encode("utf-8"), digest_size=8).digest(),
+            "big",
+        )
+        for shingle in shingles
+    }
+    return tuple(heapq.nsmallest(size, values))
+
+
+def _is_near_duplicate(
+    candidate: CurriculumRecord,
+    shingles: frozenset[tuple[str, ...]],
+    accepted: Sequence[CurriculumRecord],
+    buckets: dict[int, list[int]],
+    threshold: float,
+) -> bool:
+    signature = _minhash_signature(shingles)
+    candidate_indexes = {
+        index for value in signature for index in buckets.get(value, ())
+    }
+    for index in sorted(candidate_indexes):
+        previous = accepted[index]
+        previous_shingles = _five_grams(previous.prompt + "\n" + previous.target)
+        if _jaccard(shingles, previous_shingles) >= threshold:
+            return True
+    return False
 
 
 def _decision_id(record_id: str, ordinal: int, reason: str, split: str) -> str:
