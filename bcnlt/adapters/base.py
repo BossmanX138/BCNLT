@@ -21,6 +21,5 @@ class LanguageAdapter(ABC):
     def to_units(self, document: SourceDocument) -> Iterable[ContextualUnit]:
         raise NotImplementedError
 
-    @abstractmethod
     def render(self, node: IRNode) -> str:
-        raise NotImplementedError
+        raise NotImplementedError(f"{type(self).__name__} does not implement IR rendering")

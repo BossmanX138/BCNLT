@@ -16,6 +16,8 @@ class SourceDocument:
     source: str
     tree: Any
     index: Any
+    language: str = "python"
+    dialect: str | None = None
 
 
 @dataclass(frozen=True)

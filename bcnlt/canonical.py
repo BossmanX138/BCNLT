@@ -14,6 +14,7 @@ from .semantic_record import (
     freeze_json,
     thaw_json,
 )
+from .semantic_schema import validate_uncertainty_metadata
 
 
 _RECORD_FIELDS = {
@@ -66,12 +67,8 @@ def record_from_canonical_bytes(payload: bytes) -> SemanticTokenRecord:
     if any(not isinstance(item, str) for item in recent_history):
         raise ValueError("recent_history entries must be strings")
     metadata = _mapping_items(raw["metadata"], "metadata")
-    allowed_metadata = {"dynamic_call": bool, "dynamic_binding": bool, "unknown_node": str}
     for key, value in metadata:
-        if key not in allowed_metadata:
-            raise ValueError(f"Unsupported contextual metadata key: {key}")
-        if not isinstance(thaw_json(value), allowed_metadata[key]):
-            raise ValueError(f"{key} metadata has the wrong type")
+        validate_uncertainty_metadata(key, thaw_json(value))
     record = SemanticTokenRecord(
         event=SemanticEvent(_required_string(raw, "event")).value,
         surface=_required_string(raw, "surface"),

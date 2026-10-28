@@ -149,6 +149,48 @@ def test_projection_rejects_wrong_types_in_allowed_metadata():
         )
 
 
+def test_projection_keeps_v2_uncertainty_metadata_in_canonical_form():
+    record = records_from_units(
+        [
+            _unit(
+                metadata={
+                    "macro_expansion": True,
+                    "overload_unresolved": False,
+                    "preprocessor_condition": "DEBUG && WINDOWS",
+                    "knowledge_state": "provisional",
+                    "uyr_rounds": 2,
+                    "uncertainty_signals": ["dynamic_dispatch", "missing_type"],
+                    "wildcard_category": "api_contract",
+                }
+            )
+        ],
+        ProjectIndex(),
+    )[0]
+
+    decoded = record_from_canonical_bytes(canonical_record_bytes(record))
+    metadata = dict(decoded.metadata)
+
+    assert thaw_json(metadata["uncertainty_signals"]) == [
+        "dynamic_dispatch",
+        "missing_type",
+    ]
+    assert thaw_json(metadata["knowledge_state"]) == "provisional"
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"knowledge_state": "certain"},
+        {"uyr_rounds": 5},
+        {"uncertainty_signals": ["ok", 1]},
+        {"macro_expansion": "yes"},
+    ],
+)
+def test_projection_rejects_invalid_v2_uncertainty_metadata(metadata):
+    with pytest.raises(ValueError):
+        records_from_units([_unit(metadata=metadata)], ProjectIndex())
+
+
 def test_projection_rejects_non_finite_scorer_results():
     class BadScorer:
         def score(self, unit, index):

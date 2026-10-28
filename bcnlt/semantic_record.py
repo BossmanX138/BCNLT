@@ -10,6 +10,7 @@ from .cache import ProjectIndex
 from .core import ContextualUnit, Span
 from .events import SemanticEvent
 from .ir import IRKind, IRNode
+from .semantic_schema import UNCERTAINTY_METADATA_KEYS, validate_uncertainty_metadata
 from .uncertainty import HeuristicUncertaintyScorer, UncertaintyScore
 
 
@@ -55,13 +56,6 @@ class SemanticTokenRecord:
 class UnitScorer(Protocol):
     def score(self, unit: ContextualUnit, index: ProjectIndex) -> UncertaintyScore:
         raise NotImplementedError
-
-
-_ALLOWED_CONTEXT_METADATA = {
-    "dynamic_call": bool,
-    "dynamic_binding": bool,
-    "unknown_node": str,
-}
 
 
 def classify_confidence(value: float) -> ScoreBand:
@@ -160,12 +154,11 @@ def canonical_ir_from_node(node: IRNode) -> CanonicalIR:
 def _record_from_unit(unit: ContextualUnit, score: UncertaintyScore) -> SemanticTokenRecord:
     event = SemanticEvent(unit.event).value
     metadata = []
-    for key, expected_type in _ALLOWED_CONTEXT_METADATA.items():
+    for key in UNCERTAINTY_METADATA_KEYS:
         if key not in unit.metadata:
             continue
         value = unit.metadata[key]
-        if not isinstance(value, expected_type):
-            raise ValueError(f"{key} metadata must be {expected_type.__name__}")
+        validate_uncertainty_metadata(key, value)
         metadata.append((key, freeze_json(value)))
     return SemanticTokenRecord(
         event=event,
