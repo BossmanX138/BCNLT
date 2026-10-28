@@ -244,8 +244,10 @@ def assert_clean_parse_tree(root: ParseNode) -> None:
     while stack:
         node = stack.pop()
         node_type = str(getattr(node, "type", ""))
-        if node_type in {"ERROR", "MISSING"} or bool(getattr(node, "is_missing", False)):
-            raise ValueError(f"Tree-sitter parse contains {node_type or 'MISSING'} diagnostic")
+        is_missing = bool(getattr(node, "is_missing", False))
+        if node_type in {"ERROR", "MISSING"} or is_missing:
+            diagnostic = "MISSING" if is_missing else node_type
+            raise ValueError(f"Tree-sitter parse contains {diagnostic} diagnostic")
         stack.extend(reversed(tuple(getattr(node, "children", ()))))
 
 

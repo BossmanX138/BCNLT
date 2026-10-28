@@ -12,6 +12,14 @@ class UYRConfig:
     max_rounds: int = 4
     max_context_units: int = 8
 
+    def __post_init__(self) -> None:
+        if not 0.0 < self.confidence_threshold <= 1.0:
+            raise ValueError("UYR confidence threshold must be in (0, 1]")
+        if not 1 <= self.max_rounds <= 4:
+            raise ValueError("UYR permits one through four rounds")
+        if not 1 <= self.max_context_units <= 8:
+            raise ValueError("UYR permits one through eight context units")
+
 
 @dataclass(frozen=True)
 class UYRResult:
@@ -60,6 +68,8 @@ class UYRResolver:
             for candidate in all_units[start:end]:
                 if candidate not in expanded:
                     expanded.append(candidate)
+                if len(expanded) >= self.config.max_context_units:
+                    break
 
             if unit.defines:
                 record = document.index.definitions.get(unit.defines)
@@ -75,8 +85,6 @@ class UYRResolver:
                         retrievals.append(retrieval)
                         confidence += 0.15
 
-            if expanded:
-                confidence += 0.05
             confidence = min(1.0, confidence)
             uncertainty = max(0.0, 1.0 - confidence)
             scores.append(

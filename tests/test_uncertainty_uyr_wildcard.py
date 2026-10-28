@@ -5,6 +5,9 @@ import json
 from pathlib import Path
 
 from bcnlt.wildcard import WildcardMemory, WildcardResolver
+from bcnlt.cache import ProjectIndex
+from bcnlt.core import ContextualUnit, SourceDocument
+from bcnlt.uncertainty import KnowledgeBoundaryAssessment, KnowledgeState
 
 
 AMBIGUOUS = """
@@ -42,7 +45,7 @@ def test_uyr_expands_context_and_records_targeted_retrievals():
     scorer = HeuristicUncertaintyScorer()
     resolver = UYRResolver(
         scorer=scorer,
-        config=UYRConfig(confidence_threshold=0.75, max_rounds=3, max_context_units=12),
+        config=UYRConfig(confidence_threshold=0.75, max_rounds=3, max_context_units=8),
     )
     target = next(unit for unit in units if unit.event == "CALL" and unit.surface == "handler")
 
@@ -103,3 +106,74 @@ def test_wildcard_memory_reuses_seen_unknowns(tmp_path: Path):
     assert second.category == first.category
     assert second.confidence > first.confidence
     assert any("wildcard memory hit" in item for item in second.evidence)
+
+
+def test_uyr_is_bounded_and_confidence_changes_only_with_recorded_evidence():
+    index = ProjectIndex()
+    symbol_id = "python:sample.py:module:handler@0"
+    index.define("sample.py", symbol_id, "handler", (1, 0, 1, 7))
+    unit = ContextualUnit(
+        surface="handler",
+        event="CALL",
+        scope="module",
+        span=(2, 0, 2, 7),
+        defines=symbol_id,
+        ast_relation="call.function",
+        metadata={"dynamic_call": True},
+    )
+    document = SourceDocument("sample.py", "handler()", None, index, language="python")
+    resolver = UYRResolver(HeuristicUncertaintyScorer())
+
+    result = resolver.resolve(unit, document, [unit])
+
+    assert result.rounds <= 4
+    assert len(result.expanded_context) <= 8
+    assert result.final_confidence > result.initial_confidence
+    assert result.retrievals
+    assert len(result.scores) == result.rounds + 1
+
+
+def test_context_without_evidence_does_not_improve_confidence():
+    unit = ContextualUnit(
+        surface="mystery",
+        event="CALL",
+        scope="module",
+        span=(1, 0, 1, 7),
+        ast_relation="call.function",
+        metadata={"dynamic_call": True},
+    )
+    document = SourceDocument("sample.py", "mystery()", None, ProjectIndex(), language="python")
+    result = UYRResolver(HeuristicUncertaintyScorer()).resolve(unit, document, [unit])
+
+    assert result.retrievals == ()
+    assert result.final_confidence == result.initial_confidence
+
+
+def test_wildcard_signature_includes_language_and_spec_identity(tmp_path: Path):
+    unit = ContextualUnit("mystery", "UNKNOWN_SEMANTIC", "module", (1, 0, 1, 7))
+    python_memory = WildcardMemory(tmp_path / "python.jsonl", language="python", semantic_spec_sha256="a" * 64)
+    rust_memory = WildcardMemory(tmp_path / "rust.jsonl", language="rust", semantic_spec_sha256="b" * 64)
+
+    assert python_memory.signature_for(unit) != rust_memory.signature_for(unit)
+    assert python_memory.signature_for(unit).startswith("python|" + "a" * 64)
+
+
+def test_memory_reuse_remains_provisional_even_after_repetition(tmp_path: Path):
+    unit = ContextualUnit("mystery", "UNKNOWN_SEMANTIC", "module", (1, 0, 1, 7))
+    memory = WildcardMemory(tmp_path / "memory.jsonl", language="python", semantic_spec_sha256="c" * 64)
+    resolver = WildcardResolver(memory)
+    first = resolver.resolve_and_remember(unit, ProjectIndex())
+    for _ in range(5):
+        later = resolver.resolve_and_remember(unit, ProjectIndex())
+
+    assessment = KnowledgeBoundaryAssessment.from_wildcard(
+        unit=unit,
+        initial=HeuristicUncertaintyScorer().score(unit, ProjectIndex()),
+        meaning=later,
+        rounds=0,
+    )
+
+    assert later.confidence > first.confidence
+    assert later.confidence < 0.72
+    assert assessment.state is KnowledgeState.PROVISIONAL
+    assert assessment.evidence

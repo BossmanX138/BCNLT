@@ -10,6 +10,7 @@ class NodeRule:
     node_type: str
     event: str
     ir_kind: str
+    surface_field: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +42,13 @@ class LanguageSemanticSpec:
     identifier_roles: tuple[IdentifierRoleRule, ...] = ()
     scope_rules: tuple[ScopeRule, ...] = ()
     uncertainty_rules: tuple[UncertaintyRule, ...] = ()
+    excluded_node_types: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        mapped = {rule.node_type for rule in self.resolved_node_rules}
+        overlap = mapped.intersection(self.resolved_excluded_node_types)
+        if overlap:
+            raise ValueError(f"A semantic spec cannot exclude and map the same node: {sorted(overlap)}")
 
     @property
     def resolved_node_rules(self) -> tuple[NodeRule, ...]:
@@ -58,6 +66,10 @@ class LanguageSemanticSpec:
     def resolved_uncertainty_rules(self) -> tuple[UncertaintyRule, ...]:
         return self._resolved("uncertainty_rules")
 
+    @property
+    def resolved_excluded_node_types(self) -> tuple[str, ...]:
+        return self._resolved("excluded_node_types")
+
     def _resolved(self, field: str):
         inherited = tuple(
             rule
@@ -74,6 +86,7 @@ class LanguageSemanticSpec:
             "identifier_roles": [asdict(item) for item in self.resolved_identifier_roles],
             "scope_rules": [asdict(item) for item in self.resolved_scope_rules],
             "uncertainty_rules": [asdict(item) for item in self.resolved_uncertainty_rules],
+            "excluded_node_types": list(self.resolved_excluded_node_types),
         }
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

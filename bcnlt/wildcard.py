@@ -26,13 +26,23 @@ class WildcardMemoryRecord:
     evidence: tuple[str, ...]
     confidence: float
     seen_count: int = 1
+    language: str = "python"
+    semantic_spec_sha256: str = "legacy-python"
 
 
 class WildcardMemory:
     """Append-only memory for unknown semantic constructs BCNLT has already seen."""
 
-    def __init__(self, path: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        path: str | Path | None = None,
+        *,
+        language: str = "python",
+        semantic_spec_sha256: str = "legacy-python",
+    ) -> None:
         self.path = Path(path) if path is not None else None
+        self.language = language
+        self.semantic_spec_sha256 = semantic_spec_sha256
         self.records: dict[str, WildcardMemoryRecord] = {}
         if self.path is not None and self.path.exists():
             self._load()
@@ -41,7 +51,7 @@ class WildcardMemory:
         surface = unit.surface.strip().lower()
         relation = (unit.ast_relation or "").strip().lower()
         event = unit.event.strip().upper()
-        return f"{event}|{relation}|{surface}"
+        return f"{self.language}|{self.semantic_spec_sha256}|{event}|{relation}|{surface}"
 
     def lookup(self, unit: ContextualUnit) -> WildcardMemoryRecord | None:
         return self.records.get(self.signature_for(unit))
@@ -62,6 +72,8 @@ class WildcardMemory:
             evidence=evidence,
             confidence=confidence,
             seen_count=seen_count,
+            language=self.language,
+            semantic_spec_sha256=self.semantic_spec_sha256,
         )
         self.records[signature] = record
         if self.path is not None:
@@ -86,6 +98,10 @@ class WildcardMemory:
                 evidence=tuple(payload.get("evidence", ())),
                 confidence=float(payload.get("confidence", 0.0)),
                 seen_count=int(payload.get("seen_count", 1)),
+                language=str(payload.get("language", self.language)),
+                semantic_spec_sha256=str(
+                    payload.get("semantic_spec_sha256", self.semantic_spec_sha256)
+                ),
             )
             previous = self.records.get(record.signature)
             if previous is None:
@@ -100,6 +116,8 @@ class WildcardMemory:
                 evidence=_merge_tuple(previous.evidence, record.evidence),
                 confidence=max(previous.confidence, record.confidence),
                 seen_count=max(previous.seen_count, record.seen_count),
+                language=record.language,
+                semantic_spec_sha256=record.semantic_spec_sha256,
             )
 
 
@@ -132,7 +150,7 @@ class WildcardResolver:
                     ]
                     + list(remembered.evidence)
                 ),
-                confidence=min(0.95, max(0.5, remembered.confidence + 0.15)),
+                confidence=min(0.71, max(0.5, remembered.confidence + 0.15)),
             )
 
         if "match" in surface or "match" in relation:

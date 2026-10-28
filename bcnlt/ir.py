@@ -78,6 +78,9 @@ class CommonCodingCore:
             children=tuple(child for child in [value] if child is not None),
         )
 
+    def state(self, name: str, value: IRNode | None = None) -> IRNode:
+        return IRNode(IRKind.STATE, name=name, children=tuple([value] if value else ()))
+
     def branch(self, condition: IRNode | None = None) -> IRNode:
         return IRNode(IRKind.BRANCH, children=tuple(child for child in [condition] if child))
 
@@ -86,6 +89,18 @@ class CommonCodingCore:
 
     def operator(self, name: str) -> IRNode:
         return IRNode(IRKind.OPERATOR, name=name)
+
+    def comparison(self, name: str, operands: list[IRNode] | None = None) -> IRNode:
+        return IRNode(IRKind.COMPARISON, name=name, children=tuple(operands or ()))
+
+    def data_structure(self, name: str, children: list[IRNode] | None = None) -> IRNode:
+        return IRNode(IRKind.DATA_STRUCTURE, name=name, children=tuple(children or ()))
+
+    def io(self, name: str, value: IRNode | None = None) -> IRNode:
+        return IRNode(IRKind.IO, name=name, children=tuple([value] if value else ()))
+
+    def error(self, name: str, value: IRNode | None = None) -> IRNode:
+        return IRNode(IRKind.ERROR, name=name, children=tuple([value] if value else ()))
 
     def member_access(self, name: str) -> IRNode:
         return IRNode(IRKind.MEMBER_ACCESS, name=name)
