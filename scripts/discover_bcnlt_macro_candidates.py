@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import uuid
+from dataclasses import replace
 from pathlib import Path
 
 from bcnlt.adaptive_vocab.candidates import (
@@ -105,6 +106,7 @@ def main(argv: list[str] | None = None) -> int:
             iter_payload_observations(records, tokenizer),
             config,
         )
+        report = replace(report, lineage_sha256=str(lineage["identity_sha256"]))
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(str(exc), file=sys.stderr)
         return 2

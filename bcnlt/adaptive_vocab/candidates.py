@@ -130,6 +130,8 @@ class CandidateDiscoveryReport:
     candidates: tuple[MacroCandidate, ...]
     observation_count: int
     eligible_base_tokens: tuple[tuple[str, str, int], ...]
+    lineage_sha256: str = ""
+    candidate_report_sha256: str = ""
 
     @property
     def eligible_candidates(self) -> tuple[MacroCandidate, ...]:
