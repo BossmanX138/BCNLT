@@ -40,6 +40,19 @@ def test_save_and_reload_preserve_ids_and_artifact_contract(tmp_path: Path):
     assert reloaded.decode(reloaded.encode_text("hello world")) == "hello world"
 
 
+def test_fast_base_tokenizer_returns_exact_unicode_character_offsets(tmp_path: Path):
+    _, base_path = _build_tokenizer(tmp_path)
+    base = HuggingFaceBaseTokenizer.from_pretrained(base_path)
+    text = "Aé🧙Z"
+
+    ids, offsets = base.encode_with_offsets(text)
+
+    assert len(ids) == len(offsets)
+    assert all(text[start:end] for start, end in offsets if end > start)
+    unique_spans = sorted({(start, end) for start, end in offsets if end > start})
+    assert "".join(text[start:end] for start, end in unique_spans) == text
+
+
 def test_reload_rejects_corrupted_artifact_manifest(tmp_path: Path):
     tokenizer, base_path = _build_tokenizer(tmp_path)
     artifact = tmp_path / "artifact"

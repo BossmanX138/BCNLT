@@ -102,6 +102,20 @@ class HuggingFaceBaseTokenizer:
             self._tokenizer.encode(text, add_special_tokens=add_special_tokens)
         )
 
+    def encode_with_offsets(self, text: str) -> tuple[list[int], list[tuple[int, int]]]:
+        if not getattr(self._tokenizer, "is_fast", False):
+            raise ValueError("Offset mapping requires a verified fast tokenizer")
+        encoded = self._tokenizer(
+            text,
+            add_special_tokens=False,
+            return_offsets_mapping=True,
+        )
+        ids = list(encoded["input_ids"])
+        offsets = [tuple(map(int, item)) for item in encoded["offset_mapping"]]
+        if len(ids) != len(offsets):
+            raise ValueError("Fast tokenizer returned misaligned offsets")
+        return ids, offsets
+
     def decode(self, ids: Sequence[int]) -> str:
         return self._tokenizer.decode(
             list(ids),
