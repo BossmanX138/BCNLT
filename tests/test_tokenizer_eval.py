@@ -41,7 +41,10 @@ def test_evaluator_scores_frozen_categories_deterministically():
 
     assert first == second
     assert first.metrics == {
+        "ast_equivalence_accuracy": 1.0,
+        "exact_match_accuracy": 1.0,
         "ordinary_instruction_accuracy": 1.0,
+        "parseability_accuracy": 1.0,
         "raw_code_accuracy": 1.0,
         "semantic_to_code_accuracy": 1.0,
         "structural_accuracy": 1.0,
@@ -62,6 +65,7 @@ def test_semantic_code_requires_parseable_ast_equivalence_and_failures_are_recor
     report = evaluate_model("adapter", CASES, SETTINGS, generate, heldout_loss=1.0)
 
     assert report.metrics["semantic_to_code_accuracy"] == 0.0
+    assert report.metrics["ast_equivalence_accuracy"] == 0.0
     assert report.metrics["structural_accuracy"] == 0.0
     assert report.runtime_failures == ("struct-1: RuntimeError: boom",)
 

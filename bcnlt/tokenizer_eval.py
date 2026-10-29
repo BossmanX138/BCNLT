@@ -143,6 +143,27 @@ def evaluate_model(
         metrics[f"{category}_accuracy"] = (
             sum(result.passed for result in selected) / len(selected) if selected else 0.0
         )
+    metrics["exact_match_accuracy"] = sum(
+        result.output == result.expected and result.error is None for result in results
+    ) / len(results)
+    semantic = [result for result in results if result.category == "semantic_to_code"]
+    parseable = []
+    ast_equivalent = []
+    for result in semantic:
+        try:
+            observed = ast.parse(result.output)
+            parseable.append(True)
+            ast_equivalent.append(
+                ast.dump(observed, include_attributes=False)
+                == ast.dump(ast.parse(result.expected), include_attributes=False)
+            )
+        except SyntaxError:
+            parseable.append(False)
+            ast_equivalent.append(False)
+    metrics["parseability_accuracy"] = sum(parseable) / len(parseable) if parseable else 0.0
+    metrics["ast_equivalence_accuracy"] = (
+        sum(ast_equivalent) / len(ast_equivalent) if ast_equivalent else 0.0
+    )
     return EvaluationRun(
         identity,
         settings,
