@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 from pathlib import Path
 from typing import Sequence
@@ -80,17 +81,38 @@ class HuggingFaceBaseTokenizer:
         revision: str | None = None,
         local_files_only: bool | None = None,
     ) -> "HuggingFaceBaseTokenizer":
-        from transformers import AutoTokenizer
+        from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
         if local_files_only is None:
             local_files_only = revision is None
-        tokenizer = AutoTokenizer.from_pretrained(
-            str(path),
-            revision=revision,
-            local_files_only=local_files_only,
-            trust_remote_code=False,
-            use_fast=True,
-        )
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(
+                str(path),
+                revision=revision,
+                local_files_only=local_files_only,
+                trust_remote_code=False,
+                use_fast=True,
+            )
+        except ValueError as exc:
+            local = Path(path)
+            config_path = local / "tokenizer_config.json"
+            tokenizer_path = local / "tokenizer.json"
+            try:
+                config = json.loads(config_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                raise exc
+            if config.get("tokenizer_class") != "TokenizersBackend" or not tokenizer_path.is_file():
+                raise exc
+            special = {
+                name: config[name]
+                for name in ("bos_token", "eos_token", "unk_token", "pad_token")
+                if isinstance(config.get(name), str)
+            }
+            tokenizer = PreTrainedTokenizerFast(
+                tokenizer_file=str(tokenizer_path),
+                clean_up_tokenization_spaces=False,
+                **special,
+            )
         return cls(tokenizer)
 
     @property

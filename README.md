@@ -262,3 +262,8 @@ The key rule is to avoid shared mutable state during parallel work. Workers shou
 The repository now includes the BCNLT hybrid tokenizer, provenance-gated corpus pipeline, deterministic curriculum and admission gates, packed-dataset loader, sparse embedding/output extensions, and guarded Runeforge Mk2 training handoff. The preserved Mk2 checkpoint remains immutable, and validation-only is the default for the full-run launcher.
 
 See [docs/bcnlt-runeforge-training.md](docs/bcnlt-runeforge-training.md) for the exact WSL build order, artifact boundaries, current Hugging Face access blocker, smoke requirements, and explicit full-run launch gate.
+
+The same guide now includes the gated adaptive-vocabulary v5 experiment: a
+read-only legacy-corpus rebuild, preliminary multilingual audit, resumable WSL
+phase runner, tokenizer-only default, and explicit GPU opt-in. Its promotion
+proposal cannot merge or publish a model.

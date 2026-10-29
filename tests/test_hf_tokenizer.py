@@ -53,6 +53,19 @@ def test_fast_base_tokenizer_returns_exact_unicode_character_offsets(tmp_path: P
     assert "".join(text[start:end] for start, end in unique_spans) == text
 
 
+def test_generic_tokenizers_backend_artifact_loads_without_remote_code(tmp_path: Path):
+    base_path = write_byte_level_tokenizer(tmp_path / "generic-fast")
+    config_path = base_path / "tokenizer_config.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["tokenizer_class"] = "TokenizersBackend"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    tokenizer = HuggingFaceBaseTokenizer.from_pretrained(base_path)
+
+    encoded = tokenizer.encode("hello λ")
+    assert tokenizer.decode(encoded) == "hello λ"
+
+
 def test_reload_rejects_corrupted_artifact_manifest(tmp_path: Path):
     tokenizer, base_path = _build_tokenizer(tmp_path)
     artifact = tmp_path / "artifact"

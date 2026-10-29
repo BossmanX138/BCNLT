@@ -50,3 +50,87 @@ passed the corrected promotion gate.
 - merged checkpoint: optional derived output; never replaces the base or standalone adapter.
 
 Generated weights and corpus shards stay outside Git. Commit only code, configs, manifests that contain no private data, and documentation.
+
+## Adaptive vocabulary v5 experiment
+
+The v5 work is a controlled copy-on-write experiment over the preserved v1
+tokenizer and v4 adapter. Its [design](superpowers/specs/2026-10-29-bcnlt-adaptive-vocabulary-v5-experiment-design.md)
+and [implementation plan](superpowers/plans/2026-10-29-bcnlt-adaptive-vocabulary-v5.md)
+define the gates. The runner writes only beneath
+`D:\BCNLT-runs\runeforge-mk2-bcnlt-v5-adaptive-vocab` and rejects any output
+that overlaps the repository, base checkpoint, v1 tokenizer, or v4 artifacts.
+
+The current pinned corpus is Python-focused and uses the legacy database
+schema. Run this preliminary, non-GPU audit from the repository root in
+PowerShell. It copies the legacy database into a new v2 database, regenerates
+the curriculum from that copy, captures lineage, and then audits the required
+14-language diversity. None of these commands writes to the v4 source.
+
+```powershell
+$Py = "/home/bossm/.venvs/wizard-phi-eval/bin/python"
+$Repo = (wsl.exe -d Ubuntu -- wslpath -a (Resolve-Path .)).Trim()
+$Out = "/mnt/d/BCNLT-runs/runeforge-mk2-bcnlt-v5-adaptive-vocab/preliminary-audit"
+
+wsl.exe -d Ubuntu --cd $Repo -- $Py -m scripts.rebuild_bcnlt_corpus_v2 `
+  --source /mnt/d/BCNLT-runs/runeforge-mk2-bcnlt-v4-context-smoke/corpus.sqlite `
+  --destination "$Out/corpus-v2.sqlite" `
+  --source-registry "$Repo/configs/bcnlt_corpus_sources_v1.json" `
+  --report "$Out/corpus-rebuild.json"
+
+wsl.exe -d Ubuntu --cd $Repo -- $Py -m scripts.generate_bcnlt_curriculum `
+  --database "$Out/corpus-v2.sqlite" `
+  --output "$Out/curriculum.jsonl" `
+  --split train
+
+wsl.exe -d Ubuntu --cd $Repo -- $Py -c "from pathlib import Path; import sys; from bcnlt.adaptive_vocab.lineage import ExperimentLineage; x=ExperimentLineage.capture(config_path=sys.argv[1],source_config_path=sys.argv[2],corpus_manifest_path=sys.argv[3],v1_manifest_path=sys.argv[4],v4_gate_path=sys.argv[5],base_model_path=sys.argv[6],parser_bundle_path=sys.argv[7],code_revision=sys.argv[8]); Path(sys.argv[9]).write_bytes(x.canonical_bytes())" `
+  "$Repo/configs/bcnlt_adaptive_vocab_v5.json" `
+  "$Repo/configs/bcnlt_corpus_sources_v1.json" `
+  "$Out/corpus-rebuild.json" `
+  /mnt/d/BCNLT-runs/runeforge-mk2-bcnlt-v1/tokenizer/bcnlt_tokenizer_manifest.json `
+  /mnt/d/BCNLT-runs/runeforge-mk2-bcnlt-v4-context-smoke/smoke-promotion-epoch-1-gate-v2.json `
+  /home/bossm/models/Runeforge-Mk2-7B `
+  "$Repo/configs/bcnlt_parser_bundle_v1.json" `
+  (git rev-parse HEAD) `
+  "$Out/lineage.json"
+
+wsl.exe -d Ubuntu --cd $Repo -- $Py -m scripts.audit_bcnlt_adaptive_vocab `
+  --database "$Out/corpus-v2.sqlite" `
+  --accepted-records "$Out/curriculum.jsonl" `
+  --tokenizer-artifact /mnt/d/BCNLT-runs/runeforge-mk2-bcnlt-v1/tokenizer `
+  --base-tokenizer /home/bossm/models/Runeforge-Mk2-7B `
+  --config "$Repo/configs/bcnlt_adaptive_vocab_v5.json" `
+  --source-config "$Repo/configs/bcnlt_corpus_sources_v1.json" `
+  --corpus-manifest "$Out/corpus-rebuild.json" `
+  --lineage "$Out/lineage.json" `
+  --output "$Out/corpus-audit.json"
+```
+
+Exit code `2` is the expected valid research hard stop for this preliminary
+corpus. The verified preliminary report contains
+`insufficient_shared_candidate_diversity` and `invalid_semantic_payload`. Do not run candidate discovery from
+this report. A qualifying run needs at least 100 documents, three repositories,
+and 100,000 eligible payload tokens for every configured language before the
+shared-candidate gates can be evaluated.
+
+For a run specification whose phase commands and immutable inputs have been
+filled in, the tokenizer-only runner is:
+
+```powershell
+.\scripts\run_bcnlt_adaptive_vocab_v5.ps1 -Spec D:\BCNLT-runs\v5-run-spec.json
+```
+
+The runner returns `0` for a completed pass, `2` for a valid research hard
+stop, and `1` for corruption or a runtime failure. `-Resume` accepts only exact
+code, config, input, command, and output hashes. Training phases are absent by
+default. GPU continuation requires both a passing `selected-inventory.json`
+and the explicit `-StartTraining` switch:
+
+```powershell
+.\scripts\run_bcnlt_adaptive_vocab_v5.ps1 -Spec D:\BCNLT-runs\v5-run-spec.json -Resume -StartTraining
+```
+
+Expected artifacts are lineage, corpus audit, candidates, inventories,
+tokenizer evaluations, boundary entropy, paired datasets, two standalone
+adapter continuations, the four-state model evaluation, and a promotion
+proposal. A gate failure stops downstream phases. The experiment never merges
+weights, replaces v1, launches an unbounded full run, or publishes an artifact.
