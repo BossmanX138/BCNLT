@@ -123,6 +123,28 @@ def test_loader_checks_tokenizer_digest_and_detects_corruption(tmp_path: Path):
         PackedBCNLTDataset(output, "train", expected_tokenizer_digest="a" * 64)
 
 
+def test_packing_accepts_adaptive_manifest_digest_and_vocabulary_ceiling(tmp_path: Path):
+    class AdaptiveManifest:
+        manifest_sha256 = "c" * 64
+        vocab_size = 1024
+
+    class AdaptiveTokenizer(TinyTokenizer):
+        manifest = AdaptiveManifest()
+
+        def encode_text(self, value: str) -> list[int]:
+            return [1, 900, 2]
+
+    output = tmp_path / "adaptive-packed"
+    manifest = pack_training_shards([_record(1)], AdaptiveTokenizer(), output)
+    dataset = PackedBCNLTDataset(
+        output, "train", expected_tokenizer_digest="c" * 64
+    )
+
+    assert manifest.tokenizer_manifest_sha256 == "c" * 64
+    assert manifest.tokenizer_vocab_size == 1024
+    assert 900 in dataset[0]["input_ids"]
+
+
 def test_resume_requires_matching_input_range_and_output_hashes(tmp_path: Path):
     output = tmp_path / "packed"
     records = [_record(1), _record(2)]

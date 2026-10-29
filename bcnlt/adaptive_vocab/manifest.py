@@ -251,6 +251,12 @@ def write_adaptive_manifest(path: str | Path, manifest: AdaptiveVocabularyManife
     destination.write_bytes(_canonical(manifest.to_dict()))
 
 
+def validate_adaptive_manifest(
+    manifest: AdaptiveVocabularyManifest, v1_manifest: TokenizerManifest
+) -> None:
+    _validate(manifest, expected_v1=v1_manifest)
+
+
 def load_adaptive_manifest(
     path: str | Path,
     v1_manifest: TokenizerManifest,
