@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import json
 
 from bcnlt.adapters.python import PythonAdapter
 from bcnlt.canonical import canonical_record_bytes, record_from_canonical_bytes
@@ -67,7 +68,12 @@ def test_one_deterministic_golden_record_per_core_family():
     )
     assert by_family["semantic_to_code"].target == SOURCE
     assert by_family["code_to_semantic"].prompt == (
-        "Convert this Python source into canonical BCNLT semantic records:\n" + SOURCE
+        "Convert this Python source into canonical BCNLT semantic records.\n"
+        "Source path: price.py\n"
+        "Original line start: 1\n"
+        "Prior semantic history: []\n"
+        "Python source:\n"
+        + SOURCE
     )
     assert by_family["code_to_semantic"].target == canonical
     assert by_family["mixed_instruction"].prompt.startswith(
@@ -167,3 +173,44 @@ def test_large_modules_generate_parseable_top_level_windows_for_all_core_familie
     for item in windowed:
         if item.target_mode == "raw_code":
             ast.parse(item.target)
+        if item.family == "code_to_semantic":
+            target_records = tuple(
+                record_from_canonical_bytes((line + "\n").encode())
+                for line in item.target.splitlines()
+            )
+            provenance = dict(item.provenance)
+            assert (
+                f"Original line start: {provenance['source_line_start']}\n"
+                in item.prompt
+            )
+            assert (
+                "Prior semantic history: "
+                + json.dumps(
+                    list(target_records[0].recent_history),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ) in item.prompt
+
+
+def test_code_to_semantic_windows_disclose_hidden_context_needed_by_targets():
+    document, units, records, split = _fixture()
+    generated = list(generate_document_curriculum(document, units, records, split=split))
+    item = next(row for row in generated if row.family == "code_to_semantic")
+    target_records = tuple(
+        record_from_canonical_bytes((line + "\n").encode())
+        for line in item.target.splitlines()
+    )
+
+    assert f"Source path: {document.relative_path}\n" in item.prompt
+    assert "Original line start: 1\n" in item.prompt
+    assert (
+        "Prior semantic history: "
+        + json.dumps(
+            list(target_records[0].recent_history),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ) in item.prompt
