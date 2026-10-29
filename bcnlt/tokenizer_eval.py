@@ -159,6 +159,7 @@ def evaluate_promotion(
     *,
     maximum_control_regression: float = 0.02,
     minimum_structural_accuracy: float = 0.90,
+    minimum_required_accuracy: float = 1.0,
 ) -> PromotionDecision:
     if baseline.settings != adapter.settings:
         raise ValueError("base and adapter generation settings differ")
@@ -171,6 +172,15 @@ def evaluate_promotion(
         failures.append("heldout_loss_not_improved")
     if adapter.metrics["structural_accuracy"] < minimum_structural_accuracy:
         failures.append("structural_accuracy_below_threshold")
+    for category in (
+        "tokenizer",
+        "semantic_to_code",
+        "raw_code",
+        "ordinary_instruction",
+    ):
+        key = f"{category}_accuracy"
+        if adapter.metrics[key] < minimum_required_accuracy:
+            failures.append(f"{category}_accuracy_below_threshold")
     if adapter.runtime_failures:
         failures.append("runtime_failure")
     for category in ("raw_code", "ordinary_instruction"):

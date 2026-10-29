@@ -4,7 +4,29 @@ This workflow trains a derived Runeforge Mk2 adapter on the native BCNLT hybrid 
 
 ## Current live gate
 
-The code path and deterministic tests are complete through corpus admission, packing, sparse extension training, and promotion evaluation. Live materialization remains blocked until WSL is authenticated to Hugging Face and the access terms for `bigcode/the-stack-dedup` are accepted. The preflight stops before writing evidence or tokenizer artifacts when that access is missing.
+Hugging Face authentication and source access are working. The corrected v4
+smoke lineage materialized 979 admitted records and 858,505 packed tokens, then
+trained all 932 train records for 117 optimizer steps on the RTX 3070. The
+standalone adapter is
+`D:\BCNLT-runs\runeforge-mk2-bcnlt-v4-context-smoke\adapter-epoch-1` with
+SHA-256
+`3574f08bb9386b7c006278acb98633056c1c201316989f1c1030486bca4605bc`.
+The preserved Runeforge Mk2 checkpoint was not modified.
+
+Held-out loss fell from 4.364707 for the untrained extension to 0.095036 for
+the v4 adapter. Structural resolution, semantic-to-code, raw-code control, and
+ordinary-instruction probes passed exactly. The Unicode exact-code probe
+returned the requested line plus an unwanted comment, so the corrected
+promotion gate records `tokenizer_accuracy_below_threshold` and does not
+promote the adapter. An aligned held-out code-to-semantic probe now emits a
+complete 99-token canonical stream instead of failing to terminate, but one
+span endpoint was 10 instead of 13; one mixed reconstruction emitted the
+semantically equivalent `import pytest as pytest` instead of the original
+surface form.
+
+Full training remains locked. The smoke corpus does not satisfy the full
+100,000-record and 50,000,000-token admission floors, and the v4 adapter has not
+passed the corrected promotion gate.
 
 ## Build order
 

@@ -98,6 +98,29 @@ def test_promotion_requires_identical_prompts_settings_and_all_gates():
         evaluate_promotion(baseline, changed)
 
 
+@pytest.mark.parametrize(
+    "category",
+    ("tokenizer", "semantic_to_code", "raw_code", "ordinary_instruction"),
+)
+def test_promotion_rejects_any_failed_required_category(category: str):
+    baseline = evaluate_model("untrained", CASES, SETTINGS, _perfect, heldout_loss=2.0)
+    failed_prompt = next(case.prompt for case in CASES if case.category == category)
+    adapter = evaluate_model(
+        "adapter",
+        CASES,
+        SETTINGS,
+        lambda prompt, settings: (
+            "wrong" if prompt == failed_prompt else _perfect(prompt, settings)
+        ),
+        heldout_loss=1.0,
+    )
+
+    decision = evaluate_promotion(baseline, adapter)
+
+    assert not decision.promoted
+    assert f"{category}_accuracy_below_threshold" in decision.failure_codes
+
+
 def test_frozen_v1_configuration_loads_exact_cases():
     path = Path("configs/bcnlt_tokenizer_eval_v1.json")
     suite = load_evaluation_suite(path)
