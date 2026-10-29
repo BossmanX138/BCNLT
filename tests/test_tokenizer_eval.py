@@ -8,6 +8,7 @@ import pytest
 from bcnlt.tokenizer_eval import (
     EvaluationCase,
     GenerationSettings,
+    decode_generated_stream,
     evaluate_model,
     evaluate_promotion,
     load_evaluation_suite,
@@ -113,3 +114,20 @@ def test_frozen_v1_configuration_loads_exact_cases():
         "ordinary_instruction",
     }
     assert len({case.case_id for case in suite.cases}) == len(raw["cases"])
+
+
+def test_generated_hybrid_stream_is_trimmed_at_its_structural_end_token():
+    class Tokenizer:
+        manifest = type(
+            "Manifest",
+            (),
+            {"token_to_id": {"<|bcnlt:stream:end|>": 99}},
+        )()
+
+        def decode(self, ids):
+            assert ids == [10, 11, 99]
+            return "ready"
+
+    assert decode_generated_stream(Tokenizer(), [10, 11, 99, 2, 2]) == "ready"
+    with pytest.raises(ValueError, match="stream end"):
+        decode_generated_stream(Tokenizer(), [10, 11, 2])

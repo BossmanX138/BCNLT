@@ -13,6 +13,7 @@ from bcnlt.corpus.admission import (
 from bcnlt.corpus.curriculum import CurriculumRecord, generate_document_curriculum
 from bcnlt.corpus.database import SourceDocumentRecord, stable_document_id
 from bcnlt.semantic_record import records_from_units
+from scripts.validate_bcnlt_corpus import admission_policy_for_profile
 
 
 class CountingTokenizer:
@@ -23,6 +24,20 @@ class CountingTokenizer:
 
     def encode_records(self, records) -> list[int]:
         return list(range(max(1, len(tuple(records)) * 4)))
+
+
+def test_smoke_admission_profile_relaxes_only_scale_and_cap_gates():
+    full = admission_policy_for_profile("full")
+    smoke = admission_policy_for_profile("smoke")
+
+    assert full == AdmissionPolicy()
+    assert smoke.minimum_records == 100
+    assert smoke.minimum_encoded_tokens == 10_000
+    assert smoke.maximum_document_fraction == 1.0
+    assert smoke.maximum_template_family_fraction == 1.0
+    assert smoke.maximum_sequence_tokens == full.maximum_sequence_tokens
+    assert smoke.near_duplicate_threshold == full.near_duplicate_threshold
+    assert smoke.minimum_event_types == full.minimum_event_types
 
 
 def _document(

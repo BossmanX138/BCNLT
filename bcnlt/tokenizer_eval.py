@@ -180,6 +180,19 @@ def evaluate_promotion(
     return PromotionDecision(not failures, tuple(failures))
 
 
+def decode_generated_stream(tokenizer, token_ids: Sequence[int]) -> str:
+    """Decode one generated BCNLT stream and ignore tokens after its boundary."""
+    token_to_id = getattr(getattr(tokenizer, "manifest", None), "token_to_id", {})
+    stream_end = token_to_id.get("<|bcnlt:stream:end|>")
+    if not isinstance(stream_end, int):
+        raise ValueError("tokenizer manifest has no BCNLT stream end token")
+    try:
+        boundary = list(token_ids).index(stream_end)
+    except ValueError as exc:
+        raise ValueError("generated completion has no BCNLT stream end token") from exc
+    return tokenizer.decode(list(token_ids)[: boundary + 1])
+
+
 def _score(case: EvaluationCase, output: str) -> bool:
     if case.category == "semantic_to_code":
         try:

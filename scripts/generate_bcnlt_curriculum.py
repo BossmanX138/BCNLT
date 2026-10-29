@@ -7,7 +7,7 @@ from pathlib import Path
 from bcnlt.adapters.python import PythonAdapter
 from bcnlt.corpus.curriculum import generate_document_curriculum
 from bcnlt.corpus.database import CorpusDatabase
-from bcnlt.semantic_record import records_from_units
+from bcnlt.semantic_record import records_from_assessments
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -15,6 +15,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--database", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--split", default="unassigned")
+    parser.add_argument("--wildcard-memory")
     args = parser.parse_args(argv)
 
     database = CorpusDatabase(args.database)
@@ -22,13 +23,14 @@ def main(argv: list[str] | None = None) -> int:
     if output.exists():
         parser.error(f"output already exists: {output}")
     output.parent.mkdir(parents=True, exist_ok=True)
-    adapter = PythonAdapter()
+    adapter = PythonAdapter(wildcard_memory_path=args.wildcard_memory)
     count = 0
     with output.open("x", encoding="utf-8", newline="\n") as handle:
         for document in database.documents():
             parsed = adapter.parse(document.content, path=document.relative_path)
-            units = tuple(adapter.to_units(parsed))
-            records = records_from_units(units, parsed.index)
+            extraction = adapter.extract(parsed)
+            units = extraction.units
+            records = records_from_assessments(extraction.assessments)
             for item in generate_document_curriculum(
                 document, units, records, split=args.split
             ):

@@ -115,6 +115,24 @@ def test_gradients_touch_only_extension_rows_and_out_of_range_ids_fail():
         model.get_input_embeddings()(torch.tensor([[-1]]))
 
 
+def test_unsloth_weight_contract_exposes_trainable_input_and_complete_output():
+    model = TinyCausalModel()
+    attach_bcnlt_extension(model, Manifest(), DEFINITIONS, seed=17)
+    embedding = model.get_input_embeddings()
+    output = model.get_output_embeddings()
+    hidden = torch.randn(2, 4)
+
+    assert embedding.weight is embedding.extension.weight
+    assert embedding.weight.requires_grad
+    assert output.weight.shape == (Manifest.vocab_size, 4)
+    assert torch.equal(output.weight[: Manifest.base_vocab_size], output.base.weight)
+    assert torch.equal(output.weight[Manifest.base_vocab_size :], output.extension.weight)
+
+    torch.nn.functional.linear(hidden, output.weight).sum().backward()
+    assert output.base.weight.grad is None
+    assert output.extension.weight.grad is not None
+
+
 def test_wrappers_validate_dimensions_and_manifest_definitions():
     base_embedding = nn.Embedding(5, 4)
     base_head = nn.Linear(4, 5, bias=False)

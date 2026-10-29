@@ -6,7 +6,7 @@ from pathlib import Path
 from bcnlt.corpus.packing import pack_training_shards
 from bcnlt.tokenizer import BCNLTTokenizer
 
-from validate_bcnlt_corpus import _load_curriculum
+from scripts.validate_bcnlt_corpus import _load_curriculum
 
 
 def main(argv: list[str] | None = None) -> int:

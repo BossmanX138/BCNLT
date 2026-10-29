@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 from dataclasses import dataclass
@@ -14,6 +15,13 @@ from .database import SourceDocumentRecord
 
 MAX_CURRICULUM_PAIR_CHARACTERS = 16_000
 MAX_CONTINUATION_CONTEXT_RECORDS = 8
+
+
+@dataclass(frozen=True)
+class SemanticCodeWindow:
+    source: str
+    records: tuple[SemanticTokenRecord, ...]
+    provenance: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -50,6 +58,60 @@ def canonical_record_stream(records: Sequence[SemanticTokenRecord]) -> str:
 
 def pair_within_character_budget(*parts: str) -> bool:
     return sum(len(part) for part in parts) <= MAX_CURRICULUM_PAIR_CHARACTERS
+
+
+def semantic_code_windows(
+    document: SourceDocumentRecord,
+    units: Sequence[ContextualUnit],
+    records: Sequence[SemanticTokenRecord],
+    *,
+    instruction: str,
+) -> tuple[SemanticCodeWindow, ...]:
+    """Return full-document or top-level parseable semantic/code pairs."""
+
+    semantic = canonical_record_stream(records)
+    if pair_within_character_budget(instruction, document.content, semantic):
+        return (SemanticCodeWindow(document.content, tuple(records)),)
+    try:
+        module = ast.parse(document.content, filename=document.relative_path)
+    except SyntaxError:
+        return ()
+    lines = document.content.splitlines(keepends=True)
+    windows: list[SemanticCodeWindow] = []
+    for node in module.body:
+        start = int(getattr(node, "lineno", 0) or 0)
+        decorators = tuple(getattr(node, "decorator_list", ()))
+        if decorators:
+            start = min(start, *(int(item.lineno) for item in decorators))
+        end = int(getattr(node, "end_lineno", 0) or 0)
+        if start <= 0 or end < start:
+            continue
+        source = "".join(lines[start - 1 : end])
+        try:
+            ast.parse(source)
+        except SyntaxError:
+            continue
+        window_records = tuple(
+            record
+            for unit, record in zip(units, records, strict=True)
+            if unit.span[0] >= start and unit.span[2] <= end
+        )
+        if not window_records:
+            continue
+        window_semantic = canonical_record_stream(window_records)
+        if not pair_within_character_budget(instruction, source, window_semantic):
+            continue
+        windows.append(
+            SemanticCodeWindow(
+                source=source,
+                records=window_records,
+                provenance=(
+                    ("source_line_start", str(start)),
+                    ("source_line_end", str(end)),
+                ),
+            )
+        )
+    return tuple(windows)
 
 
 def make_curriculum_record(

@@ -2,14 +2,22 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
 from torch import nn
+from torch.nn import functional as F
 
-from integrations.runeforge_mk2_tokenizer.embedding_extension import attach_bcnlt_extension
+from integrations.runeforge_mk2_tokenizer.embedding_extension import (
+    ExtendedLMHead,
+    attach_bcnlt_extension,
+)
 from integrations.runeforge_mk2_tokenizer.train_bcnlt_adapter import (
     TrainingLineage,
+    backward_split_causal_loss,
+    evaluate_packed_loss,
+    load_bcnlt_adapter_state,
     save_bcnlt_adapter,
     verify_training_preflight,
 )
@@ -105,3 +113,94 @@ def test_adapter_save_keeps_sparse_and_lora_weights_with_lineage(tmp_path: Path)
     assert tokenizer.is_dir()
     with pytest.raises(FileExistsError):
         save_bcnlt_adapter(model, output, tokenizer, _lineage())
+
+
+def test_adapter_load_requires_exact_hash_and_restores_every_trainable_tensor(tmp_path: Path):
+    tokenizer = tmp_path / "tokenizer-source"
+    tokenizer.mkdir()
+    (tokenizer / "bcnlt_tokenizer_manifest.json").write_text("{}")
+    source = _model()
+    output = tmp_path / "adapter"
+    save_bcnlt_adapter(source, output, tokenizer, _lineage())
+    restored = _model()
+    with torch.no_grad():
+        restored.lora_A.zero_()
+        restored.get_input_embeddings().extension.weight.zero_()
+        restored.get_output_embeddings().extension.weight.zero_()
+
+    lineage = load_bcnlt_adapter_state(restored, output, expected=_lineage())
+
+    assert lineage == _lineage()
+    assert torch.equal(restored.lora_A, source.lora_A)
+    assert torch.equal(
+        restored.get_input_embeddings().extension.weight,
+        source.get_input_embeddings().extension.weight,
+    )
+    assert torch.equal(
+        restored.get_output_embeddings().extension.weight,
+        source.get_output_embeddings().extension.weight,
+    )
+
+    with (output / "adapter_model.pt").open("ab") as handle:
+        handle.write(b"tampered")
+    with pytest.raises(ValueError, match="hash"):
+        load_bcnlt_adapter_state(_model(), output, expected=_lineage())
+
+
+def test_packed_loss_is_measured_from_model_outputs_with_a_fixed_limit():
+    class LossModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.anchor = nn.Parameter(torch.zeros(()))
+
+        def forward(self, *, input_ids, labels, attention_mask, use_cache):
+            assert labels.shape == input_ids.shape == attention_mask.shape
+            assert use_cache is False
+            return SimpleNamespace(loss=input_ids.float().mean() + self.anchor * 0)
+
+    dataset = [
+        {"input_ids": [2, 2], "labels": [2, 2], "attention_mask": [1, 1]},
+        {"input_ids": [4, 4], "labels": [4, 4], "attention_mask": [1, 1]},
+    ]
+
+    assert evaluate_packed_loss(LossModel(), dataset) == pytest.approx(3.0)
+    assert evaluate_packed_loss(LossModel(), dataset, maximum_examples=1) == pytest.approx(2.0)
+
+
+def test_split_head_chunked_loss_matches_dense_cross_entropy_gradients():
+    torch.manual_seed(23)
+    reference_head = ExtendedLMHead(
+        nn.Linear(4, 5, bias=False), ("first", "second"), seed=7
+    )
+    chunked_head = ExtendedLMHead(
+        nn.Linear(4, 5, bias=False), ("first", "second"), seed=7
+    )
+    chunked_head.load_state_dict(reference_head.state_dict())
+    reference_hidden = torch.randn(1, 6, 4, requires_grad=True)
+    chunked_hidden = reference_hidden.detach().clone().requires_grad_(True)
+    labels = torch.tensor([[-100, -100, 5, 6, 2, 1]])
+
+    logits = reference_head(reference_hidden[:, :-1])
+    reference_loss = F.cross_entropy(
+        logits.reshape(-1, logits.shape[-1]),
+        labels[:, 1:].reshape(-1),
+        ignore_index=-100,
+    )
+    reference_loss.backward()
+
+    measured = backward_split_causal_loss(
+        chunked_hidden,
+        labels,
+        chunked_head,
+        gradient_scale=1.0,
+        chunk_tokens=2,
+    )
+
+    assert measured == pytest.approx(float(reference_loss.detach()), rel=1e-6)
+    assert torch.allclose(chunked_hidden.grad, reference_hidden.grad, atol=1e-6)
+    assert torch.allclose(
+        chunked_head.extension.weight.grad,
+        reference_head.extension.weight.grad,
+        atol=1e-6,
+    )
+    assert chunked_head.base.weight.grad is None

@@ -9,7 +9,7 @@ from ..curriculum import (
     CurriculumRecord,
     canonical_record_stream,
     make_curriculum_record,
-    pair_within_character_budget,
+    semantic_code_windows,
 )
 from ..database import SourceDocumentRecord
 
@@ -21,11 +21,7 @@ def generate(
     *,
     split: str,
 ) -> list[CurriculumRecord]:
-    del units
     instruction = "Convert this Python source into canonical BCNLT semantic records:\n"
-    semantic = canonical_record_stream(records)
-    if not pair_within_character_budget(instruction, document.content, semantic):
-        return []
     return [
         make_curriculum_record(
             document,
@@ -33,8 +29,12 @@ def generate(
             template_id="python-to-semantic-v1",
             prompt_mode="raw_code",
             target_mode="semantic_code",
-            prompt=instruction + document.content,
-            target=semantic,
+            prompt=instruction + window.source,
+            target=canonical_record_stream(window.records),
             split=split,
+            extra_provenance=dict(window.provenance),
+        )
+        for window in semantic_code_windows(
+            document, units, records, instruction=instruction
         )
     ]

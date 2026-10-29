@@ -12,7 +12,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repoWindows = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$repoWsl = (& wsl.exe -d $Distribution -- wslpath -a ($repoWindows -replace '\', '/')).Trim()
+$repoWsl = (& wsl.exe -d $Distribution -- wslpath -a ($repoWindows.Replace('\', '/'))).Trim()
 if (-not $repoWsl) { throw 'Could not resolve the repository path inside WSL.' }
 
 function Invoke-WslPhase([string]$Name, [string]$Command, [string]$Output) {
@@ -35,6 +35,7 @@ function Invoke-WslPhase([string]$Name, [string]$Command, [string]$Output) {
 if ($LASTEXITCODE -ne 0) { & wsl.exe -d $Distribution -- mkdir -p $OutputRoot }
 $database = "$OutputRoot/corpus.sqlite"
 $curriculum = "$OutputRoot/curriculum.jsonl"
+$wildcardMemory = "$OutputRoot/learned-definitions.jsonl"
 $validation = "$OutputRoot/corpus_validation.json"
 $accepted = "$OutputRoot/accepted.jsonl"
 $packed = "$OutputRoot/packed"
@@ -43,7 +44,7 @@ $registry = "$repoWsl/configs/bcnlt_corpus_sources_v1.json"
 $holdoutArg = if ($HoldoutHashes) { " --holdout-hashes '$HoldoutHashes'" } else { '' }
 $limitArg = if ($SourceLimit -gt 0) { " --limit $SourceLimit" } else { '' }
 Invoke-WslPhase 'ingestion' "'$Python' -m scripts.ingest_bcnlt_corpus --config '$registry' --database '$database'$holdoutArg$limitArg" $database
-Invoke-WslPhase 'curriculum' "'$Python' -m scripts.generate_bcnlt_curriculum --database '$database' --output '$curriculum'" $curriculum
+Invoke-WslPhase 'curriculum' "'$Python' -m scripts.generate_bcnlt_curriculum --database '$database' --output '$curriculum' --wildcard-memory '$wildcardMemory'" $curriculum
 
 & wsl.exe -d $Distribution -- test -e $validation
 $validationExists = $LASTEXITCODE -eq 0
@@ -55,6 +56,6 @@ if (-not $validationExists) {
 Invoke-WslPhase 'packing' "'$Python' -m scripts.export_bcnlt_training_shards --records '$accepted' --tokenizer-artifact '$TokenizerArtifact' --base-tokenizer '$BaseTokenizer' --output '$packed'" "$packed/dataset_manifest.json"
 
 $manifest = "$OutputRoot/corpus_pipeline_manifest.json"
-& wsl.exe -d $Distribution -- $Python -c "import hashlib,json,pathlib,sys; root=pathlib.Path(sys.argv[1]); names=['corpus.sqlite','curriculum.jsonl','corpus_validation.json','accepted.jsonl','packed/dataset_manifest.json']; h=lambda p: hashlib.sha256(p.read_bytes()).hexdigest(); payload={'schema_version':'bcnlt-corpus-pipeline-v1','artifacts':{n:{'path':str(root/n),'sha256':h(root/n)} for n in names}}; out=root/'corpus_pipeline_manifest.json'; out.write_text(json.dumps(payload,indent=2,sort_keys=True)+'\n')" $OutputRoot
+& wsl.exe -d $Distribution -- $Python -c "import hashlib,json,pathlib,sys; root=pathlib.Path(sys.argv[1]); names=['corpus.sqlite','curriculum.jsonl','learned-definitions.jsonl','corpus_validation.json','accepted.jsonl','packed/dataset_manifest.json']; h=lambda p: hashlib.sha256(p.read_bytes()).hexdigest(); payload={'schema_version':'bcnlt-corpus-pipeline-v1','artifacts':{n:{'path':str(root/n),'sha256':h(root/n)} for n in names}}; out=root/'corpus_pipeline_manifest.json'; out.write_text(json.dumps(payload,indent=2,sort_keys=True)+'\n')" $OutputRoot
 if ($LASTEXITCODE -ne 0) { throw 'Could not write the corpus pipeline manifest.' }
 Write-Host "Corpus pipeline manifest: $manifest"

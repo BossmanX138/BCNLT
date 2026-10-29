@@ -35,6 +35,11 @@ class ExtendedEmbedding(nn.Module):
         self.num_embeddings = base.num_embeddings + len(definitions)
         self.embedding_dim = base.embedding_dim
 
+    @property
+    def weight(self) -> torch.Tensor:
+        """Expose the trainable rows for runtimes that inspect embedding gradients."""
+        return self.extension.weight
+
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
         _validate_ids(input_ids, self.num_embeddings)
         base_mask = input_ids < self.base_vocab_size
@@ -71,6 +76,11 @@ class ExtendedLMHead(nn.Module):
         _initialize_rows(self.extension.weight, base.weight, definitions, seed, "lm_head")
         self.in_features = base.in_features
         self.out_features = base.out_features + len(definitions)
+
+    @property
+    def weight(self) -> torch.Tensor:
+        """Present the complete vocabulary table to fused causal-LM loss paths."""
+        return torch.cat((self.base.weight, self.extension.weight), dim=0)
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         return torch.cat((self.base(hidden_states), self.extension(hidden_states)), dim=-1)

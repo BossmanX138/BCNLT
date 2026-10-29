@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,10 +12,11 @@ from typing import Any, Sequence
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 from bcnlt.corpus.packing import PackedBCNLTDataset
 
-from .embedding_extension import attach_bcnlt_extension
+from .embedding_extension import ExtendedLMHead, attach_bcnlt_extension
 
 
 @dataclass(frozen=True)
@@ -189,6 +191,7 @@ def run_training_steps(
     optimizer.zero_grad(set_to_none=True)
     losses: list[float] = []
     optimizer_steps = 0
+    output_head = model.get_output_embeddings()  # type: ignore[attr-defined]
     for sample_index in range(len(dataset)):
         sample = dataset[sample_index]
         input_ids = torch.tensor([sample["input_ids"]], dtype=torch.long, device=device)
@@ -196,17 +199,29 @@ def run_training_steps(
         attention_mask = torch.tensor(
             [sample["attention_mask"]], dtype=torch.long, device=device
         )
-        output = model(
-            input_ids=input_ids,
-            labels=labels,
-            attention_mask=attention_mask,
-            use_cache=False,
-        )
-        loss = output.loss / config.gradient_accumulation_steps
-        if not torch.isfinite(loss):
-            raise FloatingPointError("non-finite BCNLT training loss")
-        loss.backward()
-        losses.append(float(loss.detach().cpu()) * config.gradient_accumulation_steps)
+        if isinstance(output_head, ExtendedLMHead):
+            hidden_states = _unsloth_hidden_states(
+                model, input_ids=input_ids, attention_mask=attention_mask
+            )
+            measured_loss = backward_split_causal_loss(
+                hidden_states,
+                labels,
+                output_head,
+                gradient_scale=1.0 / config.gradient_accumulation_steps,
+            )
+        else:
+            output = model(
+                input_ids=input_ids,
+                labels=labels,
+                attention_mask=attention_mask,
+                use_cache=False,
+            )
+            loss = output.loss / config.gradient_accumulation_steps
+            if not torch.isfinite(loss):
+                raise FloatingPointError("non-finite BCNLT training loss")
+            loss.backward()
+            measured_loss = float(loss.detach().cpu()) * config.gradient_accumulation_steps
+        losses.append(measured_loss)
         boundary = (sample_index + 1) % config.gradient_accumulation_steps == 0
         final_sample = sample_index + 1 == len(dataset)
         if boundary or final_sample:
@@ -216,6 +231,70 @@ def run_training_steps(
             if optimizer_steps >= maximum_optimizer_steps:
                 break
     return losses
+
+
+def backward_split_causal_loss(
+    hidden_states: torch.Tensor,
+    labels: torch.Tensor,
+    output_head: ExtendedLMHead,
+    *,
+    gradient_scale: float,
+    chunk_tokens: int = 128,
+) -> float:
+    """Backpropagate exact causal loss without a dense full-head gradient buffer."""
+    if hidden_states.ndim != 3 or labels.shape != hidden_states.shape[:2]:
+        raise ValueError("hidden states and labels have incompatible shapes")
+    if gradient_scale <= 0 or chunk_tokens <= 0:
+        raise ValueError("gradient scale and chunk size must be positive")
+    shifted_hidden = hidden_states[:, :-1, :].reshape(-1, hidden_states.shape[-1])
+    shifted_labels = labels[:, 1:].reshape(-1)
+    valid_tokens = int((shifted_labels != -100).sum().item())
+    if valid_tokens <= 0:
+        raise ValueError("training example has no supervised target tokens")
+    detached_hidden = shifted_hidden.detach().requires_grad_(True)
+    total_loss = 0.0
+    for start in range(0, detached_hidden.shape[0], chunk_tokens):
+        stop = min(start + chunk_tokens, detached_hidden.shape[0])
+        logits = output_head(detached_hidden[start:stop])
+        chunk_loss = F.cross_entropy(
+            logits,
+            shifted_labels[start:stop],
+            ignore_index=-100,
+            reduction="sum",
+        )
+        if not torch.isfinite(chunk_loss):
+            raise FloatingPointError("non-finite BCNLT training loss")
+        total_loss += float(chunk_loss.detach().cpu())
+        (chunk_loss * (gradient_scale / valid_tokens)).backward()
+    if detached_hidden.grad is None:
+        raise RuntimeError("split BCNLT loss produced no hidden-state gradient")
+    shifted_hidden.backward(detached_hidden.grad)
+    return total_loss / valid_tokens
+
+
+def _unsloth_hidden_states(
+    model: nn.Module,
+    *,
+    input_ids: torch.Tensor,
+    attention_mask: torch.Tensor,
+) -> torch.Tensor:
+    previous = os.environ.get("UNSLOTH_RETURN_HIDDEN_STATES")
+    os.environ["UNSLOTH_RETURN_HIDDEN_STATES"] = "1"
+    try:
+        output = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            use_cache=False,
+        )
+    finally:
+        if previous is None:
+            os.environ.pop("UNSLOTH_RETURN_HIDDEN_STATES", None)
+        else:
+            os.environ["UNSLOTH_RETURN_HIDDEN_STATES"] = previous
+    hidden_states = output.logits
+    if hidden_states.ndim != 3:
+        raise RuntimeError("Unsloth did not return causal-model hidden states")
+    return hidden_states
 
 
 def verify_training_preflight(
@@ -307,6 +386,104 @@ def save_bcnlt_adapter(
     return AdapterArtifact(output, weights_path, lineage_path, digest)
 
 
+def load_bcnlt_adapter_state(
+    model: nn.Module,
+    adapter_path: str | Path,
+    *,
+    expected: TrainingLineage | None = None,
+) -> TrainingLineage:
+    """Verify and restore an exact sparse-extension plus LoRA adapter artifact."""
+    root = Path(adapter_path)
+    artifact_path = root / "artifact_manifest.json"
+    lineage_path = root / "lineage.json"
+    if not artifact_path.is_file() or not lineage_path.is_file():
+        raise FileNotFoundError("adapter artifact manifest or lineage is missing")
+    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    weights_name = artifact.get("adapter_weights")
+    if not isinstance(weights_name, str) or Path(weights_name).name != weights_name:
+        raise ValueError("adapter weights path is invalid")
+    weights_path = root / weights_name
+    expected_hash = artifact.get("adapter_weights_sha256")
+    if not weights_path.is_file() or _sha256(weights_path) != expected_hash:
+        raise ValueError("adapter weights hash does not match the artifact manifest")
+    lineage_raw = json.loads(lineage_path.read_text(encoding="utf-8"))
+    if artifact.get("lineage") != lineage_raw:
+        raise ValueError("adapter manifest lineage does not match lineage.json")
+    observed = TrainingLineage(**lineage_raw)
+    if expected is not None:
+        _compare_lineage("adapter ", expected, observed)
+
+    state = torch.load(weights_path, map_location="cpu", weights_only=True)
+    if not isinstance(state, dict) or not all(
+        isinstance(name, str) and isinstance(tensor, torch.Tensor)
+        for name, tensor in state.items()
+    ):
+        raise ValueError("adapter weights are not a tensor state dictionary")
+    model_state = model.state_dict()
+    required = {
+        name
+        for name in model_state
+        if "extension" in name or "lora_" in name.lower()
+    }
+    supplied = set(state)
+    if supplied != required:
+        missing = sorted(required - supplied)
+        unexpected = sorted(supplied - required)
+        raise ValueError(
+            f"adapter state keys do not match model: missing={missing}, unexpected={unexpected}"
+        )
+    model.load_state_dict(state, strict=False)
+    return observed
+
+
+def evaluate_packed_loss(
+    model: nn.Module,
+    dataset: Sequence[dict[str, list[int]]],
+    *,
+    maximum_examples: int | None = None,
+) -> float:
+    """Measure mean causal-LM loss directly on a fixed packed-data split."""
+    if not len(dataset):
+        raise ValueError("evaluation dataset is empty")
+    if maximum_examples is not None and maximum_examples <= 0:
+        raise ValueError("maximum_examples must be positive")
+    count = len(dataset) if maximum_examples is None else min(len(dataset), maximum_examples)
+    first_parameter = next(model.parameters(), None)
+    if first_parameter is None:
+        raise ValueError("evaluation model has no parameters")
+    device = first_parameter.device
+    was_training = model.training
+    model.eval()
+    losses: list[float] = []
+    try:
+        with torch.inference_mode():
+            for index in range(count):
+                sample = dataset[index]
+                input_ids = torch.tensor(
+                    [sample["input_ids"]], dtype=torch.long, device=device
+                )
+                labels = torch.tensor(
+                    [sample["labels"]], dtype=torch.long, device=device
+                )
+                attention_mask = torch.tensor(
+                    [sample["attention_mask"]], dtype=torch.long, device=device
+                )
+                output = model(
+                    input_ids=input_ids,
+                    labels=labels,
+                    attention_mask=attention_mask,
+                    use_cache=False,
+                )
+                loss = output.loss
+                if loss is None or not torch.isfinite(loss):
+                    raise FloatingPointError("non-finite BCNLT evaluation loss")
+                losses.append(float(loss.detach().cpu()))
+    finally:
+        if was_training:
+            model.train()
+    return sum(losses) / len(losses)
+
+
 def _compare_lineage(prefix: str, expected: TrainingLineage, observed: TrainingLineage) -> None:
     for field in expected.__dataclass_fields__:
         if getattr(expected, field) != getattr(observed, field):
@@ -359,7 +536,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--engine", default="auto")
     args = parser.parse_args(argv)
 
-    from bcnlt.tokenizer_manifest import load_manifest
+    if args.engine in {"auto", "unsloth"}:
+        try:
+            import unsloth  # noqa: F401
+        except ImportError:
+            if args.engine == "unsloth":
+                raise
+
+    from bcnlt.tokenizer import BCNLTTokenizer
 
     config_raw = json.loads(Path(args.training_config).read_text(encoding="utf-8"))
     config = QLoRAConfig(
@@ -375,7 +559,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     tokenizer_root = Path(args.tokenizer_artifact)
     tokenizer_manifest_path = tokenizer_root / "bcnlt_tokenizer_manifest.json"
-    manifest = load_manifest(tokenizer_manifest_path)
+    tokenizer = BCNLTTokenizer.from_pretrained(tokenizer_root, args.base_model)
+    manifest = tokenizer.manifest
     definitions = {
         item.token: _default_definition(item.token) for item in manifest.added_tokens
     }

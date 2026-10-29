@@ -11,6 +11,19 @@ from bcnlt.corpus.database import CorpusDatabase
 from bcnlt.tokenizer import BCNLTTokenizer
 
 
+def admission_policy_for_profile(profile: str) -> AdmissionPolicy:
+    if profile == "full":
+        return AdmissionPolicy()
+    if profile == "smoke":
+        return AdmissionPolicy(
+            minimum_records=100,
+            minimum_encoded_tokens=10_000,
+            maximum_document_fraction=1.0,
+            maximum_template_family_fraction=1.0,
+        )
+    raise ValueError(f"Unknown admission policy profile: {profile}")
+
+
 def _load_curriculum(path: Path) -> tuple[CurriculumRecord, ...]:
     records = []
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
@@ -44,6 +57,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--report", required=True)
     parser.add_argument("--accepted-output")
     parser.add_argument("--holdout-hashes")
+    parser.add_argument("--policy-profile", choices=("full", "smoke"), default="full")
     args = parser.parse_args(argv)
 
     report_path = Path(args.report)
@@ -54,7 +68,7 @@ def main(argv: list[str] | None = None) -> int:
         documents=tuple(database.documents()),
         candidates=_load_curriculum(Path(args.curriculum)),
     )
-    policy = AdmissionPolicy()
+    policy = admission_policy_for_profile(args.policy_profile)
     if args.holdout_hashes:
         hashes = frozenset(
             line.strip()
@@ -67,8 +81,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     report = validate_corpus(corpus, tokenizer, policy)
     report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_payload = report.to_dict()
+    report_payload["policy_profile"] = args.policy_profile
     report_path.write_text(
-        json.dumps(report.to_dict(), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        json.dumps(report_payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
         newline="\n",
     )

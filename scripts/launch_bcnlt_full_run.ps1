@@ -10,7 +10,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repoWindows = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$repoWsl = (& wsl.exe -d $Distribution -- wslpath -a ($repoWindows -replace '\', '/')).Trim()
+$repoWsl = (& wsl.exe -d $Distribution -- wslpath -a ($repoWindows.Replace('\', '/'))).Trim()
 if (-not $repoWsl) { throw 'Could not resolve the repository path inside WSL.' }
 $disk = (& wsl.exe -d $Distribution -- bash -lc "df -B1 --output=avail /home | tail -1").Trim()
 $gpu = (& wsl.exe -d $Distribution -- nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | Select-Object -First 1).Trim()

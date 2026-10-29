@@ -117,3 +117,53 @@ def test_generation_does_not_multiply_unchanged_facts_by_paraphrase():
     assert sum(item.family == "semantic_to_code" for item in generated) == 1
     assert sum(item.family == "code_to_semantic" for item in generated) == 1
     assert sum(item.family == "mixed_instruction" for item in generated) == 1
+
+
+def test_large_modules_generate_parseable_top_level_windows_for_all_core_families():
+    source = "\n\n".join(
+        f"def function_{index}(value):\n    result = value + {index}\n    return result"
+        for index in range(80)
+    ) + "\n"
+    content_hash = hashlib.sha256(source.encode()).hexdigest()
+    document = SourceDocumentRecord(
+        document_id=stable_document_id(
+            provider="local",
+            revision="b" * 40,
+            repository_identity="BossCrafts/large-example",
+            relative_path="large.py",
+            content_sha256=content_hash,
+        ),
+        source_provider="local",
+        source_name="BossCrafts/large-example",
+        source_revision="b" * 40,
+        repository_identity="BossCrafts/large-example",
+        relative_path="large.py",
+        content_sha256=content_hash,
+        content=source,
+        license_spdx="owner_provided",
+        ownership="owner_provided",
+        attribution="BossCrafts/large-example",
+        upstream_url="owner-provided",
+    )
+    adapter = PythonAdapter()
+    parsed = adapter.parse(source, path="large.py")
+    units = tuple(adapter.to_units(parsed))
+    records = records_from_units(units, parsed.index)
+
+    generated = list(generate_document_curriculum(document, units, records))
+    windowed = [
+        item
+        for item in generated
+        if item.family in {"semantic_to_code", "code_to_semantic", "mixed_instruction"}
+    ]
+
+    assert {item.family for item in windowed} == {
+        "semantic_to_code",
+        "code_to_semantic",
+        "mixed_instruction",
+    }
+    assert len(windowed) > 3
+    assert all("source_line_start" in dict(item.provenance) for item in windowed)
+    for item in windowed:
+        if item.target_mode == "raw_code":
+            ast.parse(item.target)
