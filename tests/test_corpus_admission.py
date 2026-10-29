@@ -58,6 +58,7 @@ def _document(
         source_provider="test",
         source_name=repository,
         source_revision="a" * 40,
+        canonical_language="python",
         repository_identity=repository,
         relative_path=path,
         content_sha256=digest,

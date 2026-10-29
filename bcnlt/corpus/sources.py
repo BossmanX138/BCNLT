@@ -9,6 +9,7 @@ from typing import Iterable, Mapping
 
 from .database import CorpusDatabase, SourceDocumentRecord, stable_document_id
 from .filters import FilterDecision, evaluate_python_document
+from bcnlt.languages import resolve_language_id
 
 
 @dataclass(frozen=True)
@@ -17,12 +18,19 @@ class SourceSpec:
     name: str
     revision: str
     upstream_url: str
+    canonical_language: str
 
     def __post_init__(self) -> None:
         if not self.provider.strip() or not self.name.strip() or not self.upstream_url.strip():
             raise ValueError("Source provider, name, and upstream URL are required")
         if not re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", self.revision):
             raise ValueError("Source revision must be an immutable 40- or 64-character hash")
+        try:
+            resolved_language = resolve_language_id(self.canonical_language)
+        except ValueError as exc:
+            raise ValueError("Source canonical language must use an exact registered id") from exc
+        if resolved_language != self.canonical_language:
+            raise ValueError("Source canonical language must use an exact registered id")
 
 
 def ingest_local_source(
@@ -240,6 +248,7 @@ def _admit_decision(
         source_provider=spec.provider,
         source_name=spec.name,
         source_revision=spec.revision,
+        canonical_language=spec.canonical_language,
         repository_identity=repository_identity,
         relative_path=relative_path,
         content_sha256=decision.content_sha256,
@@ -266,6 +275,7 @@ def _reject(
         source_provider=spec.provider,
         source_name=spec.name,
         source_revision=spec.revision,
+        canonical_language=spec.canonical_language,
         repository_identity=repository_identity,
         relative_path=relative_path,
         content_sha256=content_sha256,

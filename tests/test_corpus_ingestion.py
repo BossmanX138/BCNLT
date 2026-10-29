@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -13,6 +15,7 @@ from bcnlt.corpus.sources import (
     ingest_opencodeinstruct_stream,
     ingest_stack_stream,
 )
+from scripts.rebuild_bcnlt_corpus_v2 import rebuild_corpus_v2
 
 
 def _code(statement: str = "answer = 42\n") -> str:
@@ -26,6 +29,7 @@ def _stack_spec() -> SourceSpec:
         name="bigcode/the-stack-dedup",
         revision="17cad72c886a2858e08d4c349a00d6466f54df63",
         upstream_url="https://huggingface.co/datasets/bigcode/the-stack-dedup",
+        canonical_language="python",
     )
 
 
@@ -35,6 +39,7 @@ def _nvidia_spec() -> SourceSpec:
         name="nvidia/OpenCodeInstruct",
         revision="8f3ba5bafe4d6e8db46082cf7ae6741bc370604d",
         upstream_url="https://huggingface.co/datasets/nvidia/OpenCodeInstruct",
+        canonical_language="python",
     )
 
 
@@ -56,7 +61,164 @@ def test_source_revisions_must_be_immutable_pins():
             name="example/data",
             revision="main",
             upstream_url="https://example.invalid",
+            canonical_language="python",
         )
+
+
+def test_source_language_requires_an_exact_canonical_id():
+    assert _stack_spec().canonical_language == "python"
+    with pytest.raises(ValueError, match="canonical language"):
+        SourceSpec(
+            provider="huggingface",
+            name="example/data",
+            revision="a" * 40,
+            upstream_url="https://example.invalid",
+            canonical_language="c++",
+        )
+
+
+def test_populated_legacy_database_requires_a_new_v2_output_path(tmp_path: Path):
+    path = tmp_path / "legacy.sqlite3"
+    with sqlite3.connect(path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE documents (
+                document_id TEXT PRIMARY KEY,
+                source_provider TEXT NOT NULL,
+                source_name TEXT NOT NULL,
+                source_revision TEXT NOT NULL,
+                repository_identity TEXT NOT NULL,
+                relative_path TEXT NOT NULL,
+                content_sha256 TEXT NOT NULL,
+                content TEXT NOT NULL,
+                license_spdx TEXT NOT NULL,
+                ownership TEXT NOT NULL,
+                attribution TEXT NOT NULL,
+                upstream_url TEXT NOT NULL
+            );
+            INSERT INTO documents VALUES (
+                'doc', 'test', 'legacy', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                'repo', 'x.py', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                'x = 1', 'MIT', 'third_party', 'repo', 'https://example.invalid'
+            );
+            """
+        )
+    with pytest.raises(ValueError, match="new v2 output path"):
+        CorpusDatabase(path)
+
+
+def _legacy_database(path: Path, *, source_name: str = "bigcode/the-stack-dedup") -> None:
+    with sqlite3.connect(path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE documents (
+                document_id TEXT PRIMARY KEY,
+                source_provider TEXT NOT NULL,
+                source_name TEXT NOT NULL,
+                source_revision TEXT NOT NULL,
+                repository_identity TEXT NOT NULL,
+                relative_path TEXT NOT NULL,
+                content_sha256 TEXT NOT NULL,
+                content TEXT NOT NULL,
+                license_spdx TEXT NOT NULL,
+                ownership TEXT NOT NULL,
+                attribution TEXT NOT NULL,
+                upstream_url TEXT NOT NULL
+            );
+            CREATE TABLE rejections (
+                rejection_id TEXT PRIMARY KEY,
+                source_provider TEXT NOT NULL,
+                source_name TEXT NOT NULL,
+                source_revision TEXT NOT NULL,
+                repository_identity TEXT NOT NULL,
+                relative_path TEXT NOT NULL,
+                content_sha256 TEXT NOT NULL,
+                reason_code TEXT NOT NULL,
+                detail TEXT NOT NULL,
+                upstream_url TEXT NOT NULL
+            );
+            """
+        )
+        connection.execute(
+            "INSERT INTO documents VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "doc",
+                "huggingface",
+                source_name,
+                _stack_spec().revision,
+                "owner/project",
+                "src/example.py",
+                hashlib.sha256(_code().encode()).hexdigest(),
+                _code(),
+                "MIT",
+                "third_party",
+                "owner/project",
+                _stack_spec().upstream_url,
+            ),
+        )
+
+
+def _source_registry(path: Path, *, duplicate: bool = False) -> None:
+    source = {
+        "provider": "huggingface",
+        "name": _stack_spec().name,
+        "revision": _stack_spec().revision,
+        "upstream_url": _stack_spec().upstream_url,
+        "canonical_language": "python",
+    }
+    sources = [source, {**source, "canonical_language": "javascript"}] if duplicate else [source]
+    path.write_text(
+        json.dumps({"schema_version": "bcnlt-corpus-sources-v1", "sources": sources}),
+        encoding="utf-8",
+    )
+
+
+def test_legacy_rebuild_is_new_path_only_and_records_language_counts(tmp_path: Path):
+    source = tmp_path / "legacy.sqlite3"
+    destination = tmp_path / "v2.sqlite3"
+    registry = tmp_path / "sources.json"
+    _legacy_database(source)
+    _source_registry(registry)
+    original_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+
+    report = rebuild_corpus_v2(source, destination, registry)
+
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == original_hash
+    assert report.source_sha256 == original_hash
+    assert report.document_count == 1
+    assert report.language_counts == {"python": 1}
+    rebuilt = CorpusDatabase(destination)
+    assert rebuilt.documents()[0].canonical_language == "python"
+
+
+def test_legacy_rebuild_rejects_existing_destination_before_copying(tmp_path: Path):
+    source = tmp_path / "legacy.sqlite3"
+    destination = tmp_path / "v2.sqlite3"
+    registry = tmp_path / "sources.json"
+    _legacy_database(source)
+    _source_registry(registry)
+    destination.write_text("preserve", encoding="utf-8")
+
+    with pytest.raises(FileExistsError, match="destination"):
+        rebuild_corpus_v2(source, destination, registry)
+
+    assert destination.read_text(encoding="utf-8") == "preserve"
+
+
+@pytest.mark.parametrize("ambiguous", [False, True], ids=["unmapped", "ambiguous"])
+def test_legacy_rebuild_fails_closed_before_copying_unmapped_or_ambiguous_sources(
+    tmp_path: Path, ambiguous: bool
+):
+    source = tmp_path / "legacy.sqlite3"
+    destination = tmp_path / "v2.sqlite3"
+    registry = tmp_path / "sources.json"
+    _legacy_database(source, source_name="unmapped/source" if not ambiguous else _stack_spec().name)
+    _source_registry(registry, duplicate=ambiguous)
+
+    with pytest.raises(ValueError, match="unmapped|ambiguous"):
+        rebuild_corpus_v2(source, destination, registry)
+
+    assert not destination.exists()
 
 
 def test_document_ids_include_source_revision_repository_path_and_content(tmp_path: Path):
@@ -69,6 +231,7 @@ def test_document_ids_include_source_revision_repository_path_and_content(tmp_pa
             name="bigcode/the-stack-dedup",
             revision="a" * 40,
             upstream_url="https://huggingface.co/datasets/bigcode/the-stack-dedup",
+            canonical_language="python",
         ),
         [_stack_row()],
     )[0]
@@ -136,6 +299,7 @@ def test_stack_rejects_absent_unknown_mixed_or_copyleft_licenses(
 
     assert admitted == []
     assert db.rejections()[0]["reason_code"] == "license_not_approved"
+    assert db.rejections()[0]["canonical_language"] == "python"
 
 
 @pytest.mark.parametrize(
@@ -217,6 +381,7 @@ def test_local_owner_source_records_explicit_ownership(tmp_path: Path):
         name="BossCrafts-owned",
         revision="c" * 64,
         upstream_url="owner-provided",
+        canonical_language="python",
     )
 
     admitted = ingest_local_source(

@@ -9,12 +9,16 @@ from pathlib import Path
 from typing import Iterator
 
 
+DATABASE_SCHEMA_VERSION = "bcnlt-corpus-database-v2"
+
+
 @dataclass(frozen=True)
 class SourceDocumentRecord:
     document_id: str
     source_provider: str
     source_name: str
     source_revision: str
+    canonical_language: str
     repository_identity: str
     relative_path: str
     content_sha256: str
@@ -52,16 +56,53 @@ class CorpusDatabase:
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys=ON")
         self.connection.execute("PRAGMA journal_mode=WAL")
+        self._validate_existing_schema()
         self._create_schema()
+
+    def _validate_existing_schema(self) -> None:
+        tables = {
+            str(row[0])
+            for row in self.connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        if "documents" not in tables:
+            return
+        metadata_version = None
+        if "metadata" in tables:
+            row = self.connection.execute(
+                "SELECT value FROM metadata WHERE key = 'schema_version'"
+            ).fetchone()
+            metadata_version = str(row[0]) if row is not None else None
+        if metadata_version == DATABASE_SCHEMA_VERSION:
+            return
+        document_count = int(
+            self.connection.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+        )
+        if document_count:
+            self.connection.close()
+            raise ValueError("legacy corpus database requires a new v2 output path")
+        self.connection.executescript(
+            """
+            DROP TABLE IF EXISTS documents;
+            DROP TABLE IF EXISTS rejections;
+            DROP TABLE IF EXISTS metadata;
+            """
+        )
 
     def _create_schema(self) -> None:
         self.connection.executescript(
             """
+            CREATE TABLE IF NOT EXISTS metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS documents (
                 document_id TEXT PRIMARY KEY,
                 source_provider TEXT NOT NULL,
                 source_name TEXT NOT NULL,
                 source_revision TEXT NOT NULL,
+                canonical_language TEXT NOT NULL,
                 repository_identity TEXT NOT NULL,
                 relative_path TEXT NOT NULL,
                 content_sha256 TEXT NOT NULL,
@@ -78,6 +119,7 @@ class CorpusDatabase:
                 source_provider TEXT NOT NULL,
                 source_name TEXT NOT NULL,
                 source_revision TEXT NOT NULL,
+                canonical_language TEXT NOT NULL,
                 repository_identity TEXT NOT NULL,
                 relative_path TEXT NOT NULL,
                 content_sha256 TEXT NOT NULL,
@@ -86,6 +128,10 @@ class CorpusDatabase:
                 upstream_url TEXT NOT NULL
             );
             """
+        )
+        self.connection.execute(
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?)",
+            (DATABASE_SCHEMA_VERSION,),
         )
 
     @contextlib.contextmanager
@@ -104,11 +150,11 @@ class CorpusDatabase:
             """
             INSERT OR IGNORE INTO documents (
                 document_id, source_provider, source_name, source_revision,
-                repository_identity, relative_path, content_sha256, content,
+                canonical_language, repository_identity, relative_path, content_sha256, content,
                 license_spdx, ownership, attribution, upstream_url
             ) VALUES (
                 :document_id, :source_provider, :source_name, :source_revision,
-                :repository_identity, :relative_path, :content_sha256, :content,
+                :canonical_language, :repository_identity, :relative_path, :content_sha256, :content,
                 :license_spdx, :ownership, :attribution, :upstream_url
             )
             """,
@@ -122,6 +168,7 @@ class CorpusDatabase:
         source_provider: str,
         source_name: str,
         source_revision: str,
+        canonical_language: str,
         repository_identity: str,
         relative_path: str,
         content_sha256: str,
@@ -133,6 +180,7 @@ class CorpusDatabase:
             "source_provider": source_provider,
             "source_name": source_name,
             "source_revision": source_revision,
+            "canonical_language": canonical_language,
             "repository_identity": repository_identity,
             "relative_path": relative_path,
             "content_sha256": content_sha256,
@@ -145,15 +193,16 @@ class CorpusDatabase:
             """
             INSERT OR IGNORE INTO rejections (
                 rejection_id, source_provider, source_name, source_revision,
-                repository_identity, relative_path, content_sha256,
+                canonical_language, repository_identity, relative_path, content_sha256,
                 reason_code, detail, upstream_url
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 rejection_id,
                 source_provider,
                 source_name,
                 source_revision,
+                canonical_language,
                 repository_identity,
                 relative_path,
                 content_sha256,
@@ -182,3 +231,6 @@ class CorpusDatabase:
     def clear(self) -> None:
         self.connection.execute("DELETE FROM documents")
         self.connection.execute("DELETE FROM rejections")
+
+    def close(self) -> None:
+        self.connection.close()

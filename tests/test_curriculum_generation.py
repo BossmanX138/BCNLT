@@ -27,6 +27,7 @@ def _fixture(split: str = "train"):
         source_provider="local",
         source_name="BossCrafts/example",
         source_revision="a" * 40,
+        canonical_language="python",
         repository_identity="BossCrafts/example",
         relative_path="price.py",
         content_sha256=content_hash,
@@ -111,6 +112,7 @@ def test_structural_reasoning_answers_use_definition_links_and_inherit_split():
     assert all(item.split == "validation" for item in generated)
     assert all(item.source_document_ids == (document.document_id,) for item in generated)
     assert all(dict(item.provenance)["content_sha256"] == document.content_sha256 for item in generated)
+    assert all(dict(item.provenance)["canonical_language"] == "python" for item in generated)
 
 
 def test_generation_does_not_multiply_unchanged_facts_by_paraphrase():
@@ -142,6 +144,7 @@ def test_large_modules_generate_parseable_top_level_windows_for_all_core_familie
         source_provider="local",
         source_name="BossCrafts/large-example",
         source_revision="b" * 40,
+        canonical_language="python",
         repository_identity="BossCrafts/large-example",
         relative_path="large.py",
         content_sha256=content_hash,

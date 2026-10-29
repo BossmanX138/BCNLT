@@ -130,6 +130,7 @@ def make_curriculum_record(
         "source_provider": document.source_provider,
         "source_name": document.source_name,
         "source_revision": document.source_revision,
+        "canonical_language": document.canonical_language,
         "repository_identity": document.repository_identity,
         "relative_path": document.relative_path,
         "content_sha256": document.content_sha256,

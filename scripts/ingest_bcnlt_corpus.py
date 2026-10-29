@@ -56,6 +56,7 @@ def main(argv: list[str] | None = None) -> int:
             name=str(raw["name"]),
             revision=str(raw["revision"]),
             upstream_url=str(raw["upstream_url"]),
+            canonical_language=str(raw["canonical_language"]),
         )
         if spec.provider == "local":
             admitted = ingest_local_source(

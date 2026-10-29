@@ -23,6 +23,7 @@ _REQUIRED_PROVENANCE = frozenset(
         "source_provider",
         "source_name",
         "source_revision",
+        "canonical_language",
         "repository_identity",
         "relative_path",
         "content_sha256",
