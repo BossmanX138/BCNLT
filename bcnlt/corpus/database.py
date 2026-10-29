@@ -55,8 +55,8 @@ class CorpusDatabase:
         self.connection = sqlite3.connect(self.path, isolation_level=None)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys=ON")
-        self.connection.execute("PRAGMA journal_mode=WAL")
         self._validate_existing_schema()
+        self.connection.execute("PRAGMA journal_mode=WAL")
         self._create_schema()
 
     def _validate_existing_schema(self) -> None:

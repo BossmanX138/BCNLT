@@ -103,8 +103,10 @@ def test_populated_legacy_database_requires_a_new_v2_output_path(tmp_path: Path)
             );
             """
         )
+    original_hash = hashlib.sha256(path.read_bytes()).hexdigest()
     with pytest.raises(ValueError, match="new v2 output path"):
         CorpusDatabase(path)
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == original_hash
 
 
 def _legacy_database(path: Path, *, source_name: str = "bigcode/the-stack-dedup") -> None:
