@@ -22,6 +22,7 @@ from integrations.runeforge_mk2_tokenizer.train_bcnlt_adapter import (
     verify_training_preflight,
     QLoRAConfig,
     run_bounded_training_trace,
+    run_matched_continuation,
 )
 
 from test_embedding_extension import DEFINITIONS, Manifest, TinyCausalModel
@@ -261,3 +262,49 @@ def test_bounded_trace_stops_at_step_limit_validates_and_checks_resume_identity(
             resume_identity="old",
             require_cuda=False,
         )
+
+
+def test_matched_continuation_uses_identical_order_and_shared_step_limit():
+    class LoopModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.embedding = nn.Embedding(8, 4)
+            self.head = nn.Linear(4, 8)
+
+        def get_output_embeddings(self):
+            return self.head
+
+        def forward(self, *, input_ids, labels, attention_mask, use_cache):
+            logits = self.head(self.embedding(input_ids))
+            return SimpleNamespace(
+                loss=F.cross_entropy(logits[:, :-1].reshape(-1, 8), labels[:, 1:].reshape(-1))
+            )
+
+    rows = [
+        {"record_id": f"r{i}", "input_ids": [1, 2, 3], "labels": [1, 2, 3], "attention_mask": [1, 1, 1]}
+        for i in range(3)
+    ]
+    left, right = run_matched_continuation(
+        LoopModel(), LoopModel(), rows, list(rows),
+        QLoRAConfig(target_modules=("head",), gradient_accumulation_steps=1),
+        maximum_optimizer_steps=2, maximum_epochs=1, validation_interval=1,
+        run_identity="pair", require_cuda=False,
+    )
+    assert left.optimizer_steps == right.optimizer_steps == 2
+    assert left.validation_steps == right.validation_steps == (1, 2)
+
+    mismatched = [dict(rows[0], record_id="different"), *rows[1:]]
+    with pytest.raises(ValueError, match="record order"):
+        run_matched_continuation(
+            LoopModel(), LoopModel(), rows, mismatched,
+            QLoRAConfig(target_modules=("head",), gradient_accumulation_steps=1),
+            maximum_optimizer_steps=1, run_identity="pair", require_cuda=False,
+        )
+
+
+def test_production_pair_driver_loads_v4_twice_and_uses_the_matched_loop():
+    source = Path("scripts/train_bcnlt_adaptive_pair.py").read_text(encoding="utf-8")
+
+    assert source.count("load_bcnlt_adapter_state(") == 2
+    assert "run_matched_continuation(" in source
+    assert "grow_bcnlt_extension(" in source

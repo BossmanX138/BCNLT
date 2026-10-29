@@ -16,6 +16,7 @@ from bcnlt.adaptive_vocab.model_eval import (
     evaluate_nll_bits_per_byte,
 )
 from bcnlt.tokenizer_eval import EvaluationCase, EvaluationSuite, GenerationSettings
+from scripts.run_bcnlt_adaptive_model_eval import _decorated_dataset
 
 
 class UniformModel(nn.Module):
@@ -185,4 +186,28 @@ def test_matrix_rejects_bits_per_byte_and_exact_final_newline_regressions():
         "bits_per_byte_regression_v1_control",
         "exact_output_regression",
     }
+
+
+def test_packed_targets_must_match_provenance_and_decode_exactly():
+    class Packed:
+        def __len__(self):
+            return 1
+
+        def __getitem__(self, index):
+            return {
+                "record_id": "actual",
+                "target_mode": "raw_code",
+                "input_ids": [9, 1],
+                "labels": [-100, 1],
+                "attention_mask": [1, 1],
+            }
+
+    class Tokenizer:
+        def decode(self, ids):
+            return "real\n"
+
+    with pytest.raises(ValueError, match="record ID"):
+        _decorated_dataset(Packed(), Tokenizer(), ("claimed",), (b"real\n",), None)
+    with pytest.raises(ValueError, match="canonical target"):
+        _decorated_dataset(Packed(), Tokenizer(), ("actual",), (b"other\n",), None)
 

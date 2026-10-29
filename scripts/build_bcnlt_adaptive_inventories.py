@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
 import sys
 import uuid
 from pathlib import Path
@@ -15,8 +16,10 @@ from bcnlt.adaptive_vocab.candidates import (
     SupportCount,
 )
 from bcnlt.adaptive_vocab.config import AdaptiveVocabularyConfig
-from bcnlt.adaptive_vocab.manifest import build_inventories, write_adaptive_manifest
+from bcnlt.adaptive_vocab.hf_artifact import save_adaptive_tokenizer_artifact
+from bcnlt.adaptive_vocab.manifest import AdaptiveVocabularyManifest, build_inventories
 from bcnlt.adaptive_vocab.secrets import SensitiveTextFinding
+from bcnlt.adaptive_vocab.tokenizer import AdaptiveBCNLTTokenizer
 from bcnlt.tokenizer import BCNLTTokenizer
 
 
@@ -81,6 +84,18 @@ def _load_candidates(path: Path) -> tuple[MacroCandidate, ...]:
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"invalid candidate row {line_number}: {exc}") from exc
     return tuple(result)
+
+
+def write_inventory_artifact(
+    destination: str | Path,
+    v1_tokenizer: BCNLTTokenizer,
+    manifest: AdaptiveVocabularyManifest,
+) -> tuple[Path, ...]:
+    """Write one independently loadable adaptive tokenizer artifact."""
+    return save_adaptive_tokenizer_artifact(
+        destination,
+        AdaptiveBCNLTTokenizer(v1_tokenizer, manifest),
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -152,13 +167,11 @@ def main(argv: list[str] | None = None) -> int:
         temporary = destination.with_name(f".{destination.name}.tmp-{uuid.uuid4().hex}")
         temporary.mkdir()
         try:
-            write_adaptive_manifest(temporary / "adaptive_manifest.json", manifest)
+            write_inventory_artifact(temporary, tokenizer, manifest)
             temporary.rename(destination)
         finally:
             if temporary.exists():
-                for child in temporary.iterdir():
-                    child.unlink()
-                temporary.rmdir()
+                shutil.rmtree(temporary)
     return 0
 
 

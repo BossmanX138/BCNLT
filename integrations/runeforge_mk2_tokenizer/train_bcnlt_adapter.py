@@ -298,6 +298,65 @@ def run_bounded_training_trace(
     )
 
 
+def run_matched_continuation(
+    v1_model: nn.Module,
+    adaptive_model: nn.Module,
+    v1_dataset: Sequence[dict[str, Any]],
+    adaptive_dataset: Sequence[dict[str, Any]],
+    config: QLoRAConfig,
+    *,
+    maximum_optimizer_steps: int = 512,
+    maximum_epochs: int = 1,
+    validation_interval: int = 64,
+    v1_validation_callback=None,
+    adaptive_validation_callback=None,
+    run_identity: str,
+    require_cuda: bool = True,
+) -> tuple[TrainingTrace, TrainingTrace]:
+    """Train the two tokenizer arms over the same ordered record population."""
+    if len(v1_dataset) != len(adaptive_dataset):
+        raise ValueError("matched continuation datasets have different lengths")
+    v1_record_ids = tuple(sample.get("record_id") for sample in v1_dataset)
+    adaptive_record_ids = tuple(sample.get("record_id") for sample in adaptive_dataset)
+    if any(value is None for value in (*v1_record_ids, *adaptive_record_ids)):
+        raise ValueError("matched continuation datasets require record_id provenance")
+    if v1_record_ids != adaptive_record_ids:
+        raise ValueError("matched continuation datasets have different record order")
+    shared = {
+        "maximum_optimizer_steps": maximum_optimizer_steps,
+        "maximum_epochs": maximum_epochs,
+        "validation_interval": validation_interval,
+        "require_cuda": require_cuda,
+    }
+    cpu_rng_state = torch.random.get_rng_state()
+    cuda_rng_state = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+    v1_trace = run_bounded_training_trace(
+        v1_model,
+        v1_dataset,
+        config,
+        validation_callback=v1_validation_callback,
+        run_identity=f"{run_identity}:v1",
+        **shared,
+    )
+    torch.random.set_rng_state(cpu_rng_state)
+    if cuda_rng_state is not None:
+        torch.cuda.set_rng_state_all(cuda_rng_state)
+    adaptive_trace = run_bounded_training_trace(
+        adaptive_model,
+        adaptive_dataset,
+        config,
+        validation_callback=adaptive_validation_callback,
+        run_identity=f"{run_identity}:adaptive",
+        **shared,
+    )
+    if (
+        v1_trace.optimizer_steps != adaptive_trace.optimizer_steps
+        or v1_trace.validation_steps != adaptive_trace.validation_steps
+    ):
+        raise RuntimeError("matched continuation arms diverged in schedule")
+    return v1_trace, adaptive_trace
+
+
 def backward_split_causal_loss(
     hidden_states: torch.Tensor,
     labels: torch.Tensor,

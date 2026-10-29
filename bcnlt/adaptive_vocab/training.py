@@ -75,6 +75,21 @@ def _rank(record: PairedTrainingRecord, seed: int) -> str:
     return hashlib.sha256(material.encode()).hexdigest()
 
 
+def mutually_packable_records(
+    records: Sequence[PairedTrainingRecord], *, maximum_sequence_tokens: int = 8192
+) -> tuple[tuple[PairedTrainingRecord, ...], tuple[str, ...]]:
+    if maximum_sequence_tokens <= 0:
+        raise ValueError("maximum sequence tokens must be positive")
+    kept = []
+    rejected = []
+    for item in records:
+        if max(len(item.v1_input_ids), len(item.adaptive_input_ids)) > maximum_sequence_tokens:
+            rejected.append(item.record.record_id)
+        else:
+            kept.append(item)
+    return tuple(kept), tuple(rejected)
+
+
 def select_paired_training_records(
     records: Sequence[PairedTrainingRecord],
     manifest: AdaptiveVocabularyManifest,

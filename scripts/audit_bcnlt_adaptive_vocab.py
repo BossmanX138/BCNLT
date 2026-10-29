@@ -162,6 +162,12 @@ def main(argv: list[str] | None = None) -> int:
 
     payload = report.to_dict()
     payload["lineage_identity_sha256"] = lineage_identity
+    payload["accepted_records_sha256"] = hashlib.sha256(
+        args.accepted_records.read_bytes()
+    ).hexdigest()
+    payload["tokenizer_manifest_sha256"] = hashlib.sha256(
+        (args.tokenizer_artifact / MANIFEST_FILENAME).read_bytes()
+    ).hexdigest()
     payload["report_sha256"] = hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
             "utf-8"

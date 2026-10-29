@@ -149,6 +149,11 @@ def _resolve_platform_path(path: str | Path) -> Path:
         if match:
             tail = match.group(2) or ""
             raw = f"{match.group(1).upper()}:/{tail}"
+    else:
+        match = re.fullmatch(r"([A-Za-z]):(?:/(.*))?", raw)
+        if match:
+            tail = match.group(2) or ""
+            raw = f"/mnt/{match.group(1).lower()}/{tail}"
     return Path(raw).expanduser().resolve(strict=False)
 
 

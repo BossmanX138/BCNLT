@@ -85,15 +85,28 @@ def _generation(model, tokenizer):
     return generate
 
 
-def _decorated_dataset(packed, record_ids, targets, maximum_examples):
+def _decorated_dataset(packed, tokenizer, record_ids, targets, maximum_examples):
     count = len(packed) if maximum_examples is None else min(len(packed), maximum_examples)
     if count != min(len(record_ids), len(targets)):
         raise ValueError("packed heldout rows and target sidecar differ in length")
     rows = []
     for index in range(count):
+        packed_row = packed[index]
+        if packed_row.get("record_id") != record_ids[index]:
+            raise ValueError("packed record ID does not match heldout target sidecar")
+        target_ids = [
+            token_id
+            for token_id, label in zip(
+                packed_row["input_ids"], packed_row["labels"], strict=True
+            )
+            if label != -100
+        ]
+        decoded = tokenizer.decode(target_ids).encode("utf-8")
+        if decoded != targets[index]:
+            raise ValueError("packed supervised target does not match canonical target bytes")
         rows.append(
             {
-                **packed[index],
+                **packed_row,
                 "record_id": record_ids[index],
                 "target_bytes": targets[index],
             }
@@ -158,8 +171,8 @@ def main(argv: list[str] | None = None) -> int:
             paths["v5_packed"], "validation",
             expected_tokenizer_digest=adaptive.manifest.manifest_sha256,
         )
-        v1_rows = _decorated_dataset(v1_packed, record_ids, targets, args.maximum_heldout_examples)
-        v5_rows = _decorated_dataset(v5_packed, record_ids, targets, args.maximum_heldout_examples)
+        v1_rows = _decorated_dataset(v1_packed, v1, record_ids, targets, args.maximum_heldout_examples)
+        v5_rows = _decorated_dataset(v5_packed, adaptive, record_ids, targets, args.maximum_heldout_examples)
         v1_definitions = {item.token: _default_definition(item.token) for item in v1.manifest.added_tokens}
         macro_definitions = {
             item.name: json.dumps(list(item.expansion), separators=(",", ":"))

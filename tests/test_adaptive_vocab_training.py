@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from bcnlt.adaptive_vocab.manifest import AdaptiveVocabularyManifest, MacroToken
 from bcnlt.adaptive_vocab.training import (
     PairedTrainingRecord,
+    mutually_packable_records,
     select_paired_training_records,
 )
 from bcnlt.corpus.curriculum import CurriculumRecord
@@ -67,3 +68,13 @@ def test_selection_is_deterministic_paired_and_removes_unreachable_macros():
     assert all(item.record.split == "train" for item in first.records)
     assert first.v1_record_ids == first.adaptive_record_ids
     assert first.target_sha256 == second.target_sha256
+
+
+def test_shared_packability_rejects_a_record_from_both_arms():
+    records = (
+        _record(1, 20),
+        PairedTrainingRecord(_record(2, 20).record, tuple(range(9)), (20,), b"x"),
+    )
+    kept, rejected = mutually_packable_records(records, maximum_sequence_tokens=8)
+    assert tuple(item.record.record_id for item in kept) == (records[0].record.record_id,)
+    assert rejected == (records[1].record.record_id,)

@@ -9,6 +9,7 @@ from pathlib import Path
 from bcnlt.adaptive_vocab.hf_artifact import load_adaptive_tokenizer_artifact
 from bcnlt.adaptive_vocab.training import (
     PairedTrainingRecord,
+    mutually_packable_records,
     select_paired_training_records,
 )
 from bcnlt.canonical import record_from_canonical_bytes
@@ -70,6 +71,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-root", required=True, type=Path)
     parser.add_argument("--maximum-examples", type=int, default=10_000)
     parser.add_argument("--minimum-macro-occurrences", type=int, default=8)
+    parser.add_argument("--maximum-sequence-tokens", type=int, default=4096)
     parser.add_argument("--seed", type=int, default=1729)
     args = parser.parse_args(argv)
     if args.output_root.exists():
@@ -99,8 +101,11 @@ def main(argv: list[str] | None = None) -> int:
             paired.append(
                 PairedTrainingRecord(record, v1_ids, adaptive_ids, record.target.encode("utf-8"))
             )
+        packable, shared_rejections = mutually_packable_records(
+            paired, maximum_sequence_tokens=args.maximum_sequence_tokens
+        )
         selection = select_paired_training_records(
-            paired,
+            packable,
             adaptive.manifest,
             minimum_macro_occurrences=args.minimum_macro_occurrences,
             maximum_examples=args.maximum_examples,
@@ -116,6 +121,7 @@ def main(argv: list[str] | None = None) -> int:
                 "corpus_lineage_file_sha256": _sha256(args.corpus_lineage),
                 "selected_inventory_sha256": _sha256(args.selected_inventory),
                 "selected_manifest_sha256": adaptive.manifest.manifest_sha256,
+                "shared_pack_rejections": list(shared_rejections),
             }
         )
         (args.output_root / "paired-selection.json").write_text(
@@ -125,8 +131,26 @@ def main(argv: list[str] | None = None) -> int:
         if selection.inventory_reevaluation_required:
             return 2
         chosen = tuple(item.record for item in selection.records)
-        pack_training_shards(chosen, v1, args.output_root / "v1")
-        pack_training_shards(chosen, adaptive, args.output_root / "v5")
+        v1_packed = pack_training_shards(
+            chosen,
+            v1,
+            args.output_root / "v1",
+            maximum_sequence_tokens=args.maximum_sequence_tokens,
+        )
+        v5_packed = pack_training_shards(
+            chosen,
+            adaptive,
+            args.output_root / "v5",
+            maximum_sequence_tokens=args.maximum_sequence_tokens,
+        )
+        expected_count = len(selection.records)
+        if (
+            v1_packed.accepted_record_count != expected_count
+            or v5_packed.accepted_record_count != expected_count
+            or v1_packed.rejected_record_count
+            or v5_packed.rejected_record_count
+        ):
+            raise ValueError("paired packers produced different training populations")
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
         print(str(exc), file=sys.stderr)
         return 2

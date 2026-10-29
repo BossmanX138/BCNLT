@@ -15,6 +15,7 @@ from bcnlt.semantic_record import ScoreBand, SemanticTokenRecord
 from bcnlt.tokenizer import BCNLTTokenizer
 from bcnlt.tokenizer_manifest import build_manifest
 from tests.tokenizer_fixtures import write_byte_level_tokenizer
+from scripts.build_bcnlt_adaptive_inventories import write_inventory_artifact
 
 
 def _v1(tmp_path: Path):
@@ -85,6 +86,17 @@ def test_macro_never_crosses_structural_field_boundary(tmp_path: Path):
 
     assert adaptive.manifest.v1_vocab_size not in encoded
     assert adaptive.decode_records(encoded) == (_record("A", scope="B"),)
+
+
+def test_inventory_builder_emits_a_loadable_complete_adaptive_artifact(tmp_path: Path):
+    v1, base_path = _v1(tmp_path)
+    manifest = _manifest(v1, tuple(v1.base.encode("value", add_special_tokens=False)))
+    destination = tmp_path / "inventory"
+
+    write_inventory_artifact(destination, v1, manifest)
+    loaded = load_adaptive_tokenizer_artifact(destination, base_path)
+
+    assert loaded.manifest == manifest
 
 
 @pytest.mark.parametrize(

@@ -163,54 +163,45 @@ def grow_bcnlt_extension(
     embedding = model.get_input_embeddings()  # type: ignore[attr-defined]
     output = model.get_output_embeddings()  # type: ignore[attr-defined]
     if isinstance(embedding, ExtendedEmbedding):
-        embedding_rows = torch.cat(
-            (embedding.base.weight.detach(), embedding.extension.weight.detach()), dim=0
-        )
+        frozen_embedding = embedding.base
+        old_embedding_extension = embedding.extension.weight.detach().clone()
     elif isinstance(embedding, nn.Embedding):
-        embedding_rows = embedding.weight.detach()
+        frozen_embedding = embedding
+        old_embedding_extension = embedding.weight.new_empty((0, embedding.embedding_dim))
     else:
         raise TypeError("BCNLT growth requires an embedding table")
     if isinstance(output, ExtendedLMHead):
-        output_rows = torch.cat(
-            (output.base.weight.detach(), output.extension.weight.detach()), dim=0
-        )
+        frozen_head = output.base
+        old_head_extension = output.extension.weight.detach().clone()
     elif isinstance(output, nn.Linear):
-        output_rows = output.weight.detach()
+        frozen_head = output
+        old_head_extension = output.weight.new_empty((0, output.in_features))
     else:
         raise TypeError("BCNLT growth requires a linear output table")
-    if embedding_rows.shape[0] != old_vocab_size or output_rows.shape[0] != old_vocab_size:
+    if (
+        frozen_embedding.num_embeddings + old_embedding_extension.shape[0] != old_vocab_size
+        or frozen_head.out_features + old_head_extension.shape[0] != old_vocab_size
+    ):
         raise ValueError("model tables do not match the v1 vocabulary before append")
-
-    frozen_embedding = nn.Embedding.from_pretrained(
-        embedding_rows.clone(), freeze=True
-    ).to(device=embedding_rows.device, dtype=embedding_rows.dtype)
-    frozen_head = nn.Linear(
-        output_rows.shape[1],
-        output_rows.shape[0],
-        bias=False,
-        device=output_rows.device,
-        dtype=output_rows.dtype,
+    ordered = [definitions[item.name] for item in macros]
+    preserved = [f"preserved-v1-extension-{index}" for index in range(old_embedding_extension.shape[0])]
+    grown_embedding = ExtendedEmbedding(
+        frozen_embedding,
+        (*preserved, *ordered),
+        seed=seed,
+        expected_base_vocab_size=frozen_embedding.num_embeddings,
+    )
+    grown_head = ExtendedLMHead(
+        frozen_head,
+        (*preserved, *ordered),
+        seed=seed,
+        expected_base_vocab_size=frozen_head.out_features,
     )
     with torch.no_grad():
-        frozen_head.weight.copy_(output_rows)
-    frozen_head.requires_grad_(False)
-    ordered = [definitions[item.name] for item in macros]
-    model.set_input_embeddings(  # type: ignore[attr-defined]
-        ExtendedEmbedding(
-            frozen_embedding,
-            ordered,
-            seed=seed,
-            expected_base_vocab_size=old_vocab_size,
-        )
-    )
-    model.set_output_embeddings(  # type: ignore[attr-defined]
-        ExtendedLMHead(
-            frozen_head,
-            ordered,
-            seed=seed,
-            expected_base_vocab_size=old_vocab_size,
-        )
-    )
+        grown_embedding.extension.weight[: len(preserved)].copy_(old_embedding_extension)
+        grown_head.extension.weight[: len(preserved)].copy_(old_head_extension)
+    model.set_input_embeddings(grown_embedding)  # type: ignore[attr-defined]
+    model.set_output_embeddings(grown_head)  # type: ignore[attr-defined]
     config = getattr(model, "config", None)
     if config is not None:
         config.vocab_size = getattr(new_manifest, "vocab_size")

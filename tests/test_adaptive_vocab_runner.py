@@ -13,6 +13,7 @@ from bcnlt.adaptive_vocab.runner import (
     run_experiment,
     run_phase,
 )
+from bcnlt.adaptive_vocab.lineage import _resolve_platform_path
 
 
 ALL_COMMANDS = tuple(
@@ -169,4 +170,18 @@ def test_powershell_wrapper_forwards_an_argument_list_without_shell_fragments():
     assert "Invoke-Expression" not in source
     assert "--start-training" in source
     assert "if ($StartTraining)" in source
+
+
+def test_wsl_normalizes_windows_drive_aliases_before_overlap_checks():
+    assert _resolve_platform_path("D:/BCNLT-runs/v4") == Path("/mnt/d/BCNLT-runs/v4")
+
+
+def test_planning_accepts_a_future_phase_input_but_execution_requires_it(tmp_path: Path):
+    future = tmp_path / "lineage" / "lineage.json"
+    planned = plan_experiment(
+        _inputs(tmp_path, phase_inputs=(("audit", (future,)),))
+    )
+    audit = next(item for item in planned if item.name == "audit")
+    with pytest.raises(FileNotFoundError):
+        run_phase(audit, resume=False)
 

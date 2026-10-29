@@ -53,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
                 (
                     name,
                     tuple(
-                        Path(_expand(item, repository=repository, python=sys.executable)).resolve(strict=True)
+                        Path(_expand(item, repository=repository, python=sys.executable)).resolve(strict=False)
                         for item in inputs
                     ),
                 )

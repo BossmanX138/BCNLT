@@ -17,6 +17,7 @@ from bcnlt.adaptive_vocab.config import AdaptiveVocabularyConfig
 from bcnlt.adaptive_vocab.lineage import LINEAGE_SCHEMA_VERSION, LineageArtifact
 from bcnlt.corpus.curriculum import CurriculumRecord
 from bcnlt.tokenizer import BCNLTTokenizer
+from bcnlt.hf_tokenizer import MANIFEST_FILENAME
 
 
 def _load_curriculum(path: Path) -> tuple[CurriculumRecord, ...]:
@@ -61,6 +62,17 @@ def _write_new(path: Path, content: bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def verify_audit_inputs(
+    audit: dict[str, object], accepted_records: Path, tokenizer_manifest: Path
+) -> None:
+    actual_records = hashlib.sha256(accepted_records.read_bytes()).hexdigest()
+    if audit.get("accepted_records_sha256") != actual_records:
+        raise ValueError("audit accepted records do not match discovery input")
+    actual_manifest = hashlib.sha256(tokenizer_manifest.read_bytes()).hexdigest()
+    if audit.get("tokenizer_manifest_sha256") != actual_manifest:
+        raise ValueError("audit tokenizer manifest does not match discovery input")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Discover balanced BCNLT payload macros")
     parser.add_argument("--accepted-records", required=True, type=Path)
@@ -98,6 +110,11 @@ def main(argv: list[str] | None = None) -> int:
         ):
             raise ValueError("lineage_mismatch: adaptive configuration changed")
         config = AdaptiveVocabularyConfig.load(args.config)
+        verify_audit_inputs(
+            audit,
+            args.accepted_records,
+            args.tokenizer_artifact / MANIFEST_FILENAME,
+        )
         tokenizer = BCNLTTokenizer.from_pretrained(
             args.tokenizer_artifact, args.base_tokenizer
         )

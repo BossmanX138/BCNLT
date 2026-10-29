@@ -265,3 +265,22 @@ def test_candidates_sort_by_score_support_then_lexical_base_ids():
     ]
 
     assert [item.expansion for item in eligible] == [(1, 2), (1, 3)]
+
+
+def test_discovery_requires_exact_accepted_records_and_tokenizer_evidence(tmp_path):
+    from scripts.discover_bcnlt_macro_candidates import verify_audit_inputs
+
+    records = tmp_path / "accepted.jsonl"
+    manifest = tmp_path / "bcnlt_tokenizer_manifest.json"
+    records.write_text("{}\n", encoding="utf-8")
+    manifest.write_text("{}\n", encoding="utf-8")
+    import hashlib
+
+    audit = {
+        "accepted_records_sha256": hashlib.sha256(records.read_bytes()).hexdigest(),
+        "tokenizer_manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+    }
+    verify_audit_inputs(audit, records, manifest)
+    records.write_text('{"changed":true}\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="accepted records"):
+        verify_audit_inputs(audit, records, manifest)

@@ -129,6 +129,16 @@ and the explicit `-StartTraining` switch:
 .\scripts\run_bcnlt_adaptive_vocab_v5.ps1 -Spec D:\BCNLT-runs\v5-run-spec.json -Resume -StartTraining
 ```
 
+The `paired_training` phase must invoke
+`python -m scripts.train_bcnlt_adaptive_pair`. That command loads two separate
+models with the v1 extension, verifies and restores the same custom v4 adapter
+state into each, grows only the adaptive arm, checks the ordered packed
+`record_id` population, and runs both arms with one optimizer-step and
+validation schedule. Separate v1 and adaptive validation packs must contain
+the same ordered validation IDs; their measured losses are stored at each
+shared validation step. It writes the two standalone adapters plus
+`matched-training.json` beneath a new output directory.
+
 Expected artifacts are lineage, corpus audit, candidates, inventories,
 tokenizer evaluations, boundary entropy, paired datasets, two standalone
 adapter continuations, the four-state model evaluation, and a promotion

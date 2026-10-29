@@ -181,26 +181,38 @@ class PackedBCNLTDataset:
         if self.manifest.tokenizer_manifest_sha256 != expected_tokenizer_digest:
             raise ValueError("tokenizer manifest digest does not match packed dataset")
         _verify_manifest_files(self.root, self.manifest)
-        self._entries: list[tuple[PackedShardManifest, int, int, int]] = []
+        self._entries: list[tuple[PackedShardManifest, int, int, int, str, str]] = []
         for shard in self.manifest.shards:
             if shard.split != split:
                 continue
             index_bytes = (self.root / shard.index_path).read_bytes()
+            provenance_rows = [
+                json.loads(line)
+                for line in (self.root / shard.records_path).read_text(encoding="utf-8").splitlines()
+            ]
             if len(index_bytes) != shard.record_count * 24:
                 raise ValueError(f"index size mismatch: {shard.index_path}")
-            for offset in range(0, len(index_bytes), 24):
+            if len(provenance_rows) != shard.record_count:
+                raise ValueError(f"record provenance count mismatch: {shard.records_path}")
+            for row_index, offset in enumerate(range(0, len(index_bytes), 24)):
                 token_offset, length, prompt_length = struct.unpack_from(
                     "<QQQ", index_bytes, offset
                 )
                 if prompt_length > length:
                     raise ValueError(f"invalid prompt length: {shard.index_path}")
-                self._entries.append((shard, token_offset, length, prompt_length))
+                metadata = provenance_rows[row_index]
+                self._entries.append(
+                    (
+                        shard, token_offset, length, prompt_length,
+                        str(metadata["record_id"]), str(metadata["target_mode"]),
+                    )
+                )
 
     def __len__(self) -> int:
         return len(self._entries)
 
-    def __getitem__(self, index: int) -> dict[str, list[int]]:
-        shard, offset, length, prompt_length = self._entries[index]
+    def __getitem__(self, index: int) -> dict[str, object]:
+        shard, offset, length, prompt_length, record_id, target_mode = self._entries[index]
         binary = self.root / shard.binary_path
         with binary.open("rb") as handle:
             handle.seek(offset * 4)
@@ -210,6 +222,8 @@ class PackedBCNLTDataset:
         ids = list(struct.unpack(f"<{length}I", payload)) if length else []
         _validate_token_ids(ids, self.manifest.tokenizer_vocab_size)
         return {
+            "record_id": record_id,
+            "target_mode": target_mode,
             "input_ids": ids,
             "labels": [-100] * prompt_length + ids[prompt_length:],
             "attention_mask": [1] * len(ids),
@@ -301,6 +315,7 @@ def _write_shard(
             "source_document_ids": list(item.record.source_document_ids),
             "family": item.record.family,
             "template_id": item.record.template_id,
+            "target_mode": item.record.target_mode,
             "split": item.record.split,
             "offset": offset,
             "length": len(item.input_ids),

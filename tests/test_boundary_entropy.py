@@ -11,6 +11,7 @@ from bcnlt.adaptive_vocab.boundary_entropy import (
     assert_files_unchanged,
     snapshot_file_hashes,
     token_entropies,
+    collect_boundary_report,
 )
 
 
@@ -70,3 +71,51 @@ def test_diagnostic_snapshot_helpers_detect_no_mutation(tmp_path: Path):
         str(path.resolve()): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in paths
     }
+
+
+def test_collector_uses_frozen_token_streams_and_emits_target_boundaries(tmp_path: Path):
+    class Model(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.anchor = torch.nn.Parameter(torch.zeros(()))
+
+        def forward(self, *, input_ids, attention_mask):
+            return type("Output", (), {"logits": torch.zeros((*input_ids.shape, 4))})()
+
+    class SemanticTokenizer:
+        def encode_source(self, source):
+            raise AssertionError("stateful preprocessing must not run")
+
+    class RawTokenizer:
+        def encode_with_offsets(self, text):
+            return [0, 1, 2], [(0, 1), (1, 2), (2, 3)]
+
+    report = collect_boundary_report(
+        v4_model=Model(),
+        base_model=Model(),
+        v1_tokenizer=SemanticTokenizer(),
+        raw_tokenizer=RawTokenizer(),
+        heldout_documents=(
+            {
+                "document_id": "doc",
+                "content": "abc",
+                "semantic_token_ids": [0, 1, 2],
+                "semantic_boundary_token_indices": [1],
+                "raw_boundary_positions": [1],
+            },
+        ),
+        output=tmp_path / "entropy",
+    )
+
+    assert report.records
+    assert any(item.target_boundary is True for item in report.records)
+    assert all(item.target_boundary is not None for item in report.records if item.token_index < 2)
+
+
+def test_entropy_cli_loads_the_custom_sparse_adapter_format():
+    source = Path("scripts/run_bcnlt_boundary_entropy.py").read_text(encoding="utf-8")
+
+    assert "load_bcnlt_adapter_state" in source
+    assert "load_qlora_model" in source
+    assert "PeftModel.from_pretrained" not in source
+    assert 'parser.add_argument("--training-config"' in source

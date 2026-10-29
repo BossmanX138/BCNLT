@@ -59,6 +59,15 @@ def align_target_boundaries(
     return tuple(result)
 
 
+def align_target_token_boundaries(
+    token_count: int, boundary_token_indices: set[int]
+) -> tuple[bool | None, ...]:
+    return tuple(
+        None if position + 1 >= token_count else position + 1 in boundary_token_indices
+        for position in range(token_count)
+    )
+
+
 def snapshot_file_hashes(paths: Iterable[str | Path]) -> dict[str, str]:
     return {
         str(Path(path).resolve()): hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -136,19 +145,45 @@ def collect_boundary_report(
     for ordinal, document in enumerate(heldout_documents):
         source = str(getattr(document, "content", document.get("content", "") if isinstance(document, dict) else ""))
         document_id = str(getattr(document, "document_id", document.get("document_id", ordinal) if isinstance(document, dict) else ordinal))
+        if not isinstance(document, dict):
+            raise ValueError("heldout boundary documents require frozen token annotations")
+        semantic_ids = document.get("semantic_token_ids")
+        semantic_boundaries = document.get("semantic_boundary_token_indices")
+        raw_boundaries = document.get("raw_boundary_positions")
+        if (
+            not isinstance(semantic_ids, list)
+            or not all(isinstance(item, int) for item in semantic_ids)
+            or not isinstance(semantic_boundaries, list)
+            or not all(isinstance(item, int) for item in semantic_boundaries)
+            or not isinstance(raw_boundaries, list)
+            or not all(isinstance(item, int) for item in raw_boundaries)
+        ):
+            raise ValueError("heldout document lacks frozen boundary annotations")
+        raw_ids, raw_offsets = raw_tokenizer.encode_with_offsets(source)
         inputs = (
-            ("v4_adapter_semantic_v1", v4_model, v1_tokenizer.encode_source(source)),
-            ("runeforge_base_raw_code", base_model, raw_tokenizer.encode(source, add_special_tokens=False)),
+            (
+                "v4_adapter_semantic_v1",
+                v4_model,
+                semantic_ids,
+                align_target_token_boundaries(len(semantic_ids), set(semantic_boundaries)),
+            ),
+            (
+                "runeforge_base_raw_code",
+                base_model,
+                raw_ids,
+                align_target_boundaries(raw_offsets, set(raw_boundaries)),
+            ),
         )
-        for role, model, ids in inputs:
-            input_ids = torch.tensor([ids], dtype=torch.long)
+        for role, model, ids, boundaries in inputs:
+            device = next(model.parameters()).device
+            input_ids = torch.tensor([ids], dtype=torch.long, device=device)
             attention = torch.ones_like(input_ids)
             with torch.inference_mode():
                 logits = model(input_ids=input_ids, attention_mask=attention).logits
             entropies = token_entropies(logits, input_ids, attention)
-            for index, entropy in enumerate(entropies):
+            for index, (entropy, boundary) in enumerate(zip(entropies, boundaries, strict=True)):
                 records.append(
-                    BoundaryEntropyRecord(role, document_id, index, entropy, None)
+                    BoundaryEntropyRecord(role, document_id, index, entropy, boundary)
                 )
     report = BoundaryEntropyReport(tuple(records), str(jsonl_path), str(summary_path))
     jsonl_path.write_text(

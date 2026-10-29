@@ -201,8 +201,10 @@ def test_growth_preserves_all_old_rows_and_initializes_only_appended_macros():
         seed=17,
     )
 
-    assert torch.equal(model.embedding.base.weight, old_embedding)
-    assert torch.equal(model.lm_head.base.weight, old_head)
+    assert torch.equal(model.embedding.base.weight, old_embedding[:5])
+    assert torch.equal(model.lm_head.base.weight, old_head[:5])
+    assert torch.equal(model.embedding.extension.weight[:2], old_embedding[5:])
+    assert torch.equal(model.lm_head.extension.weight[:2], old_head[5:])
     assert model.embedding.extension.weight.requires_grad
     assert model.lm_head.extension.weight.requires_grad
     assert model.embedding.base.weight.requires_grad is False
