@@ -10,7 +10,9 @@ from integrations.runeforge_mk2_tokenizer.embedding_extension import (
     ExtendedEmbedding,
     ExtendedLMHead,
     attach_bcnlt_extension,
+    grow_bcnlt_extension,
 )
+from bcnlt.adaptive_vocab.manifest import AdaptiveVocabularyManifest, MacroToken
 from integrations.runeforge_mk2_tokenizer.merge_bcnlt_adapter import (
     materialize_extended_tables,
 )
@@ -169,4 +171,47 @@ def test_materialized_tables_preserve_base_rows_and_append_extensions():
             Manifest(),
             {"<|bcnlt:a|>": "a"},
             seed=1,
+        )
+
+
+def test_growth_preserves_all_old_rows_and_initializes_only_appended_macros():
+    model = TinyCausalModel()
+    attach_bcnlt_extension(model, Manifest(), DEFINITIONS, seed=3)
+    old_embedding = torch.cat(
+        (model.embedding.base.weight, model.embedding.extension.weight), dim=0
+    ).detach().clone()
+    old_head = torch.cat(
+        (model.lm_head.base.weight, model.lm_head.extension.weight), dim=0
+    ).detach().clone()
+    adaptive = AdaptiveVocabularyManifest.create(
+        v1_manifest_sha256=Manifest.manifest_sha256,
+        candidate_report_sha256="b" * 64,
+        config_sha256="c" * 64,
+        lineage_sha256="d" * 64,
+        base_vocab_size=Manifest.base_vocab_size,
+        v1_vocab_size=Manifest.vocab_size,
+        macros=(MacroToken("<|bcnlt:macro:0000|>", 7, (1, 2), ("surface",)),),
+    )
+
+    grow_bcnlt_extension(
+        model,
+        Manifest(),
+        adaptive,
+        {"<|bcnlt:macro:0000|>": "common surface sequence"},
+        seed=17,
+    )
+
+    assert torch.equal(model.embedding.base.weight, old_embedding)
+    assert torch.equal(model.lm_head.base.weight, old_head)
+    assert model.embedding.extension.weight.requires_grad
+    assert model.lm_head.extension.weight.requires_grad
+    assert model.embedding.base.weight.requires_grad is False
+
+    with pytest.raises(ValueError, match="v1 vocabulary|append"):
+        grow_bcnlt_extension(
+            model,
+            Manifest(),
+            adaptive,
+            {"<|bcnlt:macro:0000|>": "common surface sequence"},
+            seed=17,
         )

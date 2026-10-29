@@ -90,6 +90,15 @@ class QLoRAConfig:
     gradient_accumulation_steps: int = 8
 
 
+@dataclass(frozen=True)
+class TrainingTrace:
+    losses: tuple[float, ...]
+    optimizer_steps: int
+    completed_epochs: int
+    validation_steps: tuple[int, ...]
+    run_identity: str | None
+
+
 def load_qlora_model(
     base_model_path: str | Path,
     *,
@@ -176,10 +185,39 @@ def run_training_steps(
     *,
     maximum_optimizer_steps: int,
 ) -> list[float]:
-    """Run a bounded, explicit optimizer loop over packed rows."""
+    trace = run_bounded_training_trace(
+        model,
+        dataset,
+        config,
+        maximum_optimizer_steps=maximum_optimizer_steps,
+        maximum_epochs=1,
+        validation_interval=maximum_optimizer_steps + 1,
+        require_cuda=True,
+    )
+    return list(trace.losses)
+
+
+def run_bounded_training_trace(
+    model: nn.Module,
+    dataset: Sequence[dict[str, list[int]]],
+    config: QLoRAConfig,
+    *,
+    maximum_optimizer_steps: int = 512,
+    maximum_epochs: int = 1,
+    validation_interval: int = 64,
+    validation_callback=None,
+    run_identity: str | None = None,
+    resume_identity: str | None = None,
+    require_cuda: bool = True,
+) -> TrainingTrace:
+    """Run the shared bounded optimizer loop and record validation boundaries."""
     if maximum_optimizer_steps <= 0:
         raise ValueError("maximum_optimizer_steps must be positive")
-    if not torch.cuda.is_available():
+    if maximum_epochs <= 0 or validation_interval <= 0:
+        raise ValueError("epoch and validation limits must be positive")
+    if resume_identity is not None and resume_identity != run_identity:
+        raise ValueError("resume identity does not match this training run")
+    if require_cuda and not torch.cuda.is_available():
         raise RuntimeError("CUDA is required for Runeforge BCNLT training")
     if not len(dataset):
         raise ValueError("training dataset is empty")
@@ -192,45 +230,72 @@ def run_training_steps(
     losses: list[float] = []
     optimizer_steps = 0
     output_head = model.get_output_embeddings()  # type: ignore[attr-defined]
-    for sample_index in range(len(dataset)):
-        sample = dataset[sample_index]
-        input_ids = torch.tensor([sample["input_ids"]], dtype=torch.long, device=device)
-        labels = torch.tensor([sample["labels"]], dtype=torch.long, device=device)
-        attention_mask = torch.tensor(
-            [sample["attention_mask"]], dtype=torch.long, device=device
-        )
-        if isinstance(output_head, ExtendedLMHead):
-            hidden_states = _unsloth_hidden_states(
-                model, input_ids=input_ids, attention_mask=attention_mask
+    completed_epochs = 0
+    validation_steps: list[int] = []
+    stop = False
+    for _epoch in range(maximum_epochs):
+        for sample_index in range(len(dataset)):
+            sample = dataset[sample_index]  # type: ignore[index]
+            input_ids = torch.tensor(
+                [sample["input_ids"]], dtype=torch.long, device=device
             )
-            measured_loss = backward_split_causal_loss(
-                hidden_states,
-                labels,
-                output_head,
-                gradient_scale=1.0 / config.gradient_accumulation_steps,
+            labels = torch.tensor([sample["labels"]], dtype=torch.long, device=device)
+            attention_mask = torch.tensor(
+                [sample["attention_mask"]], dtype=torch.long, device=device
             )
-        else:
-            output = model(
-                input_ids=input_ids,
-                labels=labels,
-                attention_mask=attention_mask,
-                use_cache=False,
-            )
-            loss = output.loss / config.gradient_accumulation_steps
-            if not torch.isfinite(loss):
-                raise FloatingPointError("non-finite BCNLT training loss")
-            loss.backward()
-            measured_loss = float(loss.detach().cpu()) * config.gradient_accumulation_steps
-        losses.append(measured_loss)
-        boundary = (sample_index + 1) % config.gradient_accumulation_steps == 0
-        final_sample = sample_index + 1 == len(dataset)
-        if boundary or final_sample:
-            optimizer.step()
-            optimizer.zero_grad(set_to_none=True)
-            optimizer_steps += 1
-            if optimizer_steps >= maximum_optimizer_steps:
-                break
-    return losses
+            if isinstance(output_head, ExtendedLMHead):
+                hidden_states = _unsloth_hidden_states(
+                    model, input_ids=input_ids, attention_mask=attention_mask
+                )
+                measured_loss = backward_split_causal_loss(
+                    hidden_states,
+                    labels,
+                    output_head,
+                    gradient_scale=1.0 / config.gradient_accumulation_steps,
+                )
+            else:
+                output = model(
+                    input_ids=input_ids,
+                    labels=labels,
+                    attention_mask=attention_mask,
+                    use_cache=False,
+                )
+                loss = output.loss / config.gradient_accumulation_steps
+                if not torch.isfinite(loss):
+                    raise FloatingPointError("non-finite BCNLT training loss")
+                loss.backward()
+                measured_loss = (
+                    float(loss.detach().cpu()) * config.gradient_accumulation_steps
+                )
+            losses.append(measured_loss)
+            boundary = (sample_index + 1) % config.gradient_accumulation_steps == 0
+            final_sample = sample_index + 1 == len(dataset)
+            if boundary or final_sample:
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+                optimizer_steps += 1
+                if optimizer_steps % validation_interval == 0:
+                    if validation_callback is not None:
+                        validation_callback(optimizer_steps)
+                    validation_steps.append(optimizer_steps)
+                if optimizer_steps >= maximum_optimizer_steps:
+                    stop = True
+                    break
+        if sample_index + 1 == len(dataset):
+            completed_epochs += 1
+        if stop:
+            break
+    if optimizer_steps and (not validation_steps or validation_steps[-1] != optimizer_steps):
+        if validation_callback is not None:
+            validation_callback(optimizer_steps)
+        validation_steps.append(optimizer_steps)
+    return TrainingTrace(
+        tuple(losses),
+        optimizer_steps,
+        completed_epochs,
+        tuple(validation_steps),
+        run_identity,
+    )
 
 
 def backward_split_causal_loss(

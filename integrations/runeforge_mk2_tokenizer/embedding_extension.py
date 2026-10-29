@@ -135,6 +135,87 @@ def attach_bcnlt_extension(
     return model
 
 
+def grow_bcnlt_extension(
+    model: nn.Module,
+    old_manifest: Any,
+    new_manifest: Any,
+    definitions: Mapping[str, str],
+    *,
+    seed: int,
+) -> None:
+    old_vocab_size = getattr(old_manifest, "vocab_size", None)
+    old_base_size = getattr(old_manifest, "base_vocab_size", None)
+    if (
+        getattr(new_manifest, "v1_vocab_size", None) != old_vocab_size
+        or getattr(new_manifest, "base_vocab_size", None) != old_base_size
+        or getattr(new_manifest, "v1_manifest_sha256", None)
+        != getattr(old_manifest, "manifest_sha256", None)
+    ):
+        raise ValueError("adaptive manifest does not append to the exact v1 vocabulary")
+    macros = tuple(getattr(new_manifest, "macros", ()))
+    if not macros or [item.id for item in macros] != list(
+        range(old_vocab_size, old_vocab_size + len(macros))
+    ):
+        raise ValueError("adaptive macro IDs must append contiguously")
+    if set(definitions) != {item.name for item in macros}:
+        raise ValueError("macro definitions must exactly match the appended inventory")
+
+    embedding = model.get_input_embeddings()  # type: ignore[attr-defined]
+    output = model.get_output_embeddings()  # type: ignore[attr-defined]
+    if isinstance(embedding, ExtendedEmbedding):
+        embedding_rows = torch.cat(
+            (embedding.base.weight.detach(), embedding.extension.weight.detach()), dim=0
+        )
+    elif isinstance(embedding, nn.Embedding):
+        embedding_rows = embedding.weight.detach()
+    else:
+        raise TypeError("BCNLT growth requires an embedding table")
+    if isinstance(output, ExtendedLMHead):
+        output_rows = torch.cat(
+            (output.base.weight.detach(), output.extension.weight.detach()), dim=0
+        )
+    elif isinstance(output, nn.Linear):
+        output_rows = output.weight.detach()
+    else:
+        raise TypeError("BCNLT growth requires a linear output table")
+    if embedding_rows.shape[0] != old_vocab_size or output_rows.shape[0] != old_vocab_size:
+        raise ValueError("model tables do not match the v1 vocabulary before append")
+
+    frozen_embedding = nn.Embedding.from_pretrained(
+        embedding_rows.clone(), freeze=True
+    ).to(device=embedding_rows.device, dtype=embedding_rows.dtype)
+    frozen_head = nn.Linear(
+        output_rows.shape[1],
+        output_rows.shape[0],
+        bias=False,
+        device=output_rows.device,
+        dtype=output_rows.dtype,
+    )
+    with torch.no_grad():
+        frozen_head.weight.copy_(output_rows)
+    frozen_head.requires_grad_(False)
+    ordered = [definitions[item.name] for item in macros]
+    model.set_input_embeddings(  # type: ignore[attr-defined]
+        ExtendedEmbedding(
+            frozen_embedding,
+            ordered,
+            seed=seed,
+            expected_base_vocab_size=old_vocab_size,
+        )
+    )
+    model.set_output_embeddings(  # type: ignore[attr-defined]
+        ExtendedLMHead(
+            frozen_head,
+            ordered,
+            seed=seed,
+            expected_base_vocab_size=old_vocab_size,
+        )
+    )
+    config = getattr(model, "config", None)
+    if config is not None:
+        config.vocab_size = getattr(new_manifest, "vocab_size")
+
+
 def _initialize_rows(
     destination: torch.Tensor,
     base_weight: torch.Tensor,

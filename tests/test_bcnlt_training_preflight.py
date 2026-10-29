@@ -20,6 +20,8 @@ from integrations.runeforge_mk2_tokenizer.train_bcnlt_adapter import (
     load_bcnlt_adapter_state,
     save_bcnlt_adapter,
     verify_training_preflight,
+    QLoRAConfig,
+    run_bounded_training_trace,
 )
 
 from test_embedding_extension import DEFINITIONS, Manifest, TinyCausalModel
@@ -204,3 +206,58 @@ def test_split_head_chunked_loss_matches_dense_cross_entropy_gradients():
         atol=1e-6,
     )
     assert chunked_head.base.weight.grad is None
+
+
+def test_bounded_trace_stops_at_step_limit_validates_and_checks_resume_identity():
+    class LoopModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.embedding = nn.Embedding(8, 4)
+            self.head = nn.Linear(4, 8)
+
+        def get_output_embeddings(self):
+            return self.head
+
+        def forward(self, *, input_ids, labels, attention_mask, use_cache):
+            logits = self.head(self.embedding(input_ids))
+            loss = F.cross_entropy(
+                logits[:, :-1].reshape(-1, 8), labels[:, 1:].reshape(-1)
+            )
+            return SimpleNamespace(loss=loss)
+
+    dataset = [
+        {"input_ids": [1, 2, 3], "labels": [1, 2, 3], "attention_mask": [1, 1, 1]}
+        for _ in range(5)
+    ]
+    validations = []
+    trace = run_bounded_training_trace(
+        LoopModel(),
+        dataset,
+        QLoRAConfig(target_modules=("head",), gradient_accumulation_steps=1),
+        maximum_optimizer_steps=2,
+        maximum_epochs=1,
+        validation_interval=1,
+        validation_callback=lambda step: validations.append(step),
+        run_identity="same",
+        resume_identity="same",
+        require_cuda=False,
+    )
+
+    assert trace.optimizer_steps == 2
+    assert trace.completed_epochs <= 1
+    assert trace.validation_steps == (1, 2)
+    assert validations == [1, 2]
+    assert all(torch.isfinite(torch.tensor(trace.losses)))
+
+    with pytest.raises(ValueError, match="resume identity"):
+        run_bounded_training_trace(
+            LoopModel(),
+            dataset,
+            QLoRAConfig(target_modules=("head",), gradient_accumulation_steps=1),
+            maximum_optimizer_steps=1,
+            maximum_epochs=1,
+            validation_interval=64,
+            run_identity="new",
+            resume_identity="old",
+            require_cuda=False,
+        )
