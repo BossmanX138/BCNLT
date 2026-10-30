@@ -106,8 +106,11 @@ wsl.exe -d Ubuntu --cd $Repo -- $Py -m scripts.audit_bcnlt_adaptive_vocab `
 ```
 
 Exit code `2` is the expected valid research hard stop for this preliminary
-corpus. The verified preliminary report contains
-`insufficient_shared_candidate_diversity` and `invalid_semantic_payload`. Do not run candidate discovery from
+corpus. The original report incorrectly classified curriculum rows with no
+semantic side as `invalid_semantic_payload`; the corrected audit ignores those
+rows for macro counting while still validating their source and language
+provenance. The verified corrected report contains only
+`insufficient_shared_candidate_diversity`. Do not run candidate discovery from
 this report. A qualifying run needs at least 100 documents, three repositories,
 and 100,000 eligible payload tokens for every configured language before the
 shared-candidate gates can be evaluated.

@@ -122,6 +122,8 @@ def audit_corpus(
         ):
             failures.add("canonical_language_mismatch")
             continue
+        if "semantic_code" not in (record.prompt_mode, record.target_mode):
+            continue
         count = _semantic_payload_base_tokens(record, tokenizer)
         if count is None:
             failures.add("invalid_semantic_payload")

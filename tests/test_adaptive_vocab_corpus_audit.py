@@ -127,6 +127,30 @@ def test_repository_counts_are_unique_and_nontraining_records_do_not_contribute(
     assert validation.document_id not in report.training_source_document_ids
 
 
+def test_training_record_without_a_semantic_side_is_ineligible_not_invalid():
+    document = _document("python", 1)
+    semantic = _record(document)
+    nonsemantic = replace(
+        semantic,
+        record_id="e" * 64,
+        family="mixed_instruction",
+        prompt_mode="mixed",
+        target_mode="text",
+        prompt="Explain the code.",
+        target="It assigns a value.",
+    )
+
+    report = audit_corpus(
+        (document,),
+        (semantic, nonsemantic),
+        _AuditTokenizer(),
+        _config(),
+    )
+
+    assert "invalid_semantic_payload" not in report.failure_codes
+    assert report.by_language["python"].payload_base_tokens == 2
+
+
 def test_language_mismatch_fails_closed_without_counting_the_record():
     document = _document("python", 1)
     record = _record(document)
