@@ -120,6 +120,23 @@ def test_java_calls_use_the_called_name_and_resolve_the_definition():
     assert call.defines in document.index.definitions
 
 
+def test_type_declarations_project_to_shared_type_definitions():
+    adapter = BCNLTMultilingualAdapter(engine=TreeSitterSemanticEngine())
+    document = adapter.parse("class Example {}", language="java", path="Example.java")
+    extraction = adapter.extract(document)
+
+    type_definition = next(
+        unit
+        for unit in extraction.units
+        if unit.event == "DEFINE"
+        and unit.surface == "Example"
+        and unit.ir is not None
+        and unit.ir.kind is IRKind.TYPE
+    )
+    assert type_definition.symbol_id
+    assert extraction.coverage.scopes_balanced
+
+
 def test_bash_return_is_not_also_emitted_as_a_call():
     adapter = BCNLTMultilingualAdapter(engine=TreeSitterSemanticEngine())
     document = adapter.parse(SOURCES["bash"], language="bash", path="core.sh")
@@ -127,6 +144,58 @@ def test_bash_return_is_not_also_emitted_as_a_call():
 
     assert any(unit.event == "RETURN" and unit.surface == "return" for unit in extraction.units)
     assert not any(unit.event == "CALL" and unit.surface == "return" for unit in extraction.units)
+
+
+def test_bash_command_substitution_records_a_balanced_subshell_scope():
+    adapter = BCNLTMultilingualAdapter(engine=TreeSitterSemanticEngine())
+    document = adapter.parse(
+        'value=$(printf "%s" "hello")',
+        language="bash",
+        path="scope.sh",
+    )
+    extraction = adapter.extract(document)
+
+    assert any(unit.event == "SCOPE_ENTER" for unit in extraction.units)
+    assert any(unit.event == "SCOPE_EXIT" for unit in extraction.units)
+    assert extraction.coverage.scopes_balanced
+
+
+def test_surface_child_consumed_by_common_core_rule_is_not_unknown():
+    adapter = BCNLTMultilingualAdapter(engine=TreeSitterSemanticEngine())
+    document = adapter.parse(
+        "const value = object.property;",
+        language="javascript",
+        path="surface.js",
+    )
+    extraction = adapter.extract(document)
+
+    assert any(
+        unit.event == "MEMBER_ACCESS" and unit.surface == "property"
+        for unit in extraction.units
+    )
+    assert not any(
+        unit.event == "UNKNOWN_SEMANTIC"
+        and unit.metadata.get("unknown_node") == "property_identifier"
+        for unit in extraction.units
+    )
+
+
+def test_lexical_children_of_value_literal_are_covered_by_parent_literal():
+    adapter = BCNLTMultilingualAdapter(engine=TreeSitterSemanticEngine())
+    document = adapter.parse(
+        'message = "hello world"',
+        language="python",
+        path="literal.py",
+    )
+    extraction = adapter.extract(document)
+
+    assert any(unit.event == "LITERAL" for unit in extraction.units)
+    assert not any(
+        unit.event == "UNKNOWN_SEMANTIC"
+        and unit.metadata.get("unknown_node")
+        in {"string_start", "string_content", "string_end"}
+        for unit in extraction.units
+    )
 
 
 @pytest.mark.parametrize(

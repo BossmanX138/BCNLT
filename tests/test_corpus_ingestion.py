@@ -77,7 +77,7 @@ def test_source_language_requires_an_exact_canonical_id():
         )
 
 
-def test_populated_legacy_database_requires_a_new_v2_output_path(tmp_path: Path):
+def test_populated_legacy_database_requires_a_new_v3_output_path(tmp_path: Path):
     path = tmp_path / "legacy.sqlite3"
     with sqlite3.connect(path) as connection:
         connection.executescript(
@@ -104,7 +104,7 @@ def test_populated_legacy_database_requires_a_new_v2_output_path(tmp_path: Path)
             """
         )
     original_hash = hashlib.sha256(path.read_bytes()).hexdigest()
-    with pytest.raises(ValueError, match="new v2 output path"):
+    with pytest.raises(ValueError, match="rebuild_required.*new v3 output path"):
         CorpusDatabase(path)
     assert hashlib.sha256(path.read_bytes()).hexdigest() == original_hash
 

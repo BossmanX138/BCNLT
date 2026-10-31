@@ -11,6 +11,7 @@ class IRKind(str, Enum):
     VARIABLE = "variable"
     FUNCTION = "function"
     PARAMETER = "parameter"
+    TYPE = "type"
     CALL = "call"
     ASSIGNMENT = "assignment"
     STATE = "state"
@@ -39,6 +40,7 @@ COMMON_CODING_CONCEPTS = (
     CommonConceptDefinition("variable_definition", "DEFINE", IRKind.VARIABLE),
     CommonConceptDefinition("reference", "REFERENCE", IRKind.VARIABLE),
     CommonConceptDefinition("parameter", "DEFINE", IRKind.PARAMETER),
+    CommonConceptDefinition("type_definition", "DEFINE", IRKind.TYPE),
     CommonConceptDefinition("function", "DEFINE", IRKind.FUNCTION),
     CommonConceptDefinition("call", "CALL", IRKind.CALL),
     CommonConceptDefinition("assignment", "ASSIGN", IRKind.ASSIGNMENT),

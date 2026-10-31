@@ -8,8 +8,26 @@ from pathlib import Path
 from typing import Iterable, Mapping
 
 from .database import CorpusDatabase, SourceDocumentRecord, stable_document_id
-from .filters import FilterDecision, evaluate_python_document
-from bcnlt.languages import resolve_language_id
+from .filters import FilterDecision, evaluate_python_document, evaluate_source_document
+from bcnlt.languages import LANGUAGE_BY_ID, resolve_language_id
+
+
+EXTRACTION_RULE_VERSION = "bcnlt-multilingual-extraction-v1"
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_PARSER_BUNDLE_PATH = _PROJECT_ROOT / "configs" / "bcnlt_parser_bundle_v1.json"
+
+
+def _parser_bundle_identity() -> tuple[str, str]:
+    raw = _PARSER_BUNDLE_PATH.read_bytes()
+    payload = json.loads(raw.decode("utf-8"))
+    return hashlib.sha256(raw).hexdigest(), str(payload["release"])
+
+
+def canonical_registry_entry_sha256(payload: Mapping[str, object]) -> str:
+    excluded = {"registry_entry_sha256", "enabled", "note", "root", "ownership"}
+    canonical_payload = {key: payload[key] for key in sorted(payload) if key not in excluded}
+    canonical = json.dumps(canonical_payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -19,6 +37,13 @@ class SourceSpec:
     revision: str
     upstream_url: str
     canonical_language: str
+    data_dir: str | None = None
+    dialect: str | None = None
+    registry_entry_sha256: str = ""
+    parser_bundle_sha256: str = ""
+    grammar_revision: str = ""
+    semantic_spec_sha256: str = ""
+    extraction_rule_version: str = EXTRACTION_RULE_VERSION
 
     def __post_init__(self) -> None:
         if not self.provider.strip() or not self.name.strip() or not self.upstream_url.strip():
@@ -31,6 +56,40 @@ class SourceSpec:
             raise ValueError("Source canonical language must use an exact registered id") from exc
         if resolved_language != self.canonical_language:
             raise ValueError("Source canonical language must use an exact registered id")
+        definition = LANGUAGE_BY_ID[self.canonical_language]
+        if self.dialect is not None and self.dialect not in definition.dialects:
+            raise ValueError("Source dialect is not registered for its canonical language")
+        parser_bundle_sha256, parser_release = _parser_bundle_identity()
+        from bcnlt.common_core_registry import build_semantic_spec
+
+        semantic_spec_sha256 = build_semantic_spec(self.canonical_language).canonical_hash
+        grammar_revision = f"tree-sitter-language-pack@{parser_release}/{definition.grammar_id}"
+        for field_name, derived in (
+            ("parser_bundle_sha256", parser_bundle_sha256),
+            ("grammar_revision", grammar_revision),
+            ("semantic_spec_sha256", semantic_spec_sha256),
+        ):
+            supplied = getattr(self, field_name)
+            if supplied and supplied != derived:
+                raise ValueError(f"Source {field_name} does not match the pinned BCNLT registry")
+            object.__setattr__(self, field_name, derived)
+        entry_payload = {
+            "provider": self.provider,
+            "name": self.name,
+            "revision": self.revision,
+            "upstream_url": self.upstream_url,
+            "canonical_language": self.canonical_language,
+            "data_dir": self.data_dir,
+            "dialect": self.dialect,
+            "parser_bundle_sha256": self.parser_bundle_sha256,
+            "grammar_revision": self.grammar_revision,
+            "semantic_spec_sha256": self.semantic_spec_sha256,
+            "extraction_rule_version": self.extraction_rule_version,
+        }
+        derived_entry_hash = canonical_registry_entry_sha256(entry_payload)
+        if self.registry_entry_sha256 and self.registry_entry_sha256 != derived_entry_hash:
+            raise ValueError("Source registry_entry_sha256 does not match its canonical entry")
+        object.__setattr__(self, "registry_entry_sha256", derived_entry_hash)
 
 
 def ingest_local_source(
@@ -42,12 +101,19 @@ def ingest_local_source(
     ownership: str,
     license_spdx: str,
     holdout_hashes: Iterable[str] = (),
+    adapter: object | None = None,
 ) -> list[SourceDocumentRecord]:
     source_root = Path(root)
     if not source_root.is_dir():
         raise ValueError(f"Local source root is unavailable: {source_root}")
     admitted: list[SourceDocumentRecord] = []
-    for path in sorted(source_root.rglob("*.py")):
+    extensions = LANGUAGE_BY_ID[spec.canonical_language].accepted_extensions
+    paths = sorted(
+        path
+        for path in source_root.rglob("*")
+        if path.is_file() and path.suffix.lower() in extensions
+    )
+    for path in paths:
         relative = path.relative_to(source_root).as_posix()
         try:
             content = path.read_text(encoding="utf-8")
@@ -63,12 +129,15 @@ def ingest_local_source(
                 str(exc),
             )
             continue
-        decision = evaluate_python_document(
+        decision = evaluate_source_document(
             relative_path=relative,
             content=content,
             license_value=license_spdx,
+            language=spec.canonical_language,
+            dialect=spec.dialect,
             holdout_hashes=holdout_hashes,
             allow_owner_provided=ownership == "owner_provided",
+            adapter=adapter,
         )
         record = _admit_decision(
             database,
@@ -91,11 +160,13 @@ def ingest_stack_stream(
     rows: Iterable[Mapping[str, object]],
     *,
     holdout_hashes: Iterable[str] = (),
+    adapter: object | None = None,
 ) -> list[SourceDocumentRecord]:
     admitted: list[SourceDocumentRecord] = []
     for index, row in enumerate(rows):
         content = str(row.get("content") or "")
-        relative = str(row.get("path") or f"row-{index}.py").replace("\\", "/")
+        default_extension = LANGUAGE_BY_ID[spec.canonical_language].accepted_extensions[0]
+        relative = str(row.get("path") or f"row-{index}{default_extension}").replace("\\", "/")
         repository = str(
             row.get("repository")
             or row.get("max_stars_repo_name")
@@ -115,11 +186,14 @@ def ingest_stack_stream(
             )
             continue
         license_value = row.get("license", row.get("max_stars_repo_licenses"))
-        decision = evaluate_python_document(
+        decision = evaluate_source_document(
             relative_path=relative,
             content=content,
             license_value=license_value,
+            language=spec.canonical_language,
+            dialect=spec.dialect,
             holdout_hashes=holdout_hashes,
+            adapter=adapter,
         )
         record = _admit_decision(
             database,
@@ -142,6 +216,7 @@ def ingest_opencodeinstruct_stream(
     rows: Iterable[Mapping[str, object]],
     *,
     holdout_hashes: Iterable[str] = (),
+    adapter: object | None = None,
 ) -> list[SourceDocumentRecord]:
     admitted: list[SourceDocumentRecord] = []
     repository = f"{spec.name}@{spec.revision}"
@@ -192,11 +267,23 @@ def ingest_opencodeinstruct_stream(
                 f"statuses={status_values}",
             )
             continue
-        decision = evaluate_python_document(
-            relative_path=relative,
-            content=content,
-            license_value="MIT",
-            holdout_hashes=holdout_hashes,
+        decision = (
+            evaluate_source_document(
+                relative_path=relative,
+                content=content,
+                license_value="MIT",
+                language="python",
+                dialect=spec.dialect,
+                holdout_hashes=holdout_hashes,
+                adapter=adapter,
+            )
+            if adapter is not None
+            else evaluate_python_document(
+                relative_path=relative,
+                content=content,
+                license_value="MIT",
+                holdout_hashes=holdout_hashes,
+            )
         )
         if decision.accepted:
             decision = FilterDecision(True, None, "CC-BY-4.0", decision.content_sha256)
@@ -244,6 +331,8 @@ def _admit_decision(
             repository_identity=repository_identity,
             relative_path=relative_path,
             content_sha256=decision.content_sha256,
+            language=spec.canonical_language,
+            registry_entry_sha256=spec.registry_entry_sha256,
         ),
         source_provider=spec.provider,
         source_name=spec.name,
@@ -257,6 +346,12 @@ def _admit_decision(
         ownership=ownership,
         attribution=attribution,
         upstream_url=spec.upstream_url,
+        dialect=spec.dialect,
+        registry_entry_sha256=spec.registry_entry_sha256,
+        parser_bundle_sha256=spec.parser_bundle_sha256,
+        grammar_revision=spec.grammar_revision,
+        semantic_spec_sha256=spec.semantic_spec_sha256,
+        extraction_rule_version=spec.extraction_rule_version,
     )
     database.admit(record)
     return record

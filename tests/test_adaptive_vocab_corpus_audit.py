@@ -223,5 +223,5 @@ def test_cli_refuses_legacy_database_without_writing_partial_report(
     )
 
     assert result == 2
-    assert "legacy corpus database requires a new v2 output path" in capsys.readouterr().err
+    assert "rebuild_required: legacy corpus database requires a new v3 output path" in capsys.readouterr().err
     assert not output.exists()

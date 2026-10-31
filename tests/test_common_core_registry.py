@@ -19,6 +19,7 @@ EXPECTED_CONCEPTS = (
     "variable_definition",
     "reference",
     "parameter",
+    "type_definition",
     "function",
     "call",
     "assignment",

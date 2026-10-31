@@ -162,6 +162,12 @@ class TreeSitterSemanticEngine:
                     return None
             return current
 
+        def cover_named_descendants(node: Any) -> None:
+            for child in node.children:
+                if bool(getattr(child, "is_named", False)):
+                    mapped_nodes.add(node_key(child))
+                cover_named_descendants(child)
+
         def metadata_for(node_type: str) -> dict[str, object]:
             metadata: dict[str, object] = {}
             for uncertainty_rule in uncertainty_rules.get(node_type, ()):
@@ -253,6 +259,16 @@ class TreeSitterSemanticEngine:
                 ]
             for rule, surface_node, surface in matching_rules:
                 mapped_nodes.add(key)
+                if rule.event == "LITERAL" and rule.ir_kind == IRKind.VALUE.value:
+                    cover_named_descendants(node)
+                if surface_node is not None and bool(
+                    getattr(surface_node, "is_named", False)
+                ):
+                    # A named child selected as the semantic surface is already
+                    # accounted for by its parent rule. Counting it again as an
+                    # unknown node unfairly penalizes languages whose grammars
+                    # wrap member, field, or property names in dedicated nodes.
+                    mapped_nodes.add(node_key(surface_node))
                 role = roles.get(rule.surface_field or "")
                 symbol_id = role[1] if role else None
                 defines = symbol_id if role and _role_for(role_rules, node.type, rule.surface_field) == "reference" else None

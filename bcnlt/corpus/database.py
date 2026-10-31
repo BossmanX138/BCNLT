@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-DATABASE_SCHEMA_VERSION = "bcnlt-corpus-database-v2"
+DATABASE_SCHEMA_VERSION = "bcnlt-corpus-database-v3"
 
 
 @dataclass(frozen=True)
@@ -27,6 +27,18 @@ class SourceDocumentRecord:
     ownership: str
     attribution: str
     upstream_url: str
+    dialect: str | None = None
+    registry_entry_sha256: str = "legacy-python"
+    parser_bundle_sha256: str = "legacy-python"
+    grammar_revision: str = "legacy-python"
+    semantic_spec_sha256: str = "legacy-python"
+    extraction_rule_version: str = "legacy-python"
+
+    @property
+    def language(self) -> str:
+        """Return the canonical language id used by the multilingual interface."""
+
+        return self.canonical_language
 
 
 def stable_document_id(
@@ -36,6 +48,8 @@ def stable_document_id(
     repository_identity: str,
     relative_path: str,
     content_sha256: str,
+    language: str = "python",
+    registry_entry_sha256: str = "legacy-python",
 ) -> str:
     payload = {
         "provider": provider,
@@ -43,6 +57,8 @@ def stable_document_id(
         "repository_identity": repository_identity,
         "relative_path": relative_path.replace("\\", "/"),
         "content_sha256": content_sha256,
+        "language": language,
+        "registry_entry_sha256": registry_entry_sha256,
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -81,7 +97,9 @@ class CorpusDatabase:
         )
         if document_count:
             self.connection.close()
-            raise ValueError("legacy corpus database requires a new v2 output path")
+            raise ValueError(
+                "rebuild_required: legacy corpus database requires a new v3 output path"
+            )
         self.connection.executescript(
             """
             DROP TABLE IF EXISTS documents;
@@ -110,7 +128,13 @@ class CorpusDatabase:
                 license_spdx TEXT NOT NULL,
                 ownership TEXT NOT NULL,
                 attribution TEXT NOT NULL,
-                upstream_url TEXT NOT NULL
+                upstream_url TEXT NOT NULL,
+                dialect TEXT,
+                registry_entry_sha256 TEXT NOT NULL,
+                parser_bundle_sha256 TEXT NOT NULL,
+                grammar_revision TEXT NOT NULL,
+                semantic_spec_sha256 TEXT NOT NULL,
+                extraction_rule_version TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS documents_content_sha256
                 ON documents(content_sha256);
@@ -151,11 +175,15 @@ class CorpusDatabase:
             INSERT OR IGNORE INTO documents (
                 document_id, source_provider, source_name, source_revision,
                 canonical_language, repository_identity, relative_path, content_sha256, content,
-                license_spdx, ownership, attribution, upstream_url
+                license_spdx, ownership, attribution, upstream_url, dialect,
+                registry_entry_sha256, parser_bundle_sha256, grammar_revision,
+                semantic_spec_sha256, extraction_rule_version
             ) VALUES (
                 :document_id, :source_provider, :source_name, :source_revision,
                 :canonical_language, :repository_identity, :relative_path, :content_sha256, :content,
-                :license_spdx, :ownership, :attribution, :upstream_url
+                :license_spdx, :ownership, :attribution, :upstream_url, :dialect,
+                :registry_entry_sha256, :parser_bundle_sha256, :grammar_revision,
+                :semantic_spec_sha256, :extraction_rule_version
             )
             """,
             asdict(record),

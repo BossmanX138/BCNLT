@@ -24,7 +24,7 @@ def _load_json(path: Path) -> dict[str, object]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Ingest provenance-gated BCNLT sources")
-    parser.add_argument("--config", default="configs/bcnlt_corpus_sources_v1.json")
+    parser.add_argument("--config", default="configs/bcnlt_corpus_sources_v2.json")
     parser.add_argument("--database", required=True)
     parser.add_argument("--source", action="append", help="source name; repeatable")
     parser.add_argument("--limit", type=int)
@@ -32,8 +32,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     registry = _load_json(Path(args.config))
-    if registry.get("schema_version") != "bcnlt-corpus-sources-v1":
+    schema_version = registry.get("schema_version")
+    if schema_version not in {"bcnlt-corpus-sources-v1", "bcnlt-corpus-sources-v2"}:
         parser.error("unsupported corpus source registry schema")
+    adapter = None
+    if schema_version == "bcnlt-corpus-sources-v2":
+        from bcnlt.adapters.carousel import BCNLTMultilingualAdapter
+        from bcnlt.adapters.tree_sitter import TreeSitterSemanticEngine
+
+        adapter = BCNLTMultilingualAdapter(engine=TreeSitterSemanticEngine())
     selected = set(args.source or [])
     holdouts = set()
     if args.holdout_hashes:
@@ -57,6 +64,15 @@ def main(argv: list[str] | None = None) -> int:
             revision=str(raw["revision"]),
             upstream_url=str(raw["upstream_url"]),
             canonical_language=str(raw["canonical_language"]),
+            data_dir=str(raw["data_dir"]) if raw.get("data_dir") else None,
+            dialect=str(raw["dialect"]) if raw.get("dialect") else None,
+            registry_entry_sha256=str(raw.get("registry_entry_sha256", "")),
+            parser_bundle_sha256=str(raw.get("parser_bundle_sha256", "")),
+            grammar_revision=str(raw.get("grammar_revision", "")),
+            semantic_spec_sha256=str(raw.get("semantic_spec_sha256", "")),
+            extraction_rule_version=str(
+                raw.get("extraction_rule_version", "bcnlt-multilingual-extraction-v1")
+            ),
         )
         if spec.provider == "local":
             admitted = ingest_local_source(
@@ -67,6 +83,7 @@ def main(argv: list[str] | None = None) -> int:
                 ownership=str(raw.get("ownership", "owner_provided")),
                 license_spdx="owner_provided",
                 holdout_hashes=holdouts,
+                adapter=adapter,
             )
         else:
             if sys.platform == "win32":
@@ -84,19 +101,29 @@ def main(argv: list[str] | None = None) -> int:
                 "streaming": True,
                 "revision": spec.revision,
             }
-            if raw.get("data_dir"):
-                kwargs["data_dir"] = raw["data_dir"]
+            if spec.data_dir:
+                kwargs["data_dir"] = spec.data_dir
             rows = load_dataset(**kwargs)
             if args.limit is not None:
                 rows = itertools.islice(rows, args.limit)
             admitted = (
-                ingest_stack_stream(database, spec, rows, holdout_hashes=holdouts)
+                ingest_stack_stream(
+                    database,
+                    spec,
+                    rows,
+                    holdout_hashes=holdouts,
+                    adapter=adapter,
+                )
                 if spec.name == "bigcode/the-stack-dedup"
                 else ingest_opencodeinstruct_stream(
-                    database, spec, rows, holdout_hashes=holdouts
+                    database,
+                    spec,
+                    rows,
+                    holdout_hashes=holdouts,
+                    adapter=adapter,
                 )
             )
-        totals[spec.name] = len(admitted)
+        totals[f"{spec.name}:{spec.canonical_language}"] = len(admitted)
     print(
         json.dumps(
             {
