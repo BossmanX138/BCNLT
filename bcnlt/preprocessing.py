@@ -70,7 +70,8 @@ class SemanticPreprocessor:
             self._memories[memory_key] = memory
         wildcard = WildcardResolver(memory)
         assessments = tuple(
-            self._assess(document, unit, raw_units, wildcard) for unit in raw_units
+            self._assess(document, index, unit, raw_units, wildcard)
+            for index, unit in enumerate(raw_units)
         )
         annotated = tuple(assessment.annotated_unit() for assessment in assessments)
         records = records_from_assessments(assessments)
@@ -84,6 +85,7 @@ class SemanticPreprocessor:
     def _assess(
         self,
         document: SourceDocument,
+        unit_index: int,
         unit: ContextualUnit,
         all_units: list[ContextualUnit],
         wildcard: WildcardResolver,
@@ -92,6 +94,7 @@ class SemanticPreprocessor:
             unit,
             document,
             all_units,
+            target_index=unit_index,
             learned_definitions=wildcard.memory,
         )
         initial = result.scores[0]

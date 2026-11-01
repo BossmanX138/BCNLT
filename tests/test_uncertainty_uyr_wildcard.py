@@ -149,6 +149,35 @@ def test_context_without_evidence_does_not_improve_confidence():
     assert result.final_confidence == result.initial_confidence
 
 
+def test_uyr_uses_explicit_instance_index_for_equal_units():
+    first = ContextualUnit(
+        surface="mystery",
+        event="CALL",
+        scope="module",
+        span=(1, 0, 1, 7),
+        ast_relation="call.function",
+        metadata={"dynamic_call": True},
+    )
+    second = ContextualUnit(
+        surface="mystery",
+        event="CALL",
+        scope="module",
+        span=(1, 0, 1, 7),
+        ast_relation="call.function",
+        metadata={"dynamic_call": True},
+    )
+    document = SourceDocument("sample.py", "mystery()", None, ProjectIndex(), language="python")
+
+    result = UYRResolver(HeuristicUncertaintyScorer()).resolve(
+        second,
+        document,
+        [first, second],
+        target_index=1,
+    )
+
+    assert result.unit is second
+
+
 def test_wildcard_signature_includes_language_and_spec_identity(tmp_path: Path):
     unit = ContextualUnit("mystery", "UNKNOWN_SEMANTIC", "module", (1, 0, 1, 7))
     python_memory = WildcardMemory(tmp_path / "python.jsonl", language="python", semantic_spec_sha256="a" * 64)

@@ -95,6 +95,7 @@ class UYRResolver:
         document: SourceDocument,
         all_units: list[ContextualUnit],
         *,
+        target_index: int | None = None,
         learned_definitions: LearnedDefinitionStore | None = None,
     ) -> UYRResult:
         initial = self.scorer.score(unit, document.index)
@@ -133,7 +134,10 @@ class UYRResolver:
                 confidence = min(0.71, max(confidence, learned.confidence))
                 uncertainty = 1.0 - confidence
 
-        target_index = all_units.index(unit)
+        if target_index is None:
+            target_index = all_units.index(unit)
+        elif not 0 <= target_index < len(all_units) or all_units[target_index] is not unit:
+            raise ValueError("UYR target index must identify the exact unit instance")
         window = 2
         while (
             confidence < self.config.confidence_threshold
