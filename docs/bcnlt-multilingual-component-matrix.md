@@ -49,7 +49,7 @@ This inventory covers every tracked Python module under `bcnlt/`, every Runeforg
 | `bcnlt/corpus/tasks/semantic_to_code.py` | carousel-connected | `tests/test_curriculum_generation.py` |
 | `bcnlt/corpus/tasks/structural_reasoning.py` | carousel-connected | `tests/test_curriculum_generation.py` |
 | `bcnlt/events.py` | language-neutral unchanged | `tests/test_semantic_record.py` |
-| `bcnlt/full_run_gate.py` | language-neutral unchanged | `tests/test_full_run_gate.py` |
+| `bcnlt/full_run_gate.py` | carousel-connected | `tests/test_full_run_gate.py` |
 | `bcnlt/hf_tokenizer.py` | language-neutral unchanged | `tests/test_hf_tokenizer.py` |
 | `bcnlt/incremental.py` | carousel-connected | `tests/test_cache_incremental.py` |
 | `bcnlt/ir.py` | language-neutral unchanged | `tests/test_common_core_language_projection.py` |
@@ -57,6 +57,7 @@ This inventory covers every tracked Python module under `bcnlt/`, every Runeforg
 | `bcnlt/meaning_eval.py` | carousel-connected | `tests/test_meaning_eval.py` |
 | `bcnlt/model_eval.py` | carousel-connected | `tests/test_model_eval.py` |
 | `bcnlt/multilingual_eval.py` | carousel-connected | `tests/test_multilingual_eval.py` |
+| `bcnlt/multilingual_training.py` | carousel-connected | `tests/test_multilingual_training.py` |
 | `bcnlt/parsers/__init__.py` | carousel-connected | `tests/test_parser_bundle.py` |
 | `bcnlt/parsers/bundle.py` | carousel-connected | `tests/test_parser_bundle.py` |
 | `bcnlt/preprocessing.py` | carousel-connected | `tests/test_multilingual_subsystem_compatibility.py` |
@@ -74,7 +75,7 @@ This inventory covers every tracked Python module under `bcnlt/`, every Runeforg
 | `integrations/runeforge_mk2_tokenizer/__init__.py` | language-neutral unchanged | `tests/test_bcnlt_training_preflight.py` |
 | `integrations/runeforge_mk2_tokenizer/embedding_extension.py` | language-neutral unchanged | `tests/test_embedding_extension.py` |
 | `integrations/runeforge_mk2_tokenizer/merge_bcnlt_adapter.py` | language-neutral unchanged | `tests/test_embedding_extension.py` |
-| `integrations/runeforge_mk2_tokenizer/train_bcnlt_adapter.py` | language-neutral unchanged | `tests/test_bcnlt_training_preflight.py` |
+| `integrations/runeforge_mk2_tokenizer/train_bcnlt_adapter.py` | carousel-connected | `tests/test_bcnlt_training_preflight.py`, `tests/test_multilingual_training.py` |
 
 ## Command-line integration modules
 
@@ -83,6 +84,9 @@ This inventory covers every tracked Python module under `bcnlt/`, every Runeforg
 | `scripts/build_semantic_pair_database.py` | carousel-connected | `tests/test_semantic_db.py` |
 | `scripts/import_bcnlt_observations.py` | carousel-connected | `tests/test_semantic_db.py` |
 | `scripts/run_bcnlt_head_to_head_mk2.py` | carousel-connected | `tests/test_model_eval.py` |
+| `scripts/build_bcnlt_multilingual_corpus.ps1` | carousel-connected | `tests/test_multilingual_training.py` |
+| `scripts/run_bcnlt_multilingual_smoke.ps1` | carousel-connected | `tests/test_multilingual_training.py` |
+| `scripts/launch_bcnlt_multilingual_full_run.ps1` | carousel-connected | `tests/test_multilingual_training.py`, `tests/test_full_run_gate.py` |
 
 ## Generated artifacts
 

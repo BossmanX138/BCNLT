@@ -194,7 +194,9 @@ class PackedBCNLTDataset:
         if self.manifest.tokenizer_manifest_sha256 != expected_tokenizer_digest:
             raise ValueError("tokenizer manifest digest does not match packed dataset")
         _verify_manifest_files(self.root, self.manifest)
-        self._entries: list[tuple[PackedShardManifest, int, int, int, str, str, str]] = []
+        self._entries: list[
+            tuple[PackedShardManifest, int, int, int, str, str, str, str]
+        ] = []
         for shard in self.manifest.shards:
             if shard.split != split:
                 continue
@@ -218,15 +220,27 @@ class PackedBCNLTDataset:
                     (
                         shard, token_offset, length, prompt_length,
                         str(metadata["record_id"]), str(metadata["target_mode"]),
-                        str(metadata["language"]),
+                        str(metadata["language"]), str(metadata["family"]),
                     )
                 )
 
     def __len__(self) -> int:
         return len(self._entries)
 
+    def metadata(self, index: int) -> dict[str, str]:
+        entry = self._entries[index]
+        return {
+            "record_id": entry[4],
+            "target_mode": entry[5],
+            "language": entry[6],
+            "family": entry[7],
+        }
+
     def __getitem__(self, index: int) -> dict[str, object]:
-        shard, offset, length, prompt_length, record_id, target_mode, language = self._entries[index]
+        (
+            shard, offset, length, prompt_length, record_id, target_mode,
+            language, family,
+        ) = self._entries[index]
         binary = self.root / shard.binary_path
         with binary.open("rb") as handle:
             handle.seek(offset * 4)
@@ -236,9 +250,7 @@ class PackedBCNLTDataset:
         ids = list(struct.unpack(f"<{length}I", payload)) if length else []
         _validate_token_ids(ids, self.manifest.tokenizer_vocab_size)
         return {
-            "record_id": record_id,
-            "target_mode": target_mode,
-            "language": language,
+            **self.metadata(index),
             "input_ids": ids,
             "labels": [-100] * prompt_length + ids[prompt_length:],
             "attention_mask": [1] * len(ids),

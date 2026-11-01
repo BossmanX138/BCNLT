@@ -60,6 +60,7 @@ def test_preflight_requires_exact_hashes_cuda_extensions_and_lora():
     )
 
     assert report.passed
+    assert report.lora_adapter_count == 1
     assert report.extension_trainable_parameters > 0
     assert report.lora_trainable_parameters > 0
     assert report.frozen_base_parameters > 0
@@ -68,6 +69,15 @@ def test_preflight_requires_exact_hashes_cuda_extensions_and_lora():
     with pytest.raises(ValueError, match="corpus_manifest_sha256"):
         verify_training_preflight(
             model, expected=_lineage(), observed=bad, cuda_available=True
+        )
+
+    model.peft_config = {"python": object(), "rust": object()}
+    with pytest.raises(ValueError, match="exactly one LoRA adapter"):
+        verify_training_preflight(
+            model,
+            expected=_lineage(),
+            observed=_lineage(),
+            cuda_available=True,
         )
     with pytest.raises(RuntimeError, match="CUDA"):
         verify_training_preflight(
@@ -114,6 +124,7 @@ def test_adapter_save_keeps_sparse_and_lora_weights_with_lineage(tmp_path: Path)
     assert json.loads(artifact.lineage_path.read_text())["base_model_sha256"] == "1" * 64
     assert (output / "tokenizer" / "bcnlt_tokenizer_manifest.json").is_file()
     assert tokenizer.is_dir()
+    assert not any(path.is_dir() and path.name in {"python", "rust"} for path in output.iterdir())
     with pytest.raises(FileExistsError):
         save_bcnlt_adapter(model, output, tokenizer, _lineage())
 
@@ -231,6 +242,7 @@ def test_bounded_trace_stops_at_step_limit_validates_and_checks_resume_identity(
         for _ in range(5)
     ]
     validations = []
+    checkpoints = {}
     trace = run_bounded_training_trace(
         LoopModel(),
         dataset,
@@ -239,6 +251,8 @@ def test_bounded_trace_stops_at_step_limit_validates_and_checks_resume_identity(
         maximum_epochs=1,
         validation_interval=1,
         validation_callback=lambda step: validations.append(step),
+        checkpoint_interval=1,
+        checkpoint_callback=lambda step, state: checkpoints.setdefault(step, state),
         run_identity="same",
         resume_identity="same",
         require_cuda=False,
@@ -248,7 +262,23 @@ def test_bounded_trace_stops_at_step_limit_validates_and_checks_resume_identity(
     assert trace.completed_epochs <= 1
     assert trace.validation_steps == (1, 2)
     assert validations == [1, 2]
+    assert trace.checkpoint_steps == (1, 2)
+    assert set(checkpoints) == {1, 2}
     assert all(torch.isfinite(torch.tensor(trace.losses)))
+
+    resumed = run_bounded_training_trace(
+        LoopModel(),
+        dataset,
+        QLoRAConfig(target_modules=("head",), gradient_accumulation_steps=1),
+        maximum_optimizer_steps=2,
+        maximum_epochs=1,
+        validation_interval=1,
+        run_identity="same",
+        resume_identity="same",
+        resume_state=checkpoints[1],
+        require_cuda=False,
+    )
+    assert resumed.optimizer_steps == 2
 
     with pytest.raises(ValueError, match="resume identity"):
         run_bounded_training_trace(

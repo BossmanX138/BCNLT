@@ -2,6 +2,47 @@
 
 This workflow trains a derived Runeforge Mk2 adapter on the native BCNLT hybrid tokenizer. The preserved Runeforge Mk2 checkpoint is read-only. Sparse BCNLT embedding and output rows plus LoRA weights are saved as a standalone adapter; any merged checkpoint is written to a new staging directory.
 
+## Multilingual v1 recipe
+
+The current multilingual path trains one shared Runeforge adapter across Python, JavaScript, TypeScript, C, C++, C#, Java, Go, Rust, PHP, Ruby, Kotlin, Swift, and Bash. It does not create language-specific LoRA directories. The sampler rotates through every language and all six curriculum families while one sparse BCNLT embedding/output extension and one LoRA remain trainable.
+
+The authoritative configuration is split into bounded smoke and full-run files:
+
+- `configs/runeforge_mk2_bcnlt_multilingual_smoke_v1.json`: seed 1729, microbatch 1, gradient accumulation 8, and exactly 128 optimizer steps.
+- `configs/runeforge_mk2_bcnlt_multilingual_full_v1.json`: one complete epoch with validation and checkpoints every 500 optimizer steps.
+
+Both use 4,096-token sequences, AdamW, learning rate `2e-4`, 3% linear warmup followed by cosine decay, and LoRA rank 16, alpha 32, dropout 0 over `q_proj`, `k_proj`, `v_proj`, `o_proj`, `gate_proj`, `up_proj`, and `down_proj`.
+
+Build a content-addressed smoke corpus first. The command samples 100 live rows from every pinned language partition, ingests the v2 source registry, generates and admits the six task families, packs the native tokenizer streams, and refuses a corpus without all 84 language/family cells or 256 held-out validation rows per language.
+
+```powershell
+.\scripts\build_bcnlt_multilingual_corpus.ps1 `
+  -TokenizerArtifact /mnt/d/BCNLT-runs/runeforge-mk2-bcnlt-v1/tokenizer `
+  -OutputRoot /mnt/d/BCNLT-runs/runeforge-mk2-bcnlt-multilingual-v1 `
+  -PolicyProfile smoke
+```
+
+After creating exact compatibility and smoke lineage files for the two training configs, run the one-step VRAM check and then the 128-step smoke. The second phase measures the same 256 held-out examples per language before and after training. Promotion requires finite loss, at least 2% improvement between the first and last 32 optimizer-step means, and no language final loss above 125% of its initial loss.
+
+```powershell
+.\scripts\run_bcnlt_multilingual_smoke.ps1 `
+  -TokenizerArtifact <wsl-tokenizer-path> `
+  -PackedDataset <wsl-packed-path> `
+  -SourceSample <source-sample.json> `
+  -PackedAudit <per-language-validation.json> `
+  -CompatibilityLineage <one-step-lineage.json> `
+  -SmokeLineage <multilingual-smoke-lineage.json> `
+  -Output <new-smoke-adapter-path>
+```
+
+Full training uses handoff schema `bcnlt-full-run-handoff-v2`. It hashes the parser bundle, all 14 semantic specs, source registry, tokenizer, corpus, per-language validation, preserved base identity, standalone adapter, smoke evidence, frozen evaluations, promotion decision, and full training config. Any missing or changed file blocks validation and resume. The launcher remains validation-only unless `-StartTraining` is present:
+
+```powershell
+.\scripts\launch_bcnlt_multilingual_full_run.ps1 -Handoff <handoff-v2.json>
+```
+
+Task 16 prepares and tests this guarded path. It does not authorize or start the 140,000-record full run; that begins only after the source sample, packed-corpus audit, 128-step smoke promotion, frozen evaluation, and whole-branch review all pass.
+
 ## Current live gate
 
 Hugging Face authentication and source access are working. The corrected v4

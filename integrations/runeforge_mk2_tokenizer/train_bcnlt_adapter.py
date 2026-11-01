@@ -15,6 +15,12 @@ from torch import nn
 from torch.nn import functional as F
 
 from bcnlt.corpus.packing import PackedBCNLTDataset
+from bcnlt.multilingual_training import (
+    LanguageBalancedSampler,
+    MultilingualTrainingConfig,
+    SmokeMetrics,
+    evaluate_smoke_gate,
+)
 
 from .embedding_extension import ExtendedLMHead, attach_bcnlt_extension
 
@@ -65,6 +71,7 @@ class TrainingLineage:
 @dataclass(frozen=True)
 class TrainingPreflightReport:
     passed: bool
+    lora_adapter_count: int
     extension_trainable_parameters: int
     lora_trainable_parameters: int
     frozen_base_parameters: int
@@ -88,6 +95,24 @@ class QLoRAConfig:
     maximum_sequence_tokens: int = 4096
     learning_rate: float = 2e-4
     gradient_accumulation_steps: int = 8
+    microbatch_size: int = 1
+    optimizer: str = "adamw"
+    epochs: int = 1
+    warmup_ratio: float = 0.03
+    scheduler: str = "cosine"
+    validation_interval_optimizer_steps: int = 500
+    checkpoint_interval_optimizer_steps: int = 500
+    seed: int = 1729
+
+    def __post_init__(self) -> None:
+        if not self.target_modules:
+            raise ValueError("at least one LoRA target module is required")
+        if self.rank <= 0 or self.alpha <= 0 or self.maximum_sequence_tokens <= 0:
+            raise ValueError("LoRA and sequence dimensions must be positive")
+        if self.learning_rate <= 0 or self.gradient_accumulation_steps <= 0:
+            raise ValueError("learning rate and gradient accumulation must be positive")
+        if not 0.0 <= self.warmup_ratio < 1.0:
+            raise ValueError("warmup ratio must be in [0, 1)")
 
 
 @dataclass(frozen=True)
@@ -97,6 +122,7 @@ class TrainingTrace:
     completed_epochs: int
     validation_steps: tuple[int, ...]
     run_identity: str | None
+    checkpoint_steps: tuple[int, ...] = ()
 
 
 def load_qlora_model(
@@ -206,8 +232,11 @@ def run_bounded_training_trace(
     maximum_epochs: int = 1,
     validation_interval: int = 64,
     validation_callback=None,
+    checkpoint_interval: int | None = None,
+    checkpoint_callback=None,
     run_identity: str | None = None,
     resume_identity: str | None = None,
+    resume_state: dict[str, Any] | None = None,
     require_cuda: bool = True,
 ) -> TrainingTrace:
     """Run the shared bounded optimizer loop and record validation boundaries."""
@@ -215,6 +244,9 @@ def run_bounded_training_trace(
         raise ValueError("maximum_optimizer_steps must be positive")
     if maximum_epochs <= 0 or validation_interval <= 0:
         raise ValueError("epoch and validation limits must be positive")
+    checkpoint_interval = checkpoint_interval or maximum_optimizer_steps
+    if checkpoint_interval <= 0:
+        raise ValueError("checkpoint interval must be positive")
     if resume_identity is not None and resume_identity != run_identity:
         raise ValueError("resume identity does not match this training run")
     if require_cuda and not torch.cuda.is_available():
@@ -224,17 +256,39 @@ def run_bounded_training_trace(
     optimizer = torch.optim.AdamW(
         list(trainable_parameters(model)), lr=config.learning_rate
     )
+    scheduler = _cosine_scheduler(
+        optimizer,
+        maximum_optimizer_steps=maximum_optimizer_steps,
+        warmup_ratio=config.warmup_ratio,
+    )
     model.train()
     device = next(model.parameters()).device
     optimizer.zero_grad(set_to_none=True)
     losses: list[float] = []
     optimizer_steps = 0
+    if resume_state is not None:
+        if resume_state.get("run_identity") != run_identity:
+            raise ValueError("resume checkpoint run identity does not match")
+        state = resume_state.get("model_state")
+        if not isinstance(state, dict):
+            raise ValueError("resume checkpoint model state is missing")
+        model.load_state_dict(state, strict=False)
+        optimizer.load_state_dict(resume_state["optimizer_state"])
+        scheduler.load_state_dict(resume_state["scheduler_state"])
+        optimizer_steps = int(resume_state.get("optimizer_steps", 0))
+        losses = [float(value) for value in resume_state.get("losses", [])]
+        if not 0 <= optimizer_steps < maximum_optimizer_steps:
+            raise ValueError("resume checkpoint step is outside the requested run")
+    resume_skip_examples = optimizer_steps * config.gradient_accumulation_steps
     output_head = model.get_output_embeddings()  # type: ignore[attr-defined]
     completed_epochs = 0
     validation_steps: list[int] = []
+    checkpoint_steps: list[int] = []
     stop = False
     for _epoch in range(maximum_epochs):
         for sample_index in range(len(dataset)):
+            if _epoch == 0 and sample_index < resume_skip_examples:
+                continue
             sample = dataset[sample_index]  # type: ignore[index]
             input_ids = torch.tensor(
                 [sample["input_ids"]], dtype=torch.long, device=device
@@ -272,12 +326,27 @@ def run_bounded_training_trace(
             final_sample = sample_index + 1 == len(dataset)
             if boundary or final_sample:
                 optimizer.step()
+                scheduler.step()
                 optimizer.zero_grad(set_to_none=True)
                 optimizer_steps += 1
                 if optimizer_steps % validation_interval == 0:
                     if validation_callback is not None:
                         validation_callback(optimizer_steps)
                     validation_steps.append(optimizer_steps)
+                if optimizer_steps % checkpoint_interval == 0:
+                    if checkpoint_callback is not None:
+                        checkpoint_callback(
+                            optimizer_steps,
+                            _checkpoint_state(
+                                model,
+                                optimizer,
+                                scheduler,
+                                optimizer_steps=optimizer_steps,
+                                losses=losses,
+                                run_identity=run_identity,
+                            ),
+                        )
+                    checkpoint_steps.append(optimizer_steps)
                 if optimizer_steps >= maximum_optimizer_steps:
                     stop = True
                     break
@@ -289,12 +358,27 @@ def run_bounded_training_trace(
         if validation_callback is not None:
             validation_callback(optimizer_steps)
         validation_steps.append(optimizer_steps)
+    if optimizer_steps and (not checkpoint_steps or checkpoint_steps[-1] != optimizer_steps):
+        if checkpoint_callback is not None:
+            checkpoint_callback(
+                optimizer_steps,
+                _checkpoint_state(
+                    model,
+                    optimizer,
+                    scheduler,
+                    optimizer_steps=optimizer_steps,
+                    losses=losses,
+                    run_identity=run_identity,
+                ),
+            )
+        checkpoint_steps.append(optimizer_steps)
     return TrainingTrace(
         tuple(losses),
         optimizer_steps,
         completed_epochs,
         tuple(validation_steps),
         run_identity,
+        tuple(checkpoint_steps),
     )
 
 
@@ -435,6 +519,10 @@ def verify_training_preflight(
     if not cuda_available:
         raise RuntimeError("CUDA is required for Runeforge BCNLT training")
 
+    adapter_count = lora_adapter_count(model)
+    if adapter_count != 1:
+        raise ValueError(f"exactly one LoRA adapter is required, found {adapter_count}")
+
     extension = 0
     lora = 0
     frozen_base = 0
@@ -454,7 +542,63 @@ def verify_training_preflight(
         raise ValueError("no trainable LoRA parameters")
     if frozen_base <= 0:
         raise ValueError("no frozen base embedding/output parameters detected")
-    return TrainingPreflightReport(True, extension, lora, frozen_base, observed)
+    return TrainingPreflightReport(
+        True, adapter_count, extension, lora, frozen_base, observed
+    )
+
+
+def lora_adapter_count(model: nn.Module) -> int:
+    peft_config = getattr(model, "peft_config", None)
+    if isinstance(peft_config, dict):
+        return len(peft_config)
+    if peft_config is not None:
+        try:
+            return len(peft_config)
+        except TypeError:
+            return 1
+    return int(any("lora_" in name.lower() for name, _ in model.named_parameters()))
+
+
+def _cosine_scheduler(
+    optimizer: torch.optim.Optimizer,
+    *,
+    maximum_optimizer_steps: int,
+    warmup_ratio: float,
+) -> torch.optim.lr_scheduler.LambdaLR:
+    warmup_steps = max(1, math.ceil(maximum_optimizer_steps * warmup_ratio))
+
+    def multiplier(step: int) -> float:
+        if step < warmup_steps:
+            return (step + 1) / warmup_steps
+        remaining = max(1, maximum_optimizer_steps - warmup_steps)
+        progress = min(1.0, (step - warmup_steps + 1) / remaining)
+        return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, multiplier)
+
+
+def _checkpoint_state(
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler.LambdaLR,
+    *,
+    optimizer_steps: int,
+    losses: Sequence[float],
+    run_identity: str | None,
+) -> dict[str, Any]:
+    return {
+        "schema_version": "bcnlt-training-checkpoint-v1",
+        "run_identity": run_identity,
+        "optimizer_steps": optimizer_steps,
+        "losses": list(losses),
+        "model_state": {
+            name: tensor.detach().cpu()
+            for name, tensor in model.state_dict().items()
+            if "extension" in name or "lora_" in name.lower()
+        },
+        "optimizer_state": optimizer.state_dict(),
+        "scheduler_state": scheduler.state_dict(),
+    }
 
 
 def trainable_parameters(model: nn.Module):
@@ -655,9 +799,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-lineage", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--split", default="train")
-    parser.add_argument("--maximum-optimizer-steps", type=int, required=True)
+    parser.add_argument("--validation-split", default="validation")
+    parser.add_argument("--maximum-optimizer-steps", type=int)
     parser.add_argument("--seed", type=int, default=1729)
     parser.add_argument("--engine", default="auto")
+    parser.add_argument("--resume")
+    parser.add_argument("--resume-sha256")
     args = parser.parse_args(argv)
 
     if args.engine in {"auto", "unsloth"}:
@@ -670,17 +817,44 @@ def main(argv: list[str] | None = None) -> int:
     from bcnlt.tokenizer import BCNLTTokenizer
 
     config_raw = json.loads(Path(args.training_config).read_text(encoding="utf-8"))
-    config = QLoRAConfig(
-        target_modules=tuple(config_raw["target_modules"]),
-        rank=int(config_raw.get("rank", 16)),
-        alpha=int(config_raw.get("alpha", 32)),
-        dropout=float(config_raw.get("dropout", 0.0)),
-        maximum_sequence_tokens=int(config_raw.get("maximum_sequence_tokens", 4096)),
-        learning_rate=float(config_raw.get("learning_rate", 2e-4)),
-        gradient_accumulation_steps=int(
-            config_raw.get("gradient_accumulation_steps", 8)
-        ),
-    )
+    multilingual_config = None
+    if config_raw.get("schema_version") == "bcnlt-multilingual-training-v1":
+        multilingual_config = MultilingualTrainingConfig.from_dict(config_raw)
+        if args.seed != multilingual_config.seed:
+            raise ValueError("CLI seed does not match the multilingual training config")
+        config = QLoRAConfig(
+            target_modules=multilingual_config.target_modules,
+            rank=multilingual_config.lora_rank,
+            alpha=multilingual_config.lora_alpha,
+            dropout=multilingual_config.lora_dropout,
+            maximum_sequence_tokens=multilingual_config.maximum_sequence_tokens,
+            learning_rate=multilingual_config.learning_rate,
+            gradient_accumulation_steps=multilingual_config.gradient_accumulation_steps,
+            microbatch_size=multilingual_config.microbatch_size,
+            optimizer=multilingual_config.optimizer,
+            epochs=multilingual_config.epochs,
+            warmup_ratio=multilingual_config.warmup_ratio,
+            scheduler=multilingual_config.scheduler,
+            validation_interval_optimizer_steps=(
+                multilingual_config.validation_interval_optimizer_steps
+            ),
+            checkpoint_interval_optimizer_steps=(
+                multilingual_config.checkpoint_interval_optimizer_steps
+            ),
+            seed=multilingual_config.seed,
+        )
+    else:
+        config = QLoRAConfig(
+            target_modules=tuple(config_raw["target_modules"]),
+            rank=int(config_raw.get("rank", 16)),
+            alpha=int(config_raw.get("alpha", 32)),
+            dropout=float(config_raw.get("dropout", 0.0)),
+            maximum_sequence_tokens=int(config_raw.get("maximum_sequence_tokens", 4096)),
+            learning_rate=float(config_raw.get("learning_rate", 2e-4)),
+            gradient_accumulation_steps=int(
+                config_raw.get("gradient_accumulation_steps", 8)
+            ),
+        )
     tokenizer_root = Path(args.tokenizer_artifact)
     tokenizer_manifest_path = tokenizer_root / "bcnlt_tokenizer_manifest.json"
     tokenizer = BCNLTTokenizer.from_pretrained(tokenizer_root, args.base_model)
@@ -718,28 +892,228 @@ def main(argv: list[str] | None = None) -> int:
         args.split,
         expected_tokenizer_digest=manifest.manifest_sha256,
     )
-    losses = run_training_steps(
+    maximum_optimizer_steps = args.maximum_optimizer_steps
+    training_dataset: Sequence[dict[str, Any]] = dataset
+    initial_language_losses: dict[str, float] = {}
+    final_language_losses: dict[str, float] = {}
+    validation_examples: dict[str, int] = {}
+    global_validation_losses: list[float] = []
+    full_validation_history: list[dict[str, object]] = []
+    validation_callback = None
+    if multilingual_config is not None:
+        if multilingual_config.run_kind == "smoke":
+            expected_steps = multilingual_config.maximum_optimizer_steps or 0
+            if maximum_optimizer_steps is not None and maximum_optimizer_steps != expected_steps:
+                raise ValueError("CLI smoke step limit does not match the training config")
+            maximum_optimizer_steps = expected_steps
+            sampler = LanguageBalancedSampler(
+                dataset,
+                languages=multilingual_config.languages,
+                families=multilingual_config.families,
+                seed=multilingual_config.seed,
+            )
+            indices = sampler.sample_indices(
+                maximum_optimizer_steps * config.gradient_accumulation_steps
+            )
+            training_dataset = [dataset[index] for index in indices]
+            validation = PackedBCNLTDataset(
+                args.packed_dataset,
+                args.validation_split,
+                expected_tokenizer_digest=manifest.manifest_sha256,
+            )
+            initial_language_losses, validation_examples = _language_validation_losses(
+                model,
+                validation,
+                languages=multilingual_config.languages,
+                examples_per_language=multilingual_config.validation_examples_per_language,
+            )
+            validation_indices = _language_validation_indices(
+                validation,
+                languages=multilingual_config.languages,
+                examples_per_language=multilingual_config.validation_examples_per_language,
+            )
+            validation_cycle = [
+                validation_indices[language][round_index]
+                for round_index in range(multilingual_config.validation_examples_per_language)
+                for language in multilingual_config.languages
+            ]
+
+            def validation_callback(step: int) -> None:
+                index = validation_cycle[(step - 1) % len(validation_cycle)]
+                global_validation_losses.append(
+                    evaluate_packed_loss(model, [validation[index]])
+                )
+        else:
+            expected_steps = math.ceil(
+                len(dataset) / config.gradient_accumulation_steps
+            )
+            if maximum_optimizer_steps is not None and maximum_optimizer_steps != expected_steps:
+                raise ValueError("full-run step limit does not match the one-epoch dataset budget")
+            maximum_optimizer_steps = expected_steps
+            validation = PackedBCNLTDataset(
+                args.packed_dataset,
+                args.validation_split,
+                expected_tokenizer_digest=manifest.manifest_sha256,
+            )
+
+            def validation_callback(step: int) -> None:
+                losses_by_language, counts = _language_validation_losses(
+                    model,
+                    validation,
+                    languages=multilingual_config.languages,
+                    examples_per_language=(
+                        multilingual_config.validation_examples_per_language
+                    ),
+                )
+                full_validation_history.append(
+                    {
+                        "optimizer_step": step,
+                        "losses_by_language": losses_by_language,
+                        "validation_examples": counts,
+                    }
+                )
+    if maximum_optimizer_steps is None:
+        raise ValueError("maximum optimizer steps are required for legacy training configs")
+    resume_state = None
+    if bool(args.resume) != bool(args.resume_sha256):
+        raise ValueError("resume path and SHA-256 are both required")
+    if args.resume:
+        resume_path = Path(args.resume)
+        if not resume_path.is_file() or _sha256(resume_path) != args.resume_sha256:
+            raise ValueError("resume checkpoint hash does not match")
+        resume_state = torch.load(resume_path, map_location="cpu", weights_only=True)
+        if not isinstance(resume_state, dict):
+            raise ValueError("resume checkpoint is not a state dictionary")
+    checkpoint_root = Path(str(args.output) + ".checkpoints")
+    checkpoint_root.mkdir(parents=True, exist_ok=True)
+    checkpoint_artifacts: list[dict[str, object]] = []
+
+    def save_checkpoint(step: int, state: dict[str, Any]) -> None:
+        path = checkpoint_root / f"checkpoint-{step:06d}.pt"
+        if path.exists():
+            raise FileExistsError(f"checkpoint already exists: {path}")
+        torch.save(state, path)
+        checkpoint_artifacts.append(
+            {"step": step, "path": str(path), "sha256": _sha256(path)}
+        )
+
+    trace = run_bounded_training_trace(
         model,
-        dataset,
+        training_dataset,
         config,
-        maximum_optimizer_steps=args.maximum_optimizer_steps,
+        maximum_optimizer_steps=maximum_optimizer_steps,
+        maximum_epochs=config.epochs,
+        validation_interval=config.validation_interval_optimizer_steps,
+        validation_callback=validation_callback,
+        checkpoint_interval=config.checkpoint_interval_optimizer_steps,
+        checkpoint_callback=save_checkpoint,
+        run_identity=observed.training_config_sha256,
+        resume_identity=(
+            str(resume_state.get("run_identity")) if resume_state is not None else None
+        ),
+        resume_state=resume_state,
     )
+    losses = list(trace.losses)
+    if multilingual_config is not None and multilingual_config.run_kind == "smoke":
+        final_language_losses, final_counts = _language_validation_losses(
+            model,
+            validation,
+            languages=multilingual_config.languages,
+            examples_per_language=multilingual_config.validation_examples_per_language,
+        )
+        if final_counts != validation_examples:
+            raise RuntimeError("validation population changed during smoke training")
     artifact = save_bcnlt_adapter(model, args.output, tokenizer_root, observed)
     smoke_manifest = {
         "schema_version": "bcnlt-smoke-manifest-v1",
         "lineage": observed.to_dict(),
-        "maximum_optimizer_steps": args.maximum_optimizer_steps,
+        "maximum_optimizer_steps": maximum_optimizer_steps,
+        "optimizer_steps": trace.optimizer_steps,
         "completed_training_examples": len(losses),
         "losses": losses,
         "finite_loss": all(math.isfinite(value) for value in losses),
         "adapter_weights_sha256": artifact.weights_sha256,
+        "checkpoints": checkpoint_artifacts,
     }
-    (artifact.root / "smoke_manifest.json").write_text(
+    if multilingual_config is not None and multilingual_config.run_kind == "smoke":
+        metrics = SmokeMetrics(
+            optimizer_steps=trace.optimizer_steps,
+            global_step_losses=tuple(global_validation_losses),
+            training_losses=trace.losses,
+            initial_language_losses=initial_language_losses,
+            final_language_losses=final_language_losses,
+            validation_examples=validation_examples,
+        )
+        decision = evaluate_smoke_gate(metrics, multilingual_config)
+        smoke_manifest["metrics"] = metrics.to_dict()
+        smoke_manifest["validation_examples"] = validation_examples
+        smoke_manifest["smoke_gate"] = decision.to_dict()
+        (artifact.root / "smoke_promotion.json").write_text(
+            json.dumps(decision.to_dict(), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+    if multilingual_config is not None and multilingual_config.run_kind == "full":
+        smoke_manifest["schema_version"] = "bcnlt-multilingual-training-manifest-v1"
+        smoke_manifest["validation_history"] = full_validation_history
+    manifest_name = (
+        "training_manifest.json"
+        if multilingual_config is not None and multilingual_config.run_kind == "full"
+        else "smoke_manifest.json"
+    )
+    (artifact.root / manifest_name).write_text(
         json.dumps(smoke_manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
         newline="\n",
     )
     return 0
+
+
+def _language_validation_losses(
+    model: nn.Module,
+    dataset: Sequence[dict[str, Any]],
+    *,
+    languages: tuple[str, ...],
+    examples_per_language: int,
+) -> tuple[dict[str, float], dict[str, int]]:
+    indices = _language_validation_indices(
+        dataset,
+        languages=languages,
+        examples_per_language=examples_per_language,
+    )
+    counts = {language: len(values) for language, values in indices.items()}
+    losses = {
+        language: evaluate_packed_loss(
+            model,
+            [dataset[index] for index in indices[language]],
+        )
+        for language in languages
+    }
+    return losses, counts
+
+
+def _language_validation_indices(
+    dataset: Sequence[dict[str, Any]],
+    *,
+    languages: tuple[str, ...],
+    examples_per_language: int,
+) -> dict[str, list[int]]:
+    indices: dict[str, list[int]] = {language: [] for language in languages}
+    for index in range(len(dataset)):
+        metadata = getattr(dataset, "metadata", None)
+        row = metadata(index) if callable(metadata) else dataset[index]
+        language = str(row.get("language") or "")
+        if language in indices and len(indices[language]) < examples_per_language:
+            indices[language].append(index)
+    counts = {language: len(values) for language, values in indices.items()}
+    missing = [
+        language for language, count in counts.items() if count != examples_per_language
+    ]
+    if missing:
+        raise ValueError(
+            "validation split lacks 256 examples for: " + ", ".join(missing)
+        )
+    return indices
 
 
 if __name__ == "__main__":

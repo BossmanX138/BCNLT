@@ -6,22 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from bcnlt.full_run_gate import prepare_full_run
+from bcnlt.full_run_gate import REQUIRED_ARTIFACT_ROLES, prepare_full_run
+from bcnlt.languages import CANONICAL_LANGUAGE_IDS
 
 
-REQUIRED = (
-    "source_registry",
-    "tokenizer_manifest",
-    "corpus_manifest",
-    "corpus_validation",
-    "base_identity",
-    "adapter_manifest",
-    "smoke_manifest",
-    "base_evaluation",
-    "adapter_evaluation",
-    "smoke_promotion",
-    "training_config",
-)
+REQUIRED = REQUIRED_ARTIFACT_ROLES
 
 
 def _sha(path: Path) -> str:
@@ -36,17 +25,49 @@ def _handoff(tmp_path: Path) -> Path:
         payload = {"role": role}
         if role == "corpus_validation":
             payload["passed"] = True
+            payload["language_reports"] = [
+                {"language": language, "passed": True}
+                for language in CANONICAL_LANGUAGE_IDS
+            ]
+        if role == "per_language_validation":
+            payload["language_reports"] = [
+                {"language": language, "passed": True, "examples": 256}
+                for language in CANONICAL_LANGUAGE_IDS
+            ]
+        if role == "semantic_specs":
+            payload["semantic_spec_sha256"] = {
+                language: f"{index + 1:064x}"
+                for index, language in enumerate(CANONICAL_LANGUAGE_IDS)
+            }
+        if role == "source_registry":
+            payload["sources"] = [
+                {"canonical_language": language}
+                for language in CANONICAL_LANGUAGE_IDS
+            ]
         if role == "smoke_manifest":
-            payload.update({"finite_loss": True, "completed_training_examples": 1})
+            payload.update(
+                {
+                    "finite_loss": True,
+                    "completed_training_examples": 1024,
+                    "optimizer_steps": 128,
+                    "validation_examples": {
+                        language: 256 for language in CANONICAL_LANGUAGE_IDS
+                    },
+                }
+            )
         if role == "smoke_promotion":
             payload.update({"promoted": True, "failure_codes": []})
+        if role == "training_config":
+            payload = json.loads(
+                Path("configs/runeforge_mk2_bcnlt_multilingual_full_v1.json").read_text()
+            )
         path.write_text(json.dumps(payload), encoding="utf-8")
         artifacts[role] = {"path": str(path), "sha256": _sha(path)}
     handoff = tmp_path / "handoff.json"
     handoff.write_text(
         json.dumps(
             {
-                "schema_version": "bcnlt-full-run-handoff-v1",
+                "schema_version": "bcnlt-full-run-handoff-v2",
                 "artifacts": artifacts,
                 "requirements": {
                     "minimum_disk_free_bytes": 100,
@@ -55,6 +76,7 @@ def _handoff(tmp_path: Path) -> Path:
                 "training": {
                     "command": ["python", "-m", "trainer", "--full"],
                     "estimated_steps": 123,
+                    "estimated_tokens": 789,
                     "estimated_disk_bytes": 456,
                 },
             },
@@ -102,6 +124,45 @@ def test_gate_refuses_changed_artifact_disk_gpu_and_resume_hashes(tmp_path: Path
         )
 
 
+@pytest.mark.parametrize("changed_role", REQUIRED)
+def test_gate_refuses_a_hash_change_for_every_lineage_role(
+    tmp_path: Path, changed_role: str
+) -> None:
+    handoff = _handoff(tmp_path)
+    raw = json.loads(handoff.read_text())
+    Path(raw["artifacts"][changed_role]["path"]).write_text("changed")
+
+    with pytest.raises(ValueError, match=f"{changed_role} hash"):
+        prepare_full_run(handoff, disk_free_bytes=1000, gpu_memory_mib=1000)
+
+
+def test_gate_requires_all_semantic_specs_and_per_language_validation(tmp_path: Path):
+    for role, mutate, message in (
+        (
+            "semantic_specs",
+            lambda payload: payload["semantic_spec_sha256"].pop("bash"),
+            "semantic specs",
+        ),
+        (
+            "per_language_validation",
+            lambda payload: payload["language_reports"].pop(),
+            "per-language validation",
+        ),
+    ):
+        root = tmp_path / role
+        handoff = _handoff(root)
+        raw = json.loads(handoff.read_text())
+        artifact = Path(raw["artifacts"][role]["path"])
+        payload = json.loads(artifact.read_text())
+        mutate(payload)
+        artifact.write_text(json.dumps(payload))
+        raw["artifacts"][role]["sha256"] = _sha(artifact)
+        handoff.write_text(json.dumps(raw))
+
+        with pytest.raises(ValueError, match=message):
+            prepare_full_run(handoff, disk_free_bytes=1000, gpu_memory_mib=1000)
+
+
 def test_gate_requires_passing_corpus_smoke_and_promotion(tmp_path: Path):
     for role, update, message in (
         ("corpus_validation", {"passed": False}, "corpus validation"),
@@ -135,6 +196,7 @@ def test_default_is_validation_only_and_explicit_start_uses_exact_command(tmp_pa
     assert not calls
     assert proposal.command == ("python", "-m", "trainer", "--full")
     assert proposal.estimated_steps == 123
+    assert proposal.estimated_tokens == 789
     assert proposal.manifest_hashes
 
     started = prepare_full_run(
@@ -146,3 +208,24 @@ def test_default_is_validation_only_and_explicit_start_uses_exact_command(tmp_pa
     )
     assert started.started
     assert calls == [list(proposal.command)]
+
+
+def test_exact_resume_checkpoint_is_added_to_the_guarded_command(tmp_path: Path):
+    handoff = _handoff(tmp_path)
+    resume = tmp_path / "checkpoint.pt"
+    resume.write_bytes(b"exact checkpoint")
+
+    proposal = prepare_full_run(
+        handoff,
+        disk_free_bytes=1000,
+        gpu_memory_mib=1000,
+        resume_path=resume,
+        expected_resume_sha256=_sha(resume),
+    )
+
+    assert proposal.command[-4:] == (
+        "--resume",
+        str(resume),
+        "--resume-sha256",
+        _sha(resume),
+    )
