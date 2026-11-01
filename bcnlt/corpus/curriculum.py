@@ -73,6 +73,8 @@ def semantic_code_windows(
 ) -> tuple[SemanticCodeWindow, ...]:
     """Return full-document or top-level parseable semantic/code pairs."""
 
+    if not records:
+        return ()
     semantic = canonical_record_stream(records)
     if pair_within_character_budget(instruction, document.content, semantic):
         return (SemanticCodeWindow(document.content, tuple(records)),)

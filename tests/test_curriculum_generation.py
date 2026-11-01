@@ -132,6 +132,14 @@ def test_generation_does_not_multiply_unchanged_facts_by_paraphrase():
     assert sum(item.family == "mixed_instruction" for item in generated) == 1
 
 
+def test_documents_without_semantic_records_emit_no_curriculum_pairs():
+    document, _, _, split = _fixture()
+
+    generated = list(generate_document_curriculum(document, (), (), split=split))
+
+    assert generated == []
+
+
 def test_large_modules_generate_parseable_top_level_windows_for_all_core_families():
     source = "\n\n".join(
         f"def function_{index}(value):\n    result = value + {index}\n    return result"
