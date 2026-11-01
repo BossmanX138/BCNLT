@@ -224,6 +224,31 @@ def decode_generated_stream(tokenizer, token_ids: Sequence[int]) -> str:
     return tokenizer.decode(list(token_ids)[: boundary + 1])
 
 
+def semantic_projection_equivalent(
+    expected_source: str,
+    observed_source: str,
+    *,
+    language: str,
+    expected_path: str = "expected.code",
+    observed_path: str = "observed.code",
+    dialect: str | None = None,
+) -> bool:
+    """Compare generated code at BCNLT semantic level for multilingual evaluation."""
+
+    from bcnlt.multilingual_eval import project_source, score_semantic_projection
+
+    try:
+        expected = project_source(
+            expected_source, language=language, path=expected_path, dialect=dialect
+        )
+        observed = project_source(
+            observed_source, language=language, path=observed_path, dialect=dialect
+        )
+    except (ValueError, TypeError, RuntimeError, OSError):
+        return False
+    return score_semantic_projection(expected, observed, "semantic_to_code")
+
+
 def _score(case: EvaluationCase, output: str) -> bool:
     if case.category == "semantic_to_code":
         try:
