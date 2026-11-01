@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -27,8 +29,8 @@ class TinyTokenizer:
         return self._encode("".join(record.event for record in records))
 
 
-def _record(index: int, *, split: str = "train", target: str | None = None):
-    prompt = f"prompt {index}"
+def _record(index: int, *, split: str = "train", target: str | None = None, language: str = "python"):
+    prompt = f"Language: {language}\nprompt {index}"
     answer = target if target is not None else f"answer {index}"
     digest = hashlib.sha256(f"{index}:{split}:{prompt}:{answer}".encode()).hexdigest()
     return CurriculumRecord(
@@ -40,8 +42,17 @@ def _record(index: int, *, split: str = "train", target: str | None = None):
         target_mode="raw_code",
         prompt=prompt,
         target=answer,
-        provenance=(("content_sha256", hashlib.sha256(prompt.encode()).hexdigest()),),
+        provenance=tuple(sorted({
+            "canonical_language": language,
+            "content_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
+            "registry_entry_sha256": "r" * 64,
+            "parser_bundle_sha256": "p" * 64,
+            "grammar_revision": "grammar@1",
+            "semantic_spec_sha256": "s" * 64,
+            "extraction_rule_version": "rules-v1",
+        }.items())),
         split=split,
+        language=language,
     )
 
 
@@ -66,7 +77,7 @@ def test_packing_is_byte_identical_and_offsets_are_exact(tmp_path: Path):
     dataset = PackedBCNLTDataset(first, "train", expected_tokenizer_digest="a" * 64)
     first_item = dataset[0]
     second_item = dataset[1]
-    expected_prompt = TinyTokenizer().encode_text("prompt 1")
+    expected_prompt = TinyTokenizer().encode_text("Language: python\n") + TinyTokenizer().encode_text("prompt 1")
     expected_target = TinyTokenizer().encode_raw_code("answer 1")
     assert len(dataset) == 2
     assert first_item["input_ids"] == expected_prompt + expected_target
@@ -82,7 +93,7 @@ def test_packing_is_byte_identical_and_offsets_are_exact(tmp_path: Path):
 def test_long_rows_are_rejected_without_truncation_and_shards_roll_over(tmp_path: Path):
     records = [_record(1), _record(2), _record(3, target="x" * 100)]
     tokenizer = TinyTokenizer()
-    one_row_tokens = len(tokenizer.encode_text("prompt 1")) + len(
+    one_row_tokens = len(tokenizer.encode_text("Language: python\n")) + len(tokenizer.encode_text("prompt 1")) + len(
         tokenizer.encode_raw_code("answer 1")
     )
 
@@ -157,3 +168,27 @@ def test_resume_requires_matching_input_range_and_output_hashes(tmp_path: Path):
 
     with pytest.raises(ValueError, match="input range"):
         pack_training_shards(records + [_record(3)], TinyTokenizer(), output, resume=True)
+
+
+def test_packed_rows_keep_one_language_and_resume_checks_lineage(tmp_path: Path):
+    output = tmp_path / "packed"
+    records = [_record(1, language="python"), _record(2, language="javascript")]
+    pack_training_shards(records, TinyTokenizer(), output)
+
+    python_rows = PackedBCNLTDataset(output, "train", expected_tokenizer_digest="a" * 64)
+    assert {python_rows[index]["language"] for index in range(len(python_rows))} == {
+        "python", "javascript"
+    }
+    provenance = [
+        json.loads(line)
+        for path in output.glob("*.records.jsonl")
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert all(row["language"] == row["provenance"]["canonical_language"] for row in provenance)
+
+    changed = replace(
+        records[0],
+        provenance=tuple(sorted({**dict(records[0].provenance), "semantic_spec_sha256": "x" * 64}.items())),
+    )
+    with pytest.raises(ValueError, match="parser/spec/registry lineage"):
+        pack_training_shards([changed, records[1]], TinyTokenizer(), output, resume=True)

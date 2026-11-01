@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ast
 import hashlib
 import heapq
 import json
@@ -10,9 +9,11 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, replace
 from typing import Any, Iterable, Protocol, Sequence
 
-from bcnlt.adapters.python import PythonAdapter
+from bcnlt.adapters.carousel import BCNLTMultilingualAdapter
+from bcnlt.adapters.tree_sitter import TreeSitterSemanticEngine
 from bcnlt.canonical import canonical_record_bytes, record_from_canonical_bytes
-from bcnlt.semantic_record import SemanticTokenRecord, records_from_assessments
+from bcnlt.languages import CANONICAL_LANGUAGE_IDS
+from bcnlt.semantic_record import SemanticTokenRecord, records_from_assessments, thaw_json
 
 from .curriculum import CurriculumRecord
 from .database import SourceDocumentRecord
@@ -51,8 +52,22 @@ class CorpusValidationInput:
 
 @dataclass(frozen=True)
 class AdmissionPolicy:
-    minimum_records: int = 100_000
+    minimum_records: int = 140_000
     minimum_encoded_tokens: int = 50_000_000
+    required_languages: tuple[str, ...] = CANONICAL_LANGUAGE_IDS
+    minimum_records_per_language: int = 10_000
+    maximum_language_fraction: float = 0.12
+    minimum_common_core_coverage: float = 0.80
+    maximum_unknown_event_fraction: float = 0.075
+    required_families: tuple[str, ...] = (
+        "semantic_continuation",
+        "semantic_to_code",
+        "code_to_semantic",
+        "structural_reasoning",
+        "mixed_instruction",
+        "knowledge_boundary",
+    )
+    maximum_family_fraction: float = 0.40
     maximum_document_fraction: float = 0.005
     maximum_template_family_fraction: float = 0.10
     near_duplicate_threshold: float = 0.90
@@ -66,17 +81,28 @@ class AdmissionPolicy:
     minimum_uncertainty_bands: int = 2
 
     def __post_init__(self) -> None:
-        for name in ("minimum_records", "minimum_encoded_tokens", "maximum_sequence_tokens"):
+        for name in (
+            "minimum_records",
+            "minimum_encoded_tokens",
+            "minimum_records_per_language",
+            "maximum_sequence_tokens",
+        ):
             if getattr(self, name) < 0:
                 raise ValueError(f"{name} must be non-negative")
         for name in (
             "maximum_document_fraction",
             "maximum_template_family_fraction",
             "near_duplicate_threshold",
+            "maximum_language_fraction",
+            "maximum_family_fraction",
         ):
             value = getattr(self, name)
             if not 0.0 < value <= 1.0:
                 raise ValueError(f"{name} must be in (0, 1]")
+        for name in ("minimum_common_core_coverage", "maximum_unknown_event_fraction"):
+            value = getattr(self, name)
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"{name} must be in [0, 1]")
 
 
 @dataclass(frozen=True)
@@ -87,6 +113,7 @@ class AdmissionDecision:
     accepted: bool
     reason_code: str
     split: str
+    language: str
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -96,6 +123,7 @@ class AdmissionDecision:
             "accepted": self.accepted,
             "reason_code": self.reason_code,
             "split": self.split,
+            "language": self.language,
         }
 
 
@@ -200,6 +228,7 @@ def validate_corpus(
                 accepted=is_accepted,
                 reason_code=reason_code,
                 split=split,
+                language=candidate.language,
             )
         )
         seen_record_ids.add(candidate.record_id)
@@ -218,13 +247,17 @@ def validate_corpus(
             document_counts[source_id] += 1
         template_counts[(candidate.family, candidate.template_id)] += 1
 
-    encoded_tokens = sum(_encoded_length(item, tokenizer) for item in accepted)
+    encoded_tokens_by_language: Counter[str] = Counter()
+    for item in accepted:
+        encoded_tokens_by_language[item.language] += _encoded_length(item, tokenizer)
+    encoded_tokens = sum(encoded_tokens_by_language.values())
     distributions = _build_distributions(
         accepted,
         decisions,
         documents,
         records_by_document,
         encoded_tokens,
+        encoded_tokens_by_language,
         len(holdout_documents),
     )
     failures = _gate_failures(len(accepted), encoded_tokens, distributions, active_policy)
@@ -250,11 +283,22 @@ def _precheck_candidate(
         source_id not in documents for source_id in candidate.source_document_ids
     ):
         return "unknown_source_document"
+    source_languages = {
+        documents[source_id].canonical_language for source_id in candidate.source_document_ids
+    }
+    if len(source_languages) != 1:
+        return "mixed_source_languages"
+    if candidate.language != next(iter(source_languages)):
+        return "language_mismatch"
     provenance = dict(candidate.provenance)
     if not _REQUIRED_PROVENANCE <= provenance.keys() or any(
         not provenance[key] for key in _REQUIRED_PROVENANCE
     ):
         return "missing_provenance"
+    if provenance["canonical_language"] != candidate.language:
+        return "language_mismatch"
+    if not candidate.prompt.startswith(f"Language: {candidate.language}\n"):
+        return "missing_language_condition"
     if any(source_id in holdout_documents for source_id in candidate.source_document_ids):
         return "evaluation_holdout_collision"
     if len(assigned_splits) != 1 or split in {"unknown", "conflict"}:
@@ -269,10 +313,15 @@ def _precheck_candidate(
 def _canonical_records(
     documents: Sequence[SourceDocumentRecord],
 ) -> dict[str, tuple[SemanticTokenRecord, ...]]:
-    adapter = PythonAdapter()
+    adapter = BCNLTMultilingualAdapter(engine=TreeSitterSemanticEngine())
     result: dict[str, tuple[SemanticTokenRecord, ...]] = {}
     for document in documents:
-        parsed = adapter.parse(document.content, path=document.relative_path)
+        parsed = adapter.parse(
+            document.content,
+            language=document.canonical_language,
+            path=document.relative_path,
+            dialect=document.dialect,
+        )
         extraction = adapter.extract(parsed)
         result[document.document_id] = records_from_assessments(extraction.assessments)
     return result
@@ -327,8 +376,7 @@ def _build_split_manifest(
 
 
 def _normalized_source_hash(source: str) -> str:
-    tree = ast.parse(source)
-    normalized = ast.dump(tree, annotate_fields=True, include_attributes=False)
+    normalized = re.sub(r"\s+", "", source)
     return hashlib.sha256(normalized.encode()).hexdigest()
 
 
@@ -446,10 +494,19 @@ def _encoded_length(record: CurriculumRecord, tokenizer: AdmissionTokenizer) -> 
         if mode == "semantic_code":
             semantic = _semantic_records_from_text(value)
             if semantic:
-                return tokenizer.encode_records(semantic)
+                text = "".join(
+                    line
+                    for line in value.splitlines(keepends=True)
+                    if not line.lstrip().startswith("{")
+                )
+                return tokenizer.encode_text(text) + tokenizer.encode_records(semantic)
         return tokenizer.encode_text(value)
 
-    return len(encode(record.prompt_mode, record.prompt)) + len(
+    prefix = f"Language: {record.language}\n"
+    if not record.prompt.startswith(prefix):
+        return 10**9
+    prompt_body = record.prompt[len(prefix) :]
+    return len(tokenizer.encode_text(prefix)) + len(encode(record.prompt_mode, prompt_body)) + len(
         encode(record.target_mode, record.target)
     )
 
@@ -460,6 +517,7 @@ def _build_distributions(
     documents: dict[str, SourceDocumentRecord],
     records_by_document: dict[str, tuple[SemanticTokenRecord, ...]],
     encoded_tokens: int,
+    encoded_tokens_by_language: Counter[str],
     holdout_collisions: int,
 ) -> dict[str, Any]:
     accepted_document_ids = {
@@ -473,16 +531,37 @@ def _build_distributions(
     identifier_shapes: Counter[str] = Counter()
     literal_types: Counter[str] = Counter()
     control_flow: Counter[str] = Counter()
-    for source_id in sorted(accepted_document_ids):
-        tree = ast.parse(documents[source_id].content)
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Name):
-                identifier_shapes[_identifier_shape(node.id)] += 1
-            if isinstance(node, ast.Constant):
-                literal_types[type(node.value).__name__] += 1
-            control = _control_flow_name(node)
-            if control:
-                control_flow[control] += 1
+    for record in semantic_records:
+        if record.event in {"DEFINE", "REFERENCE", "CALL", "MEMBER_ACCESS"} and record.surface:
+            identifier_shapes[_identifier_shape(record.surface)] += 1
+        if record.event == "LITERAL":
+            literal_types[_literal_type(record)] += 1
+        if record.event in {"BRANCH", "LOOP", "RAISE", "RETURN"}:
+            control_flow[record.event.casefold()] += 1
+    records_by_language: Counter[str] = Counter()
+    family_by_language: dict[str, Counter[str]] = defaultdict(Counter)
+    for record in accepted:
+        records_by_language[record.language] += 1
+        family_by_language[record.language][record.family] += 1
+    semantic_by_language: dict[str, list[SemanticTokenRecord]] = defaultdict(list)
+    for source_id in accepted_document_ids:
+        semantic_by_language[documents[source_id].canonical_language].extend(
+            records_by_document.get(source_id, ())
+        )
+    language = {}
+    for language_id in sorted(set(records_by_language) | set(semantic_by_language)):
+        language_records = semantic_by_language.get(language_id, [])
+        semantic_total = len(language_records)
+        unknown = sum(item.event == "UNKNOWN_SEMANTIC" for item in language_records)
+        mapped = semantic_total - unknown
+        language[language_id] = {
+            "records": records_by_language[language_id],
+            "encoded_tokens": encoded_tokens_by_language[language_id],
+            "family": dict(sorted(family_by_language[language_id].items())),
+            "semantic_units": semantic_total,
+            "common_core_coverage": mapped / semantic_total if semantic_total else 0.0,
+            "unknown_event_fraction": unknown / semantic_total if semantic_total else 1.0,
+        }
     return {
         "family": _counter(record.family for record in accepted),
         "event": _counter(record.event for record in semantic_records),
@@ -507,6 +586,7 @@ def _build_distributions(
             if "duplicate" in decision.reason_code
         ),
         "encoded_tokens": encoded_tokens,
+        "language": language,
         "holdout_collisions": holdout_collisions,
     }
 
@@ -531,19 +611,11 @@ def _identifier_shape(value: str) -> str:
     return "lower"
 
 
-def _control_flow_name(node: ast.AST) -> str | None:
-    for node_type, name in (
-        (ast.If, "branch"),
-        (ast.For, "for_loop"),
-        (ast.AsyncFor, "async_for_loop"),
-        (ast.While, "while_loop"),
-        (ast.Try, "try"),
-        (ast.Match, "match"),
-        (ast.comprehension, "comprehension"),
-    ):
-        if isinstance(node, node_type):
-            return name
-    return None
+def _literal_type(record: SemanticTokenRecord) -> str:
+    if record.ir is None:
+        return "unknown"
+    value = thaw_json(record.ir.value)
+    return type(value).__name__
 
 
 def _scope_depth(scope: str) -> int:
@@ -563,6 +635,51 @@ def _gate_failures(
         failures.append("minimum_encoded_tokens_not_met")
     if distributions["holdout_collisions"]:
         failures.append("holdout_collision_detected")
+    language_distributions = distributions["language"]
+    total_records = max(1, accepted_count)
+    total_tokens = max(1, encoded_tokens)
+    for language_id in policy.required_languages:
+        metrics = language_distributions.get(language_id)
+        language_failures: list[str] = []
+        if metrics is None:
+            language_failures.append("missing_language")
+            language_distributions[language_id] = {
+                "records": 0,
+                "encoded_tokens": 0,
+                "family": {},
+                "semantic_units": 0,
+                "common_core_coverage": 0.0,
+                "unknown_event_fraction": 1.0,
+                "failures": language_failures,
+            }
+            failures.append("missing_language")
+            continue
+        if metrics["records"] < policy.minimum_records_per_language:
+            language_failures.append("minimum_records_per_language_not_met")
+        if metrics["records"] / total_records > policy.maximum_language_fraction:
+            language_failures.append("language_record_fraction_exceeded")
+        if metrics["encoded_tokens"] / total_tokens > policy.maximum_language_fraction:
+            language_failures.append("language_token_fraction_exceeded")
+        if metrics["common_core_coverage"] < policy.minimum_common_core_coverage:
+            language_failures.append("common_core_coverage_below_minimum")
+        if metrics["unknown_event_fraction"] > policy.maximum_unknown_event_fraction:
+            language_failures.append("unknown_event_fraction_exceeded")
+        family = metrics["family"]
+        if any(family.get(name, 0) == 0 for name in policy.required_families):
+            language_failures.append("missing_curriculum_family")
+        if metrics["records"] and any(
+            count / metrics["records"] > policy.maximum_family_fraction
+            for count in family.values()
+        ):
+            language_failures.append("curriculum_family_fraction_exceeded")
+        metrics["failures"] = language_failures
+        failures.extend(language_failures)
+    family_distribution = distributions["family"]
+    if accepted_count and any(
+        count / accepted_count > policy.maximum_family_fraction
+        for count in family_distribution.values()
+    ):
+        failures.append("curriculum_family_fraction_exceeded")
     diversity = (
         ("event", policy.minimum_event_types, "insufficient_event_diversity"),
         ("scope_depth", policy.minimum_scope_depths, "insufficient_scope_depth_diversity"),
@@ -574,4 +691,4 @@ def _gate_failures(
     for key, minimum, reason in diversity:
         if len(distributions[key]) < minimum:
             failures.append(reason)
-    return failures
+    return list(dict.fromkeys(failures))

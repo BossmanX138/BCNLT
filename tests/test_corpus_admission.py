@@ -45,6 +45,7 @@ def _document(
     *,
     repository: str = "example/repository",
     path: str = "module.py",
+    language: str = "python",
 ) -> SourceDocumentRecord:
     digest = hashlib.sha256(content.encode()).hexdigest()
     return SourceDocumentRecord(
@@ -54,11 +55,12 @@ def _document(
             repository_identity=repository,
             relative_path=path,
             content_sha256=digest,
+            language=language,
         ),
         source_provider="test",
         source_name=repository,
         source_revision="a" * 40,
-        canonical_language="python",
+        canonical_language=language,
         repository_identity=repository,
         relative_path=path,
         content_sha256=digest,
@@ -90,6 +92,13 @@ def _permissive(**changes) -> AdmissionPolicy:
         minimum_identifier_shapes=0,
         minimum_literal_types=0,
         minimum_uncertainty_bands=0,
+        required_languages=(),
+        minimum_records_per_language=0,
+        maximum_language_fraction=1.0,
+        minimum_common_core_coverage=0.0,
+        maximum_unknown_event_fraction=1.0,
+        required_families=(),
+        maximum_family_fraction=1.0,
     )
     values.update(changes)
     return AdmissionPolicy(**values)
@@ -253,3 +262,55 @@ def test_diversity_gate_reports_all_required_dimensions():
         "rejection_reason",
         "encoded_tokens",
     }
+
+
+def test_multilingual_balance_and_semantic_gates_report_per_language_failures():
+    document = _document("with manager():\n    pass\n")
+    candidate = _curriculum(document)[0]
+    report = validate_corpus(
+        CorpusValidationInput(documents=(document,), candidates=(candidate,)),
+        CountingTokenizer(),
+        _permissive(
+            required_languages=("python", "javascript"),
+            minimum_records_per_language=2,
+            maximum_language_fraction=0.50,
+            minimum_common_core_coverage=1.0,
+            maximum_unknown_event_fraction=0.0,
+            required_families=("knowledge_boundary",),
+            maximum_family_fraction=0.40,
+        ),
+    )
+
+    assert set(report.failure_codes) >= {
+        "missing_language",
+        "minimum_records_per_language_not_met",
+        "language_record_fraction_exceeded",
+        "language_token_fraction_exceeded",
+        "common_core_coverage_below_minimum",
+        "unknown_event_fraction_exceeded",
+        "missing_curriculum_family",
+        "curriculum_family_fraction_exceeded",
+    }
+    assert report.distributions["language"]["python"]["failures"]
+    assert report.distributions["language"]["javascript"]["records"] == 0
+
+
+def test_mixed_language_source_rows_are_rejected_and_duplicate_splits_stay_together():
+    python = _document("x = 1;\n", path="same.py", language="python")
+    javascript = _document(
+        "x = 1;\n", repository="other/repo", path="same.js", language="javascript"
+    )
+    candidate = replace(
+        _curriculum(python)[0],
+        record_id="d" * 64,
+        source_document_ids=(python.document_id, javascript.document_id),
+    )
+    report = validate_corpus(
+        CorpusValidationInput(documents=(python, javascript), candidates=(candidate,)),
+        CountingTokenizer(),
+        _permissive(),
+    )
+
+    assert report.decisions[0].reason_code == "mixed_source_languages"
+    assert report.decisions[0].language == "python"
+    assert report.split_manifest[python.document_id] == report.split_manifest[javascript.document_id]

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ast
 import hashlib
 import json
 from dataclasses import dataclass
@@ -9,6 +8,7 @@ from typing import Iterable, Sequence
 from bcnlt.canonical import canonical_record_bytes
 from bcnlt.core import ContextualUnit
 from bcnlt.semantic_record import SemanticTokenRecord
+from bcnlt.uncertainty import KnowledgeBoundaryAssessment
 
 from .database import SourceDocumentRecord
 
@@ -36,6 +36,8 @@ class CurriculumRecord:
     target: str
     provenance: tuple[tuple[str, str], ...]
     split: str
+    language: str = "python"
+    dialect: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -49,6 +51,8 @@ class CurriculumRecord:
             "target": self.target,
             "provenance": dict(self.provenance),
             "split": self.split,
+            "language": self.language,
+            "dialect": self.dialect,
         }
 
 
@@ -72,25 +76,28 @@ def semantic_code_windows(
     semantic = canonical_record_stream(records)
     if pair_within_character_budget(instruction, document.content, semantic):
         return (SemanticCodeWindow(document.content, tuple(records)),)
-    try:
-        module = ast.parse(document.content, filename=document.relative_path)
-    except SyntaxError:
-        return ()
     lines = document.content.splitlines(keepends=True)
     windows: list[SemanticCodeWindow] = []
-    for node in module.body:
-        start = int(getattr(node, "lineno", 0) or 0)
-        decorators = tuple(getattr(node, "decorator_list", ()))
-        if decorators:
-            start = min(start, *(int(item.lineno) for item in decorators))
-        end = int(getattr(node, "end_lineno", 0) or 0)
+    candidate_spans = sorted(
+        {
+            (unit.span[0], unit.span[2])
+            for unit in units
+            if getattr(unit.event, "value", unit.event) == "SCOPE_ENTER"
+            and unit.scope in {"module", "global", "program"}
+        }
+    )
+    if not candidate_spans:
+        candidate_spans = sorted(
+            {
+                (unit.span[0], unit.span[2])
+                for unit in units
+                if unit.span[0] > 0 and unit.span[2] >= unit.span[0]
+            }
+        )
+    for start, end in candidate_spans:
         if start <= 0 or end < start:
             continue
         source = "".join(lines[start - 1 : end])
-        try:
-            ast.parse(source)
-        except SyntaxError:
-            continue
         window_records = tuple(
             record
             for unit, record in zip(units, records, strict=True)
@@ -138,10 +145,19 @@ def make_curriculum_record(
         "ownership": document.ownership,
         "attribution": document.attribution,
         "upstream_url": document.upstream_url,
+        "dialect": document.dialect or "",
+        "registry_entry_sha256": document.registry_entry_sha256,
+        "parser_bundle_sha256": document.parser_bundle_sha256,
+        "grammar_revision": document.grammar_revision,
+        "semantic_spec_sha256": document.semantic_spec_sha256,
+        "extraction_rule_version": document.extraction_rule_version,
     }
     if extra_provenance:
         provenance.update(extra_provenance)
+    language_line = f"Language: {document.canonical_language}\n"
     normalized_prompt = _normalize(prompt)
+    if not normalized_prompt.startswith(language_line):
+        normalized_prompt = language_line + normalized_prompt
     normalized_target = _normalize(target)
     body = {
         "family": family,
@@ -153,6 +169,8 @@ def make_curriculum_record(
         "target": normalized_target,
         "provenance": provenance,
         "split": split,
+        "language": document.canonical_language,
+        "dialect": document.dialect,
     }
     record_id = hashlib.sha256(
         json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
@@ -170,6 +188,8 @@ def make_curriculum_record(
         target=normalized_target,
         provenance=tuple(sorted(provenance.items())),
         split=split,
+        language=document.canonical_language,
+        dialect=document.dialect,
     )
 
 
@@ -179,9 +199,11 @@ def generate_document_curriculum(
     records: Sequence[SemanticTokenRecord],
     *,
     split: str = "unassigned",
+    assessments: Sequence[KnowledgeBoundaryAssessment] | None = None,
 ) -> Iterable[CurriculumRecord]:
     from .tasks.code_to_semantic import generate as code_to_semantic
     from .tasks.mixed_instruction import generate as mixed_instruction
+    from .tasks.knowledge_boundary import generate as knowledge_boundary
     from .tasks.semantic_continuation import generate as semantic_continuation
     from .tasks.semantic_to_code import generate as semantic_to_code
     from .tasks.structural_reasoning import generate as structural_reasoning
@@ -196,6 +218,8 @@ def generate_document_curriculum(
         mixed_instruction,
     ):
         yield from generator(document, units, records, split=split)
+    if assessments:
+        yield from knowledge_boundary(document, assessments, split=split)
 
 
 def _normalize(value: str) -> str:

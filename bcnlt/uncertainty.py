@@ -25,6 +25,7 @@ class KnowledgeBoundaryAssessment:
     rounds: int
     evidence: tuple[str, ...]
     wildcard_category: str | None = None
+    wildcard_hypotheses: tuple[str, ...] = ()
 
     @classmethod
     def from_wildcard(
@@ -48,6 +49,7 @@ class KnowledgeBoundaryAssessment:
             rounds=rounds,
             evidence=tuple(meaning.evidence),
             wildcard_category=meaning.category,
+            wildcard_hypotheses=tuple(meaning.hypotheses),
         )
 
     def annotated_unit(self) -> ContextualUnit:

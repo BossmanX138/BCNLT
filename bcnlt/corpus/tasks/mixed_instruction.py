@@ -22,14 +22,14 @@ def generate(
     split: str,
 ) -> list[CurriculumRecord]:
     instruction = (
-        "Use the semantic context to return the original parseable Python.\n"
+        "Use the semantic context to return the original parseable source.\n"
         "Semantic context:\n"
     )
     return [
         make_curriculum_record(
             document,
             family="mixed_instruction",
-            template_id="semantic-context-to-python-v1",
+            template_id="semantic-context-to-source-v2",
             prompt_mode="mixed",
             target_mode="raw_code",
             prompt=instruction + canonical_record_stream(window.records),

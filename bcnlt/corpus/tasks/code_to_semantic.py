@@ -23,7 +23,7 @@ def generate(
     *,
     split: str,
 ) -> list[CurriculumRecord]:
-    instruction = "Convert this Python source into canonical BCNLT semantic records.\n"
+    instruction = "Convert this source into canonical BCNLT semantic records.\n"
     generated = []
     for window in semantic_code_windows(
         document, units, records, instruction=instruction
@@ -40,7 +40,7 @@ def generate(
             + f"Source path: {document.relative_path}\n"
             + f"Original line start: {source_line_start}\n"
             + f"Prior semantic history: {prior_history}\n"
-            + "Python source:\n"
+            + "Source code:\n"
             + window.source
         )
         target = canonical_record_stream(window.records)
@@ -50,7 +50,7 @@ def generate(
             make_curriculum_record(
                 document,
                 family="code_to_semantic",
-                template_id="python-context-to-semantic-v2",
+                template_id="language-context-to-semantic-v3",
                 prompt_mode="raw_code",
                 target_mode="semantic_code",
                 prompt=prompt,

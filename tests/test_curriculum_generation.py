@@ -3,12 +3,17 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+from dataclasses import replace
 
+from bcnlt.adapters.carousel import BCNLTMultilingualAdapter
 from bcnlt.adapters.python import PythonAdapter
+from bcnlt.adapters.tree_sitter import TreeSitterSemanticEngine
 from bcnlt.canonical import canonical_record_bytes, record_from_canonical_bytes
 from bcnlt.corpus.curriculum import generate_document_curriculum
 from bcnlt.corpus.database import SourceDocumentRecord, stable_document_id
-from bcnlt.semantic_record import records_from_units
+from bcnlt.semantic_record import records_from_assessments, records_from_units
+from bcnlt.semantic_schema import KnowledgeState
+from bcnlt.uncertainty import KnowledgeBoundaryAssessment, UncertaintyScore
 
 
 SOURCE = "rate = 2\n\ndef price(value):\n    return value * rate\n"
@@ -62,23 +67,23 @@ def test_one_deterministic_golden_record_per_core_family():
     } <= set(by_family)
     assert by_family["semantic_continuation"].template_id == "semantic-next-record-v1"
     assert by_family["semantic_continuation"].prompt.startswith(
-        "Continue this canonical BCNLT semantic stream with the next record:\n"
+        "Language: python\nContinue this canonical BCNLT semantic stream with the next record:\n"
     )
     assert by_family["semantic_to_code"].prompt == (
-        "Reconstruct parseable Python from these canonical BCNLT records:\n" + canonical
+        "Language: python\nReconstruct parseable source from these canonical BCNLT records:\n" + canonical
     )
     assert by_family["semantic_to_code"].target == SOURCE
     assert by_family["code_to_semantic"].prompt == (
-        "Convert this Python source into canonical BCNLT semantic records.\n"
+        "Language: python\nConvert this source into canonical BCNLT semantic records.\n"
         "Source path: price.py\n"
         "Original line start: 1\n"
         "Prior semantic history: []\n"
-        "Python source:\n"
+        "Source code:\n"
         + SOURCE
     )
     assert by_family["code_to_semantic"].target == canonical
     assert by_family["mixed_instruction"].prompt.startswith(
-        "Use the semantic context to return the original parseable Python.\n"
+        "Language: python\nUse the semantic context to return the original parseable source.\n"
     )
 
 
@@ -217,3 +222,64 @@ def test_code_to_semantic_windows_disclose_hidden_context_needed_by_targets():
         )
         + "\n"
     ) in item.prompt
+
+
+def test_all_six_families_are_language_conditioned_and_keep_lineage():
+    source = "function add(a, b) { return a + b; }\nconst value = add(1, 2);\n"
+    digest = hashlib.sha256(source.encode()).hexdigest()
+    document = SourceDocumentRecord(
+        document_id=stable_document_id(
+            provider="test", revision="c" * 40, repository_identity="example/js",
+            relative_path="main.js", content_sha256=digest, language="javascript",
+            registry_entry_sha256="r" * 64,
+        ),
+        source_provider="test", source_name="example/js", source_revision="c" * 40,
+        canonical_language="javascript", repository_identity="example/js",
+        relative_path="main.js", content_sha256=digest, content=source,
+        license_spdx="MIT", ownership="third_party", attribution="example/js",
+        upstream_url="https://example.invalid/js", registry_entry_sha256="r" * 64,
+        parser_bundle_sha256="p" * 64, grammar_revision="grammar@1",
+        semantic_spec_sha256="s" * 64, extraction_rule_version="rules-v1",
+    )
+    adapter = BCNLTMultilingualAdapter(engine=TreeSitterSemanticEngine())
+    parsed = adapter.parse(source, language="javascript", path="main.js")
+    extraction = adapter.extract(parsed)
+    generated = list(generate_document_curriculum(
+        document,
+        extraction.units,
+        records_from_assessments(extraction.assessments),
+        assessments=extraction.assessments,
+    ))
+
+    assert {item.family for item in generated} >= {
+        "semantic_continuation", "semantic_to_code", "code_to_semantic",
+        "structural_reasoning", "mixed_instruction", "knowledge_boundary",
+    }
+    assert all(item.language == "javascript" for item in generated)
+    assert all(item.prompt.startswith("Language: javascript\n") for item in generated)
+    assert all(dict(item.provenance)["semantic_spec_sha256"] == "s" * 64 for item in generated)
+
+
+def test_knowledge_boundary_targets_never_invent_support_without_evidence():
+    document, units, _, _ = _fixture()
+    score = UncertaintyScore(uncertainty=0.9, confidence=0.1, signals=("unknown semantic",))
+    assessment = KnowledgeBoundaryAssessment(
+        unit=units[0], initial_score=score, final_score=score,
+        state=KnowledgeState.UNRESOLVED, rounds=4, evidence=(),
+        wildcard_category="unclassified", wildcard_hypotheses=("may be a declaration",),
+    )
+    from bcnlt.corpus.tasks.knowledge_boundary import generate
+
+    record = generate(document, (assessment,), split="train")[0]
+    target = json.loads(record.target)
+    assert target["resolution"] == "unresolved"
+    assert target["supported_event"] is None
+    assert target["retrievals"] == []
+    assert target["wildcard_hypotheses"] == ["may be a declaration"]
+
+    supported = replace(
+        assessment, state=KnowledgeState.RETRIEVED, evidence=("definition:module.value",)
+    )
+    supported_target = json.loads(generate(document, (supported,), split="train")[0].target)
+    assert supported_target["resolution"] == "supported"
+    assert supported_target["retrievals"] == ["definition:module.value"]

@@ -18,6 +18,9 @@ def admission_policy_for_profile(profile: str) -> AdmissionPolicy:
         return AdmissionPolicy(
             minimum_records=100,
             minimum_encoded_tokens=10_000,
+            minimum_records_per_language=1,
+            maximum_language_fraction=1.0,
+            maximum_family_fraction=1.0,
             maximum_document_fraction=1.0,
             maximum_template_family_fraction=1.0,
         )
@@ -41,6 +44,8 @@ def _load_curriculum(path: Path) -> tuple[CurriculumRecord, ...]:
                     target=raw["target"],
                     provenance=tuple(sorted(raw["provenance"].items())),
                     split=raw["split"],
+                    language=raw.get("language", raw["provenance"]["canonical_language"]),
+                    dialect=raw.get("dialect"),
                 )
             )
         except (KeyError, TypeError) as exc:

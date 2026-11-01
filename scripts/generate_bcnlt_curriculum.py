@@ -4,7 +4,8 @@ import argparse
 import json
 from pathlib import Path
 
-from bcnlt.adapters.python import PythonAdapter
+from bcnlt.adapters.carousel import BCNLTMultilingualAdapter
+from bcnlt.adapters.tree_sitter import TreeSitterSemanticEngine
 from bcnlt.corpus.curriculum import generate_document_curriculum
 from bcnlt.corpus.database import CorpusDatabase
 from bcnlt.semantic_record import records_from_assessments
@@ -23,16 +24,27 @@ def main(argv: list[str] | None = None) -> int:
     if output.exists():
         parser.error(f"output already exists: {output}")
     output.parent.mkdir(parents=True, exist_ok=True)
-    adapter = PythonAdapter(wildcard_memory_path=args.wildcard_memory)
+    adapter = BCNLTMultilingualAdapter(
+        engine=TreeSitterSemanticEngine(wildcard_memory_root=args.wildcard_memory)
+    )
     count = 0
     with output.open("x", encoding="utf-8", newline="\n") as handle:
         for document in database.documents():
-            parsed = adapter.parse(document.content, path=document.relative_path)
+            parsed = adapter.parse(
+                document.content,
+                language=document.canonical_language,
+                path=document.relative_path,
+                dialect=document.dialect,
+            )
             extraction = adapter.extract(parsed)
             units = extraction.units
             records = records_from_assessments(extraction.assessments)
             for item in generate_document_curriculum(
-                document, units, records, split=args.split
+                document,
+                units,
+                records,
+                split=args.split,
+                assessments=extraction.assessments,
             ):
                 handle.write(json.dumps(item.to_dict(), ensure_ascii=False, sort_keys=True) + "\n")
                 count += 1

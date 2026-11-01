@@ -40,6 +40,7 @@ class PackedDatasetManifest:
     maximum_sequence_tokens: int
     shard_token_limit: int
     input_record_sha256: str
+    lineage_manifest_sha256: str
     accepted_record_count: int
     rejected_record_count: int
     shards: tuple[PackedShardManifest, ...]
@@ -53,6 +54,7 @@ class PackedDatasetManifest:
             "maximum_sequence_tokens": self.maximum_sequence_tokens,
             "shard_token_limit": self.shard_token_limit,
             "input_record_sha256": self.input_record_sha256,
+            "lineage_manifest_sha256": self.lineage_manifest_sha256,
             "accepted_record_count": self.accepted_record_count,
             "rejected_record_count": self.rejected_record_count,
             "shards": [shard.to_dict() for shard in self.shards],
@@ -81,6 +83,7 @@ def pack_training_shards(
     manifest_digest, vocab_size = _tokenizer_identity(tokenizer)
     ordered = tuple(sorted(records, key=lambda item: (item.split, item.record_id)))
     input_digest = _input_digest(ordered)
+    lineage_digest = _lineage_digest(ordered)
     output = Path(output_path)
     manifest_path = output / "dataset_manifest.json"
     if output.exists():
@@ -89,6 +92,8 @@ def pack_training_shards(
         if not manifest_path.is_file():
             raise ValueError("resume output has no dataset manifest")
         existing = _load_manifest(manifest_path)
+        if existing.lineage_manifest_sha256 != lineage_digest:
+            raise ValueError("resume parser/spec/registry lineage does not match")
         if existing.input_record_sha256 != input_digest:
             raise ValueError("resume input range does not match the existing manifest")
         if existing.tokenizer_manifest_sha256 != manifest_digest:
@@ -104,7 +109,13 @@ def pack_training_shards(
     encoded: list[_EncodedRecord] = []
     rejections: list[dict[str, object]] = []
     for record in ordered:
-        prompt_ids = _encode_mode(tokenizer, record.prompt_mode, record.prompt)
+        provenance_language = dict(record.provenance).get("canonical_language")
+        if provenance_language != record.language:
+            raise ValueError("curriculum record language does not match provenance")
+        prefix, prompt_body = _split_language_prefix(record.prompt, record.language)
+        prompt_ids = list(tokenizer.encode_text(prefix)) + _encode_mode(
+            tokenizer, record.prompt_mode, prompt_body
+        )
         target_ids = _encode_mode(tokenizer, record.target_mode, record.target)
         _validate_token_ids(prompt_ids, vocab_size)
         _validate_token_ids(target_ids, vocab_size)
@@ -137,24 +148,26 @@ def pack_training_shards(
             shards.append(_write_shard(output, split, shard_index, batch))
 
     body = {
-        "schema_version": "bcnlt-packed-dataset-v1",
+        "schema_version": "bcnlt-packed-dataset-v2",
         "tokenizer_manifest_sha256": manifest_digest,
         "tokenizer_vocab_size": vocab_size,
         "maximum_sequence_tokens": maximum_sequence_tokens,
         "shard_token_limit": shard_token_limit,
         "input_record_sha256": input_digest,
+        "lineage_manifest_sha256": lineage_digest,
         "accepted_record_count": len(encoded),
         "rejected_record_count": len(rejections),
         "shards": [shard.to_dict() for shard in shards],
     }
     dataset_digest = _canonical_hash(body)
     manifest = PackedDatasetManifest(
-        schema_version="bcnlt-packed-dataset-v1",
+        schema_version="bcnlt-packed-dataset-v2",
         tokenizer_manifest_sha256=manifest_digest,
         tokenizer_vocab_size=vocab_size,
         maximum_sequence_tokens=maximum_sequence_tokens,
         shard_token_limit=shard_token_limit,
         input_record_sha256=input_digest,
+        lineage_manifest_sha256=lineage_digest,
         accepted_record_count=len(encoded),
         rejected_record_count=len(rejections),
         shards=tuple(shards),
@@ -181,7 +194,7 @@ class PackedBCNLTDataset:
         if self.manifest.tokenizer_manifest_sha256 != expected_tokenizer_digest:
             raise ValueError("tokenizer manifest digest does not match packed dataset")
         _verify_manifest_files(self.root, self.manifest)
-        self._entries: list[tuple[PackedShardManifest, int, int, int, str, str]] = []
+        self._entries: list[tuple[PackedShardManifest, int, int, int, str, str, str]] = []
         for shard in self.manifest.shards:
             if shard.split != split:
                 continue
@@ -205,6 +218,7 @@ class PackedBCNLTDataset:
                     (
                         shard, token_offset, length, prompt_length,
                         str(metadata["record_id"]), str(metadata["target_mode"]),
+                        str(metadata["language"]),
                     )
                 )
 
@@ -212,7 +226,7 @@ class PackedBCNLTDataset:
         return len(self._entries)
 
     def __getitem__(self, index: int) -> dict[str, object]:
-        shard, offset, length, prompt_length, record_id, target_mode = self._entries[index]
+        shard, offset, length, prompt_length, record_id, target_mode, language = self._entries[index]
         binary = self.root / shard.binary_path
         with binary.open("rb") as handle:
             handle.seek(offset * 4)
@@ -224,6 +238,7 @@ class PackedBCNLTDataset:
         return {
             "record_id": record_id,
             "target_mode": target_mode,
+            "language": language,
             "input_ids": ids,
             "labels": [-100] * prompt_length + ids[prompt_length:],
             "attention_mask": [1] * len(ids),
@@ -247,7 +262,12 @@ def _encode_mode(tokenizer: Any, mode: str, value: str) -> list[int]:
     if mode == "semantic_code":
         records = _records_from_embedded_stream(value)
         if records:
-            return list(tokenizer.encode_records(records))
+            text = "".join(
+                line
+                for line in value.splitlines(keepends=True)
+                if not line.lstrip().startswith("{")
+            )
+            return list(tokenizer.encode_text(text)) + list(tokenizer.encode_records(records))
     return list(tokenizer.encode_text(value))
 
 
@@ -317,6 +337,8 @@ def _write_shard(
             "template_id": item.record.template_id,
             "target_mode": item.record.target_mode,
             "split": item.record.split,
+            "language": item.record.language,
+            "dialect": item.record.dialect,
             "offset": offset,
             "length": len(item.input_ids),
             "prompt_length": item.prompt_length,
@@ -348,6 +370,37 @@ def _write_shard(
 def _input_digest(records: Sequence[CurriculumRecord]) -> str:
     payload = [record.to_dict() for record in records]
     return _canonical_hash(payload)
+
+
+def _lineage_digest(records: Sequence[CurriculumRecord]) -> str:
+    keys = (
+        "registry_entry_sha256",
+        "parser_bundle_sha256",
+        "grammar_revision",
+        "semantic_spec_sha256",
+        "extraction_rule_version",
+    )
+    payload = set()
+    for record in records:
+        provenance = dict(record.provenance)
+        payload.add(
+            json.dumps(
+                {
+                    "language": record.language,
+                    **{key: provenance.get(key, "") for key in keys},
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+    return _canonical_hash(sorted(payload))
+
+
+def _split_language_prefix(value: str, language: str) -> tuple[str, str]:
+    prefix = f"Language: {language}\n"
+    if not value.startswith(prefix):
+        raise ValueError("curriculum prompt must begin with its canonical language field")
+    return prefix, value[len(prefix) :]
 
 
 def _canonical_hash(value: object) -> str:

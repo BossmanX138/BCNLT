@@ -21,12 +21,12 @@ def generate(
     *,
     split: str,
 ) -> list[CurriculumRecord]:
-    instruction = "Reconstruct parseable Python from these canonical BCNLT records:\n"
+    instruction = "Reconstruct parseable source from these canonical BCNLT records:\n"
     return [
         make_curriculum_record(
             document,
             family="semantic_to_code",
-            template_id="semantic-to-python-v1",
+            template_id="semantic-to-source-v2",
             prompt_mode="semantic_code",
             target_mode="raw_code",
             prompt=instruction + canonical_record_stream(window.records),
