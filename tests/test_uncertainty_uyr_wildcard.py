@@ -4,7 +4,13 @@ from bcnlt.uyr import UYRConfig, UYRResolver
 import json
 from pathlib import Path
 
-from bcnlt.wildcard import WildcardMemory, WildcardResolver
+from bcnlt.wildcard import (
+    MAX_CONTEXT_FINGERPRINTS,
+    MAX_DOCUMENT_IDENTITIES,
+    MAX_EVIDENCE_ITEMS,
+    WildcardMemory,
+    WildcardResolver,
+)
 from bcnlt.cache import ProjectIndex
 from bcnlt.core import ContextualUnit, SourceDocument
 from bcnlt.uncertainty import KnowledgeBoundaryAssessment, KnowledgeState
@@ -206,3 +212,24 @@ def test_memory_reuse_remains_provisional_even_after_repetition(tmp_path: Path):
     assert later.confidence < 0.72
     assert assessment.state is KnowledgeState.PROVISIONAL
     assert assessment.evidence
+
+
+def test_wildcard_memory_bounds_repeated_context_evidence():
+    unit = ContextualUnit("mystery", "UNKNOWN_SEMANTIC", "module", (1, 0, 1, 7))
+    memory = WildcardMemory(language="python", semantic_spec_sha256="d" * 64)
+    resolver = WildcardResolver(memory)
+    repetitions = MAX_CONTEXT_FINGERPRINTS + 20
+
+    for index in range(repetitions):
+        resolver.resolve_and_remember(
+            unit,
+            ProjectIndex(),
+            document_identity=f"document-{index}",
+        )
+
+    record = memory.lookup(unit)
+    assert record is not None
+    assert record.seen_count == repetitions
+    assert len(record.evidence) <= MAX_EVIDENCE_ITEMS
+    assert len(record.context_fingerprints) == MAX_CONTEXT_FINGERPRINTS
+    assert len(record.document_identities) == MAX_DOCUMENT_IDENTITIES

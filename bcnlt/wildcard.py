@@ -13,6 +13,13 @@ from .events import SemanticEvent
 from .ir import COMMON_CODING_CONCEPTS, IRKind
 
 
+MAX_EVIDENCE_ITEMS = 64
+MAX_HYPOTHESIS_ITEMS = 16
+MAX_EVIDENCE_KIND_ITEMS = 16
+MAX_CONTEXT_FINGERPRINTS = 64
+MAX_DOCUMENT_IDENTITIES = 64
+
+
 class DefinitionState(str, Enum):
     PROVISIONAL = "provisional"
     VALIDATED = "validated"
@@ -104,8 +111,16 @@ class WildcardMemory:
         signature = self.signature_for(unit)
         previous = self.records.get(signature)
         seen_count = 1 if previous is None else previous.seen_count + 1
-        evidence = _merge_tuple(previous.evidence if previous else (), meaning.evidence)
-        hypotheses = _merge_tuple(previous.hypotheses if previous else (), meaning.hypotheses)
+        evidence = _merge_tuple(
+            previous.evidence if previous else (),
+            meaning.evidence,
+            limit=MAX_EVIDENCE_ITEMS,
+        )
+        hypotheses = _merge_tuple(
+            previous.hypotheses if previous else (),
+            meaning.hypotheses,
+            limit=MAX_HYPOTHESIS_ITEMS,
+        )
         confidence = max(previous.confidence if previous else 0.0, meaning.confidence)
         definition_state = (
             previous.definition_state if previous else DefinitionState.PROVISIONAL
@@ -125,20 +140,32 @@ class WildcardMemory:
             previous.extension_name if previous else None
         )
         evidence_kinds = _merge_tuple(
-            previous.evidence_kinds if previous else (), meaning.evidence_kinds
+            previous.evidence_kinds if previous else (),
+            meaning.evidence_kinds,
+            limit=MAX_EVIDENCE_KIND_ITEMS,
         )
         context_fingerprints = _merge_tuple(
             previous.context_fingerprints if previous else (),
             (self.context_fingerprint_for(unit, document_identity),),
+            limit=MAX_CONTEXT_FINGERPRINTS,
         )
         document_identities = _merge_tuple(
             previous.document_identities if previous else (),
             (document_identity or "<unknown>",),
+            limit=MAX_DOCUMENT_IDENTITIES,
         )
         if len(context_fingerprints) >= 2 and targets_agree:
-            evidence_kinds = _merge_tuple(evidence_kinds, ("context_agreement",))
+            evidence_kinds = _merge_tuple(
+                evidence_kinds,
+                ("context_agreement",),
+                limit=MAX_EVIDENCE_KIND_ITEMS,
+            )
         if len(context_fingerprints) >= 3 and targets_agree:
-            evidence_kinds = _merge_tuple(evidence_kinds, ("stable_pattern",))
+            evidence_kinds = _merge_tuple(
+                evidence_kinds,
+                ("stable_pattern",),
+                limit=MAX_EVIDENCE_KIND_ITEMS,
+            )
         validated_by = previous.validated_by if previous else None
         required_contexts = 3 if target_ir_kind == IRKind.EXTENSION.value else 2
         if (
@@ -154,11 +181,12 @@ class WildcardMemory:
             validated_by = "autonomous"
             confidence = max(confidence, 0.82)
             evidence = _merge_tuple(
-                evidence,
                 (
                     "autonomous-validation:independent-contexts="
                     f"{len(context_fingerprints)};evidence-kinds={len(evidence_kinds)}",
                 ),
+                evidence,
+                limit=MAX_EVIDENCE_ITEMS,
             )
         record = WildcardMemoryRecord(
             signature=signature,
@@ -213,7 +241,7 @@ class WildcardMemory:
             relation=previous.relation,
             category=previous.category,
             hypotheses=previous.hypotheses,
-            evidence=_merge_tuple(previous.evidence, evidence),
+            evidence=_merge_tuple(evidence, previous.evidence, limit=MAX_EVIDENCE_ITEMS),
             confidence=max(0.9, previous.confidence),
             seen_count=previous.seen_count,
             language=previous.language,
@@ -221,7 +249,11 @@ class WildcardMemory:
             definition_state=DefinitionState.VALIDATED,
             target_event=event,
             target_ir_kind=ir_kind.value,
-            evidence_kinds=_merge_tuple(previous.evidence_kinds, ("external_validation",)),
+            evidence_kinds=_merge_tuple(
+                ("external_validation",),
+                previous.evidence_kinds,
+                limit=MAX_EVIDENCE_KIND_ITEMS,
+            ),
             context_fingerprints=previous.context_fingerprints,
             document_identities=previous.document_identities,
             validated_by="evidence",
@@ -298,8 +330,16 @@ class WildcardMemory:
                 surface=newer.surface or previous.surface,
                 relation=newer.relation or previous.relation,
                 category=newer.category or previous.category,
-                hypotheses=_merge_tuple(previous.hypotheses, record.hypotheses),
-                evidence=_merge_tuple(previous.evidence, record.evidence),
+                hypotheses=_merge_tuple(
+                    previous.hypotheses,
+                    record.hypotheses,
+                    limit=MAX_HYPOTHESIS_ITEMS,
+                ),
+                evidence=_merge_tuple(
+                    previous.evidence,
+                    record.evidence,
+                    limit=MAX_EVIDENCE_ITEMS,
+                ),
                 confidence=max(previous.confidence, record.confidence),
                 seen_count=max(previous.seen_count, record.seen_count),
                 language=newer.language,
@@ -307,12 +347,20 @@ class WildcardMemory:
                 definition_state=newer.definition_state,
                 target_event=newer.target_event or previous.target_event,
                 target_ir_kind=newer.target_ir_kind or previous.target_ir_kind,
-                evidence_kinds=_merge_tuple(previous.evidence_kinds, record.evidence_kinds),
+                evidence_kinds=_merge_tuple(
+                    previous.evidence_kinds,
+                    record.evidence_kinds,
+                    limit=MAX_EVIDENCE_KIND_ITEMS,
+                ),
                 context_fingerprints=_merge_tuple(
-                    previous.context_fingerprints, record.context_fingerprints
+                    previous.context_fingerprints,
+                    record.context_fingerprints,
+                    limit=MAX_CONTEXT_FINGERPRINTS,
                 ),
                 document_identities=_merge_tuple(
-                    previous.document_identities, record.document_identities
+                    previous.document_identities,
+                    record.document_identities,
+                    limit=MAX_DOCUMENT_IDENTITIES,
                 ),
                 validated_by=newer.validated_by or previous.validated_by,
                 extension_name=newer.extension_name or previous.extension_name,
@@ -418,11 +466,20 @@ class WildcardResolver:
         return meaning
 
 
-def _merge_tuple(left: tuple[str, ...], right: tuple[str, ...]) -> tuple[str, ...]:
+def _merge_tuple(
+    left: tuple[str, ...],
+    right: tuple[str, ...],
+    *,
+    limit: int | None = None,
+) -> tuple[str, ...]:
     merged: list[str] = []
+    seen: set[str] = set()
     for item in (*left, *right):
-        if item not in merged:
+        if item not in seen:
             merged.append(item)
+            seen.add(item)
+            if limit is not None and len(merged) >= limit:
+                break
     return tuple(merged)
 
 
