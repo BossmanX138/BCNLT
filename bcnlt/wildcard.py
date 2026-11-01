@@ -3,9 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sqlite3
 from dataclasses import asdict, dataclass
 from enum import Enum
 from pathlib import Path
+from typing import Literal
 
 from .cache import ProjectIndex
 from .core import ContextualUnit
@@ -60,7 +62,7 @@ class WildcardMemoryRecord:
 
 
 class WildcardMemory:
-    """Append-only memory for unknown semantic constructs BCNLT has already seen."""
+    """Persistent memory for unknown semantic constructs BCNLT has already seen."""
 
     def __init__(
         self,
@@ -68,23 +70,35 @@ class WildcardMemory:
         *,
         language: str = "python",
         semantic_spec_sha256: str = "legacy-python",
+        storage: Literal["jsonl", "sqlite"] = "jsonl",
     ) -> None:
         self.path = Path(path) if path is not None else None
         self.language = language
         self.semantic_spec_sha256 = semantic_spec_sha256
+        self.storage = storage
         self.records: dict[str, WildcardMemoryRecord] = {}
         self.load_warnings: list[str] = []
-        if self.path is not None and self.path.exists():
+        self._sqlite: sqlite3.Connection | None = None
+        self._sqlite_pending = 0
+        if storage == "sqlite":
+            if self.path is None:
+                raise ValueError("SQLite wildcard memory requires a path")
+            self._open_sqlite()
+        elif storage != "jsonl":
+            raise ValueError(f"Unsupported wildcard-memory storage: {storage}")
+        elif self.path is not None and self.path.exists():
             self._load()
 
     def signature_for(self, unit: ContextualUnit) -> str:
-        surface = unit.surface.strip().lower()
         relation = (unit.ast_relation or "").strip().lower()
         event = unit.event.strip().upper()
+        surface = unit.surface.strip().lower()
+        if event == SemanticEvent.UNKNOWN_SEMANTIC.value:
+            surface = str(unit.metadata.get("unknown_node") or relation or surface).casefold()
         return f"{self.language}|{self.semantic_spec_sha256}|{event}|{relation}|{surface}"
 
     def lookup(self, unit: ContextualUnit) -> WildcardMemoryRecord | None:
-        return self.records.get(self.signature_for(unit))
+        return self._lookup_signature(self.signature_for(unit))
 
     def context_fingerprint_for(
         self,
@@ -109,7 +123,7 @@ class WildcardMemory:
         document_identity: str | None = None,
     ) -> WildcardMemoryRecord:
         signature = self.signature_for(unit)
-        previous = self.records.get(signature)
+        previous = self._lookup_signature(signature)
         seen_count = 1 if previous is None else previous.seen_count + 1
         evidence = _merge_tuple(
             previous.evidence if previous else (),
@@ -263,11 +277,87 @@ class WildcardMemory:
         return record
 
     def _append(self, record: WildcardMemoryRecord) -> None:
+        if self._sqlite is not None:
+            payload = json.dumps(
+                _record_to_json(record),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            self._sqlite.execute(
+                "INSERT INTO wildcard_definitions(signature, payload) VALUES (?, ?) "
+                "ON CONFLICT(signature) DO UPDATE SET payload = excluded.payload",
+                (record.signature, payload),
+            )
+            self._sqlite_pending += 1
+            if self._sqlite_pending >= 1_000:
+                self.flush()
+            return
         self.records[record.signature] = record
         if self.path is not None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(_record_to_json(record), sort_keys=True) + "\n")
+
+    def _lookup_signature(self, signature: str) -> WildcardMemoryRecord | None:
+        if self._sqlite is None:
+            return self.records.get(signature)
+        row = self._sqlite.execute(
+            "SELECT payload FROM wildcard_definitions WHERE signature = ?",
+            (signature,),
+        ).fetchone()
+        if row is None:
+            return None
+        return _record_from_json(json.loads(str(row[0])))
+
+    def _open_sqlite(self) -> None:
+        assert self.path is not None
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(self.path)
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA synchronous=NORMAL")
+        connection.execute("PRAGMA temp_store=MEMORY")
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS wildcard_metadata ("
+            "key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID"
+        )
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS wildcard_definitions ("
+            "signature TEXT PRIMARY KEY, payload TEXT NOT NULL) WITHOUT ROWID"
+        )
+        metadata = {
+            "schema_version": "bcnlt-wildcard-sqlite-v1",
+            "language": self.language,
+            "semantic_spec_sha256": self.semantic_spec_sha256,
+        }
+        existing = dict(connection.execute("SELECT key, value FROM wildcard_metadata"))
+        if existing and existing != metadata:
+            connection.close()
+            raise ValueError("SQLite wildcard memory metadata does not match this cartridge")
+        connection.executemany(
+            "INSERT OR REPLACE INTO wildcard_metadata(key, value) VALUES (?, ?)",
+            metadata.items(),
+        )
+        connection.commit()
+        connection.execute("BEGIN")
+        self._sqlite = connection
+
+    def flush(self) -> None:
+        if self._sqlite is None:
+            return
+        self._sqlite.commit()
+        self._sqlite.execute("BEGIN")
+        self._sqlite_pending = 0
+
+    def close(self) -> None:
+        if self._sqlite is None:
+            return
+        connection = self._sqlite
+        self._sqlite = None
+        connection.commit()
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        connection.close()
+        self._sqlite_pending = 0
 
     def _load(self) -> None:
         if self.path is None:
@@ -291,30 +381,7 @@ class WildcardMemory:
                 raise ValueError(
                     f"Malformed learned-memory record at line {line_number}: {exc.msg}"
                 ) from exc
-            record = WildcardMemoryRecord(
-                signature=str(payload["signature"]),
-                surface=str(payload.get("surface", "")),
-                relation=str(payload.get("relation", "")),
-                category=str(payload.get("category", "extension")),
-                hypotheses=tuple(payload.get("hypotheses", ())),
-                evidence=tuple(payload.get("evidence", ())),
-                confidence=float(payload.get("confidence", 0.0)),
-                seen_count=int(payload.get("seen_count", 1)),
-                language=str(payload.get("language", self.language)),
-                semantic_spec_sha256=str(
-                    payload.get("semantic_spec_sha256", self.semantic_spec_sha256)
-                ),
-                definition_state=DefinitionState(
-                    payload.get("definition_state", DefinitionState.PROVISIONAL.value)
-                ),
-                target_event=payload.get("target_event"),
-                target_ir_kind=payload.get("target_ir_kind"),
-                evidence_kinds=tuple(payload.get("evidence_kinds", ())),
-                context_fingerprints=tuple(payload.get("context_fingerprints", ())),
-                document_identities=tuple(payload.get("document_identities", ())),
-                validated_by=payload.get("validated_by"),
-                extension_name=payload.get("extension_name"),
-            )
+            record = _record_from_json(payload)
             previous = self.records.get(record.signature)
             if previous is None:
                 self.records[record.signature] = record
@@ -528,3 +595,44 @@ def _record_to_json(record: WildcardMemoryRecord) -> dict[str, object]:
     payload["context_fingerprints"] = list(record.context_fingerprints)
     payload["document_identities"] = list(record.document_identities)
     return payload
+
+
+def _record_from_json(payload: dict[str, object]) -> WildcardMemoryRecord:
+    return WildcardMemoryRecord(
+        signature=str(payload["signature"]),
+        surface=str(payload.get("surface", "")),
+        relation=str(payload.get("relation", "")),
+        category=str(payload.get("category", "extension")),
+        hypotheses=tuple(payload.get("hypotheses", ())),
+        evidence=tuple(payload.get("evidence", ())),
+        confidence=float(payload.get("confidence", 0.0)),
+        seen_count=int(payload.get("seen_count", 1)),
+        language=str(payload.get("language", "python")),
+        semantic_spec_sha256=str(payload.get("semantic_spec_sha256", "legacy-python")),
+        definition_state=DefinitionState(
+            payload.get("definition_state", DefinitionState.PROVISIONAL.value)
+        ),
+        target_event=(
+            str(payload["target_event"])
+            if payload.get("target_event") is not None
+            else None
+        ),
+        target_ir_kind=(
+            str(payload["target_ir_kind"])
+            if payload.get("target_ir_kind") is not None
+            else None
+        ),
+        evidence_kinds=tuple(payload.get("evidence_kinds", ())),
+        context_fingerprints=tuple(payload.get("context_fingerprints", ())),
+        document_identities=tuple(payload.get("document_identities", ())),
+        validated_by=(
+            str(payload["validated_by"])
+            if payload.get("validated_by") is not None
+            else None
+        ),
+        extension_name=(
+            str(payload["extension_name"])
+            if payload.get("extension_name") is not None
+            else None
+        ),
+    )

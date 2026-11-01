@@ -5,7 +5,7 @@ from bcnlt.core import ContextualUnit, SourceDocument
 from bcnlt.ir import IRKind
 from bcnlt.preprocessing import SemanticPreprocessor
 from bcnlt.semantic_schema import KnowledgeState
-from bcnlt.uncertainty import HeuristicUncertaintyScorer
+from bcnlt.uncertainty import HeuristicUncertaintyScorer, UncertaintyScore
 from bcnlt.wildcard import WildcardMemory, WildcardResolver
 
 
@@ -17,6 +17,15 @@ class CountingScorer(HeuristicUncertaintyScorer):
     def score(self, unit, index):
         self.calls += 1
         return super().score(unit, index)
+
+
+class AlwaysUncertainScorer(HeuristicUncertaintyScorer):
+    def score(self, unit, index):
+        return UncertaintyScore(
+            uncertainty=0.9,
+            confidence=0.1,
+            signals=("test uncertainty",),
+        )
 
 
 def _document(unit: ContextualUnit, path: str = "sample.py") -> SourceDocument:
@@ -69,6 +78,29 @@ def test_repetition_in_preprocessing_does_not_validate_a_wildcard(tmp_path: Path
     assert result.assessments[0].state is KnowledgeState.PROVISIONAL
     assert result.assessments[0].final_score.confidence < 0.72
     assert result.units[0].event == "UNKNOWN_SEMANTIC"
+
+
+def test_known_uncertain_units_do_not_pollute_persistent_grammar_memory(tmp_path: Path):
+    unit = ContextualUnit(
+        surface="external_name",
+        event="REFERENCE",
+        scope="module",
+        span=(1, 0, 1, 13),
+        ast_relation="identifier.self",
+    )
+    preprocessor = SemanticPreprocessor(
+        memory_root=tmp_path,
+        scorer=AlwaysUncertainScorer(),
+    )
+
+    result = preprocessor.process(
+        _document(unit),
+        [unit],
+        semantic_spec_sha256="f" * 64,
+    )
+
+    assert result.assessments[0].state is KnowledgeState.UNRESOLVED
+    assert not (tmp_path / "python.jsonl").exists()
 
 
 def test_validated_wildcard_is_injected_before_canonical_admission(tmp_path: Path):

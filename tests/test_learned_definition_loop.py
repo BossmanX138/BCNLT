@@ -1,4 +1,5 @@
 from pathlib import Path
+import sqlite3
 
 import pytest
 
@@ -250,3 +251,54 @@ def test_malformed_middle_append_record_is_rejected(tmp_path: Path):
 
     with pytest.raises(ValueError, match="line 2"):
         WildcardMemory(path, language="python", semantic_spec_sha256="4" * 64)
+
+
+def test_unknown_grammar_signature_generalizes_across_surface_instances():
+    first = _unknown()
+    second = ContextualUnit(
+        surface="match another_value",
+        event=first.event,
+        scope=first.scope,
+        span=(5, 0, 5, 19),
+        ast_relation=first.ast_relation,
+        metadata=first.metadata,
+    )
+    memory = WildcardMemory(language="python", semantic_spec_sha256="5" * 64)
+
+    assert memory.signature_for(first) == memory.signature_for(second)
+
+
+def test_sqlite_wildcard_memory_keeps_only_latest_definition_state(tmp_path: Path):
+    unit = _unknown()
+    path = tmp_path / "python.sqlite3"
+    memory = WildcardMemory(
+        path,
+        language="python",
+        semantic_spec_sha256="6" * 64,
+        storage="sqlite",
+    )
+    resolver = WildcardResolver(memory)
+    for index in range(25):
+        resolver.resolve_and_remember(
+            unit,
+            ProjectIndex(),
+            document_identity=f"sample-{index}.py",
+        )
+    memory.close()
+
+    with sqlite3.connect(path) as connection:
+        stored = connection.execute(
+            "SELECT count(*) FROM wildcard_definitions"
+        ).fetchone()[0]
+    reloaded = WildcardMemory(
+        path,
+        language="python",
+        semantic_spec_sha256="6" * 64,
+        storage="sqlite",
+    )
+    learned = reloaded.lookup(unit)
+    reloaded.close()
+
+    assert stored == 1
+    assert learned is not None
+    assert learned.seen_count == 25

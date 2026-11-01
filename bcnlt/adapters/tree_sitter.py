@@ -5,7 +5,7 @@ import sys
 import time
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from bcnlt.cache import ProjectIndex, parser_bundle_sha256
 from bcnlt.core import ContextualUnit, SourceDocument, Span
@@ -62,6 +62,7 @@ class TreeSitterSemanticEngine:
         parser_provider: ParserProvider | None = None,
         wildcard_memory_root: str | Path | None = None,
         wildcard_memory_path: str | Path | None = None,
+        wildcard_memory_storage: Literal["jsonl", "sqlite"] = "jsonl",
     ) -> None:
         self._parser_provider = parser_provider or _default_parser_provider
         self._wildcard_memory_root = (
@@ -71,7 +72,11 @@ class TreeSitterSemanticEngine:
         self._preprocessor = SemanticPreprocessor(
             memory_root=self._wildcard_memory_root,
             memory_path=wildcard_memory_path,
+            memory_storage=wildcard_memory_storage,
         )
+
+    def close(self) -> None:
+        self._preprocessor.close()
 
     def parse(
         self,

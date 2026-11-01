@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Literal
 
 from .core import ContextualUnit, SourceDocument
 from .semantic_record import SemanticTokenRecord, records_from_assessments
@@ -33,11 +34,13 @@ class SemanticPreprocessor:
         *,
         memory_root: str | Path | None = None,
         memory_path: str | Path | None = None,
+        memory_storage: Literal["jsonl", "sqlite"] = "jsonl",
         scorer: HeuristicUncertaintyScorer | None = None,
         uyr_config: UYRConfig | None = None,
     ) -> None:
         self.memory_root = Path(memory_root) if memory_root is not None else None
         self.memory_path = Path(memory_path) if memory_path is not None else None
+        self.memory_storage = memory_storage
         if self.memory_root is not None and self.memory_path is not None:
             raise ValueError("Choose either a learned-memory root or an exact memory path")
         self.scorer = scorer or HeuristicUncertaintyScorer()
@@ -54,7 +57,8 @@ class SemanticPreprocessor:
         raw_units = list(units)
         memory_path = self.memory_path
         if memory_path is None and self.memory_root is not None:
-            memory_path = self.memory_root / f"{document.language}.jsonl"
+            suffix = "sqlite3" if self.memory_storage == "sqlite" else "jsonl"
+            memory_path = self.memory_root / f"{document.language}.{suffix}"
         memory_key = (
             document.language,
             semantic_spec_sha256,
@@ -66,6 +70,7 @@ class SemanticPreprocessor:
                 memory_path,
                 language=document.language,
                 semantic_spec_sha256=semantic_spec_sha256,
+                storage=self.memory_storage,
             )
             self._memories[memory_key] = memory
         wildcard = WildcardResolver(memory)
@@ -138,6 +143,16 @@ class SemanticPreprocessor:
                 evidence=result.retrievals,
             )
 
+        if unit.event != "UNKNOWN_SEMANTIC":
+            return KnowledgeBoundaryAssessment(
+                unit=unit,
+                initial_score=initial,
+                final_score=final,
+                state=KnowledgeState.UNRESOLVED,
+                rounds=result.rounds,
+                evidence=result.retrievals,
+            )
+
         meaning = wildcard.resolve_and_remember(
             unit,
             document.index,
@@ -164,6 +179,10 @@ class SemanticPreprocessor:
         if not meaning.hypotheses or not meaning.evidence:
             assessment = replace(assessment, state=KnowledgeState.UNRESOLVED)
         return assessment
+
+    def close(self) -> None:
+        for memory in self._memories.values():
+            memory.close()
 
 
 def process_python_source(source: str, path: str = "<memory>") -> list[ContextualUnit]:
