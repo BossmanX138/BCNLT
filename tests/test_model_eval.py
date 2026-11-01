@@ -38,6 +38,8 @@ def test_model_eval_answers_definition_questions_from_contexts():
     assert report.bcnlt_accuracy >= report.standard_accuracy
     assert report.bcnlt_accuracy == 1.0
     assert any(result.standard_correct is False for result in report.results)
+    assert report.language == "python"
+    assert len(report.semantic_spec_sha256) == 64
 
 
 def test_cli_writes_model_eval_report(tmp_path: Path):
@@ -51,6 +53,8 @@ def test_cli_writes_model_eval_report(tmp_path: Path):
             "-m",
             "bcnlt.cli",
             str(sample),
+            "--language",
+            "python",
             "--model-eval-report",
             str(report_path),
             "--model-eval-max-probes",
@@ -65,6 +69,7 @@ def test_cli_writes_model_eval_report(tmp_path: Path):
     assert "BCNLT model-context eval report" in result.stdout
     assert payload["model_name"] == "oracle-definition-line"
     assert payload["bcnlt_accuracy"] >= payload["standard_accuracy"]
+    assert payload["language"] == "python"
 
 
 def test_cli_rejects_openai_provider_without_api_key(tmp_path: Path, monkeypatch):
@@ -78,6 +83,8 @@ def test_cli_rejects_openai_provider_without_api_key(tmp_path: Path, monkeypatch
             "-m",
             "bcnlt.cli",
             str(sample),
+            "--language",
+            "python",
             "--model-eval-report",
             str(tmp_path / "model-report.json"),
             "--model-eval-provider",

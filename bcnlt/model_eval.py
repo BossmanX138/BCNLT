@@ -7,7 +7,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, Protocol
 
-from .adapters.python import PythonAdapter
+from .adapters.carousel import BCNLTMultilingualAdapter
+from .adapters.tree_sitter import TreeSitterSemanticEngine
+from .cache import adapter_cache_identity
 from .core import ContextualUnit
 from .meaning_eval import MeaningProbe
 
@@ -46,6 +48,10 @@ class ModelEvalReport:
     standard_accuracy: float
     bcnlt_accuracy: float
     results: tuple[ModelAnswerResult, ...]
+    language: str = "python"
+    dialect: str | None = None
+    parser_bundle_sha256: str = "legacy-python"
+    semantic_spec_sha256: str = "legacy-python"
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -57,6 +63,10 @@ class ModelEvalReport:
             "standard_accuracy": self.standard_accuracy,
             "bcnlt_accuracy": self.bcnlt_accuracy,
             "results": [result.to_dict() for result in self.results],
+            "language": self.language,
+            "dialect": self.dialect,
+            "parser_bundle_sha256": self.parser_bundle_sha256,
+            "semantic_spec_sha256": self.semantic_spec_sha256,
         }
 
 
@@ -73,7 +83,7 @@ class OracleDefinitionLineModel:
             line_number = _line_number(line)
             if line_number is None:
                 continue
-            if _bcnlt_line_defines_symbol(line, symbol) or _python_line_defines_symbol(line, symbol):
+            if _bcnlt_line_defines_symbol(line, symbol) or _source_line_defines_symbol(line, symbol):
                 return f"line {line_number}"
         return "unknown"
 
@@ -185,11 +195,15 @@ def evaluate_model_source(
     max_probes: int = 50,
     standard_context_lines: int = 1,
     bcnlt_context_units: int = 2,
+    *,
+    language: str = "python",
+    dialect: str | None = None,
 ) -> ModelEvalReport:
     model = model or OracleDefinitionLineModel()
-    adapter = PythonAdapter()
-    document = adapter.parse(source, path=path)
-    units = list(adapter.to_units(document))
+    adapter = BCNLTMultilingualAdapter(engine=TreeSitterSemanticEngine())
+    identity = adapter_cache_identity(adapter, language, dialect)
+    document = adapter.parse(source, language=language, path=path, dialect=dialect)
+    units = list(adapter.extract(document).units)
     probes = _generate_definition_probes(units, max_probes=max_probes)
     results = tuple(
         _evaluate_answer_probe(
@@ -214,6 +228,10 @@ def evaluate_model_source(
         standard_accuracy=(standard_correct / probe_count) if probe_count else 0.0,
         bcnlt_accuracy=(bcnlt_correct / probe_count) if probe_count else 0.0,
         results=results,
+        language=language,
+        dialect=dialect,
+        parser_bundle_sha256=identity.parser_bundle_sha256,
+        semantic_spec_sha256=identity.semantic_spec_sha256,
     )
 
 
@@ -221,10 +239,16 @@ def evaluate_model_file(
     path: str | Path,
     max_probes: int = 50,
     model: ContextAnswerModel | None = None,
+    *,
+    language: str = "python",
+    dialect: str | None = None,
 ) -> ModelEvalReport:
     file_path = Path(path)
     source = file_path.read_text(encoding="utf-8-sig")
-    return evaluate_model_source(source, path=str(file_path), max_probes=max_probes, model=model)
+    return evaluate_model_source(
+        source, path=str(file_path), max_probes=max_probes, model=model,
+        language=language, dialect=dialect,
+    )
 
 
 def _generate_definition_probes(
@@ -327,14 +351,27 @@ def _bcnlt_line_defines_symbol(line: str, symbol: str) -> bool:
     return f"DEFINE {symbol} " in line or line.endswith(f"DEFINE {symbol}")
 
 
-def _python_line_defines_symbol(line: str, symbol: str) -> bool:
+def _source_line_defines_symbol(line: str, symbol: str) -> bool:
     escaped = re.escape(symbol)
     patterns = [
-        rf"\bdef\s+{escaped}\s*\(",
+        rf"\b(?:def|function|func|fn|fun)\s+{escaped}\s*\(",
         rf"\bclass\s+{escaped}\b",
-        rf"\b{escaped}\s*=",
+        rf"(?:\$?\b{escaped}|\${escaped})\s*(?::=|=)",
+        rf"\b(?:let|var|const|local)\s+(?:mut\s+)?\$?{escaped}\b",
+        (
+            rf"^\s*(?:(?:public|private|protected|internal|static|final|virtual|"
+            rf"override|inline|extern|constexpr)\s+)*(?:void|bool|boolean|char|"
+            rf"short|int|long|float|double|[A-Z]\w*(?:<[^>]+>)?)\s+{escaped}\s*\("
+        ),
+        rf"^\s*{escaped}\s*\(\s*\)\s*\{{",
     ]
     return any(re.search(pattern, line) for pattern in patterns)
+
+
+def _python_line_defines_symbol(line: str, symbol: str) -> bool:
+    """Compatibility alias retained for callers of the former Python-only helper."""
+
+    return _source_line_defines_symbol(line, symbol)
 
 
 def _answer_matches_line(answer: str, line: int) -> bool:

@@ -3,7 +3,9 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from .adapters.python import PythonAdapter
+from .adapters.carousel import BCNLTMultilingualAdapter
+from .adapters.tree_sitter import TreeSitterSemanticEngine
+from .cache import adapter_cache_identity
 from .core import ContextualUnit
 
 
@@ -45,6 +47,10 @@ class MeaningEvalReport:
     standard_accuracy: float
     bcnlt_accuracy: float
     results: tuple[RetrievalResult, ...]
+    language: str = "python"
+    dialect: str | None = None
+    parser_bundle_sha256: str = "legacy-python"
+    semantic_spec_sha256: str = "legacy-python"
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -55,6 +61,10 @@ class MeaningEvalReport:
             "standard_accuracy": self.standard_accuracy,
             "bcnlt_accuracy": self.bcnlt_accuracy,
             "results": [result.to_dict() for result in self.results],
+            "language": self.language,
+            "dialect": self.dialect,
+            "parser_bundle_sha256": self.parser_bundle_sha256,
+            "semantic_spec_sha256": self.semantic_spec_sha256,
         }
 
 
@@ -64,10 +74,14 @@ def evaluate_meaning_source(
     max_probes: int = 50,
     standard_context_lines: int = 1,
     bcnlt_context_units: int = 2,
+    *,
+    language: str = "python",
+    dialect: str | None = None,
 ) -> MeaningEvalReport:
-    adapter = PythonAdapter()
-    document = adapter.parse(source, path=path)
-    units = list(adapter.to_units(document))
+    adapter = BCNLTMultilingualAdapter(engine=TreeSitterSemanticEngine())
+    identity = adapter_cache_identity(adapter, language, dialect)
+    document = adapter.parse(source, language=language, path=path, dialect=dialect)
+    units = list(adapter.extract(document).units)
     probes = _generate_definition_probes(units, max_probes=max_probes)
     results = tuple(
         _evaluate_probe(
@@ -90,13 +104,26 @@ def evaluate_meaning_source(
         standard_accuracy=(standard_hits / probe_count) if probe_count else 0.0,
         bcnlt_accuracy=(bcnlt_hits / probe_count) if probe_count else 0.0,
         results=results,
+        language=language,
+        dialect=dialect,
+        parser_bundle_sha256=identity.parser_bundle_sha256,
+        semantic_spec_sha256=identity.semantic_spec_sha256,
     )
 
 
-def evaluate_meaning_file(path: str | Path, max_probes: int = 50) -> MeaningEvalReport:
+def evaluate_meaning_file(
+    path: str | Path,
+    max_probes: int = 50,
+    *,
+    language: str = "python",
+    dialect: str | None = None,
+) -> MeaningEvalReport:
     file_path = Path(path)
     source = file_path.read_text(encoding="utf-8-sig")
-    return evaluate_meaning_source(source, path=str(file_path), max_probes=max_probes)
+    return evaluate_meaning_source(
+        source, path=str(file_path), max_probes=max_probes,
+        language=language, dialect=dialect,
+    )
 
 
 def _generate_definition_probes(

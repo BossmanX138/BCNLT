@@ -164,11 +164,22 @@ class SemanticPreprocessor:
 
 
 def process_python_source(source: str, path: str = "<memory>") -> list[ContextualUnit]:
-    from .adapters.python import PythonAdapter
+    return process_source(source, language="python", path=path)
 
-    adapter = PythonAdapter()
-    document = adapter.parse(source, path=path)
-    return list(adapter.to_units(document))
+
+def process_source(
+    source: str,
+    *,
+    language: str,
+    path: str = "<memory>",
+    dialect: str | None = None,
+) -> list[ContextualUnit]:
+    from .adapters.carousel import BCNLTMultilingualAdapter
+    from .adapters.tree_sitter import TreeSitterSemanticEngine
+
+    adapter = BCNLTMultilingualAdapter(engine=TreeSitterSemanticEngine())
+    document = adapter.parse(source, language=language, path=path, dialect=dialect)
+    return list(adapter.extract(document).units)
 
 
 def process_python_files(paths: Iterable[str], workers: int = 1) -> dict[str, list[ContextualUnit]]:

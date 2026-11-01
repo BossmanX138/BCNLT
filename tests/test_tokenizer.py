@@ -86,6 +86,17 @@ def test_encode_source_matches_precomputed_record_encoding():
     assert tokenizer.encode_source(source, "add.py") == tokenizer.encode_records(_records(source))
 
 
+def test_encode_source_routes_non_python_through_the_multilingual_carousel():
+    tokenizer = _tokenizer()
+    source = "function add(left, right) { return left + right; }\n"
+
+    encoded = tokenizer.encode_source(source, "add.js", language="javascript")
+    records = tokenizer.decode_records(encoded)
+
+    assert records
+    assert any(record.event == "DEFINE" and record.surface == "add" for record in records)
+
+
 def test_decoder_rejects_truncated_semantic_field():
     tokenizer = _tokenizer()
     encoded = tokenizer.encode_records(_records("answer = 42\n"))

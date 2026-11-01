@@ -5,7 +5,9 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
+from .adapters.carousel import BCNLTMultilingualAdapter
 from .adapters.python import PythonAdapter
+from .adapters.tree_sitter import TreeSitterSemanticEngine
 from .canonical import canonical_record_bytes, record_from_canonical_bytes
 from .semantic_record import SemanticTokenRecord, records_from_assessments
 from .tokenizer_base import BaseTokenizer
@@ -43,9 +45,10 @@ class BCNLTTokenizer:
         self.manifest = manifest
         self._token_to_id = manifest.token_to_id
         self._id_to_token = manifest.id_to_token
-        self._semantic_adapter = PythonAdapter(
-            wildcard_memory_path=learned_memory_path
+        self._semantic_adapter = BCNLTMultilingualAdapter(
+            engine=TreeSitterSemanticEngine(wildcard_memory_path=learned_memory_path)
         )
+        self._python_adapter = PythonAdapter(wildcard_memory_path=learned_memory_path)
 
     def encode_text(self, text: str) -> list[int]:
         return self._encode_base_mode("text", text)
@@ -79,11 +82,23 @@ class BCNLTTokenizer:
         result.append(self._id("stream:end"))
         return result
 
-    def encode_source(self, source: str, path: str = "<memory>") -> list[int]:
-        document = self._semantic_adapter.parse(source, path=path)
-        records = records_from_assessments(
-            self._semantic_adapter.extract(document).assessments
-        )
+    def encode_source(
+        self,
+        source: str,
+        path: str = "<memory>",
+        *,
+        language: str = "python",
+        dialect: str | None = None,
+    ) -> list[int]:
+        if language == "python" and dialect in {None, "python3"}:
+            document = self._python_adapter.parse(source, path=path)
+            assessments = self._python_adapter.extract(document).assessments
+        else:
+            document = self._semantic_adapter.parse(
+                source, language=language, path=path, dialect=dialect
+            )
+            assessments = self._semantic_adapter.extract(document).assessments
+        records = records_from_assessments(assessments)
         return self.encode_records(records)
 
     def decode(self, ids: Sequence[int]) -> str:

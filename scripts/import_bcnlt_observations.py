@@ -36,9 +36,30 @@ def main() -> int:
                 "GROUP BY model_id ORDER BY model_id"
             )
         ]
+        languages = [
+            {"language": row[0], "documents": row[1]}
+            for row in connection.execute(
+                "SELECT language, COUNT(*) FROM documents "
+                "GROUP BY language ORDER BY language"
+            )
+        ]
+        schema_version = connection.execute(
+            "SELECT value FROM schema_meta WHERE key='schema_version'"
+        ).fetchone()[0]
     finally:
         connection.close()
-    print(json.dumps({"database": str(database), "imported": imported, "models": models}, indent=2))
+    print(
+        json.dumps(
+            {
+                "database": str(database),
+                "schema_version": schema_version,
+                "imported": imported,
+                "languages": languages,
+                "models": models,
+            },
+            indent=2,
+        )
+    )
     return 0
 
 

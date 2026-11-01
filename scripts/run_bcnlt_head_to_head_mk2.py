@@ -16,6 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bcnlt.model_eval import OllamaChatModel, _answer_matches_line, evaluate_model_file
+from bcnlt.languages import CANONICAL_LANGUAGE_IDS, LANGUAGE_BY_ID
 
 
 @dataclass
@@ -35,10 +36,12 @@ class TimedModel:
             self.latencies.append(time.perf_counter() - started)
 
 
-def discover_files(root: Path, max_files: int) -> list[Path]:
+def discover_files(root: Path, max_files: int, language: str) -> list[Path]:
+    extensions = LANGUAGE_BY_ID[language].accepted_extensions
     candidates = sorted(
         path
-        for path in root.rglob("*.py")
+        for path in root.rglob("*")
+        if path.is_file() and path.suffix.lower() in extensions
         if path.name != "__init__.py" and "__pycache__" not in path.parts
     )
     return candidates[:max_files]
@@ -71,6 +74,8 @@ def evaluate_one(
     files: list[Path],
     base_url: str,
     max_probes: int,
+    language: str,
+    dialect: str | None,
 ) -> dict[str, Any]:
     client = OllamaChatModel(
         model=model_id,
@@ -82,7 +87,10 @@ def evaluate_one(
     timed = TimedModel(client)
     reports = []
     for index, path in enumerate(files, start=1):
-        report = evaluate_model_file(path, max_probes=max_probes, model=timed)
+        report = evaluate_model_file(
+            path, max_probes=max_probes, model=timed,
+            language=language, dialect=dialect,
+        )
         reports.append(report)
         print(
             f"[{model_id}] {index}/{len(files)} {path.name}: "
@@ -190,17 +198,25 @@ def main() -> int:
     parser.add_argument("--runeforge-model", default="runeforge-mk2:7b")
     parser.add_argument("--max-files", type=int, default=8)
     parser.add_argument("--max-probes-per-file", type=int, default=6)
+    parser.add_argument("--language", choices=CANONICAL_LANGUAGE_IDS, required=True)
+    parser.add_argument("--dialect")
     args = parser.parse_args()
 
-    files = discover_files(args.input.resolve(), args.max_files)
+    files = discover_files(args.input.resolve(), args.max_files, args.language)
     if not files:
-        raise SystemExit(f"No Python files found under {args.input}")
+        raise SystemExit(f"No {args.language} files found under {args.input}")
     args.output.mkdir(parents=True, exist_ok=True)
 
     started = datetime.now(timezone.utc)
-    wizard = evaluate_one(args.wizard_model, files, args.base_url, args.max_probes_per_file)
+    wizard = evaluate_one(
+        args.wizard_model, files, args.base_url, args.max_probes_per_file,
+        args.language, args.dialect,
+    )
     unload(args.base_url, args.wizard_model)
-    runeforge = evaluate_one(args.runeforge_model, files, args.base_url, args.max_probes_per_file)
+    runeforge = evaluate_one(
+        args.runeforge_model, files, args.base_url, args.max_probes_per_file,
+        args.language, args.dialect,
+    )
     unload(args.base_url, args.runeforge_model)
     paired = paired_outcomes(wizard, runeforge)
     if wizard["bcnlt_accuracy"] > runeforge["bcnlt_accuracy"]:
@@ -210,10 +226,12 @@ def main() -> int:
     else:
         winner = "Tie"
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "elapsed_seconds": (datetime.now(timezone.utc) - started).total_seconds(),
         "input": str(args.input.resolve()),
+        "language": args.language,
+        "dialect": args.dialect,
         "files": [str(path) for path in files],
         "file_count": len(files),
         "max_probes_per_file": args.max_probes_per_file,

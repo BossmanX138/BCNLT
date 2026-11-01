@@ -13,6 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bcnlt.semantic_db import build_database, export_training_jsonl
+from bcnlt.languages import CANONICAL_LANGUAGE_IDS
 
 
 def main() -> int:
@@ -23,6 +24,8 @@ def main() -> int:
     parser.add_argument("--manifest", type=Path, default=Path("data/dataset_manifest.json"))
     parser.add_argument("--holdout-list", type=Path)
     parser.add_argument("--observations", type=Path)
+    parser.add_argument("--language", choices=CANONICAL_LANGUAGE_IDS, required=True)
+    parser.add_argument("--dialect")
     args = parser.parse_args()
 
     root = args.root.resolve()
@@ -33,7 +36,10 @@ def main() -> int:
             for line in args.holdout_list.read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
-    stats = build_database(root, args.database.resolve(), holdouts, args.observations)
+    stats = build_database(
+        root, args.database.resolve(), holdouts, args.observations,
+        language=args.language, dialect=args.dialect,
+    )
     exported = export_training_jsonl(args.database.resolve(), args.export.resolve())
     database_sha = hashlib.sha256(args.database.resolve().read_bytes()).hexdigest()
     with sqlite3.connect(args.database.resolve()) as connection:
@@ -43,8 +49,17 @@ def main() -> int:
         eligible_pairs = connection.execute(
             "SELECT COUNT(*) FROM semantic_pairs WHERE training_eligible=1"
         ).fetchone()[0]
+        lineage = connection.execute(
+            "SELECT parser_bundle_sha256, semantic_spec_sha256 FROM documents "
+            "WHERE language = ? AND dialect = ? LIMIT 1",
+            (args.language, args.dialect or ""),
+        ).fetchone()
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "language": args.language,
+        "dialect": args.dialect,
+        "parser_bundle_sha256": lineage[0] if lineage else None,
+        "semantic_spec_sha256": lineage[1] if lineage else None,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "run_id": stats.run_id,
         "database": str(args.database.resolve()),

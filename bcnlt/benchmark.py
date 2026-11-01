@@ -8,7 +8,10 @@ import tokenize
 from dataclasses import dataclass
 from pathlib import Path
 
-from .adapters.python import PythonAdapter
+from .adapters.carousel import BCNLTMultilingualAdapter
+from .adapters.tree_sitter import TreeSitterSemanticEngine
+from .cache import adapter_cache_identity
+from .languages import LANGUAGE_BY_ID
 
 
 @dataclass(frozen=True)
@@ -22,8 +25,12 @@ class BenchmarkReport:
     uyr_activation_count: int
     wildcard_count: int
     elapsed_ms: float
+    language: str = "python"
+    dialect: str | None = None
+    parser_bundle_sha256: str = "legacy-python"
+    semantic_spec_sha256: str = "legacy-python"
 
-    def to_dict(self) -> dict[str, float | int | str]:
+    def to_dict(self) -> dict[str, object]:
         return {
             "path": self.path,
             "standard_token_count": self.standard_token_count,
@@ -35,6 +42,10 @@ class BenchmarkReport:
             "wildcard_count": self.wildcard_count,
             "event_to_standard_ratio": self.event_to_standard_ratio,
             "elapsed_ms": self.elapsed_ms,
+            "language": self.language,
+            "dialect": self.dialect,
+            "parser_bundle_sha256": self.parser_bundle_sha256,
+            "semantic_spec_sha256": self.semantic_spec_sha256,
         }
 
     @property
@@ -57,6 +68,8 @@ class ProjectBenchmarkReport:
     elapsed_ms: float
     workers: int
     files: tuple[BenchmarkReport, ...]
+    language: str = "python"
+    dialect: str | None = None
 
     @property
     def event_to_standard_ratio(self) -> float:
@@ -78,6 +91,8 @@ class ProjectBenchmarkReport:
             "elapsed_ms": self.elapsed_ms,
             "workers": self.workers,
             "files": [file.to_dict() for file in self.files],
+            "language": self.language,
+            "dialect": self.dialect,
         }
 
 
@@ -87,7 +102,9 @@ class StandardTokenCount:
     tokenizer_name: str
 
 
-def lexical_token_count(source: str) -> int:
+def lexical_token_count(source: str, language: str = "python") -> int:
+    if language != "python":
+        return len(re.findall(r"\w+|[^\w\s]", source, flags=re.UNICODE))
     tokens = tokenize.generate_tokens(io.StringIO(source).readline)
     return sum(1 for token in tokens if token.type not in {tokenize.ENCODING, tokenize.ENDMARKER})
 
@@ -109,10 +126,14 @@ def benchmark_source(
     source: str,
     path: str = "<memory>",
     confidence_threshold: float = 0.72,
+    *,
+    language: str = "python",
+    dialect: str | None = None,
 ) -> BenchmarkReport:
     start = time.perf_counter()
-    adapter = PythonAdapter()
-    document = adapter.parse(source, path=path)
+    adapter = BCNLTMultilingualAdapter(engine=TreeSitterSemanticEngine())
+    identity = adapter_cache_identity(adapter, language, dialect)
+    document = adapter.parse(source, language=language, path=path, dialect=dialect)
     extraction = adapter.extract(document)
     units = list(extraction.units)
     scores = [assessment.final_score for assessment in extraction.assessments]
@@ -122,12 +143,16 @@ def benchmark_source(
         path=path,
         standard_token_count=standard.count,
         standard_tokenizer_name=standard.tokenizer_name,
-        lexical_token_count=lexical_token_count(source),
+        lexical_token_count=lexical_token_count(source, language),
         event_count=len(units),
         uncertain_event_count=sum(1 for score in scores if score.uncertainty > 0.25),
         uyr_activation_count=sum(1 for score in scores if score.confidence < confidence_threshold),
         wildcard_count=sum(1 for unit in units if unit.event == "UNKNOWN_SEMANTIC"),
         elapsed_ms=elapsed_ms,
+        language=language,
+        dialect=dialect,
+        parser_bundle_sha256=identity.parser_bundle_sha256,
+        semantic_spec_sha256=identity.semantic_spec_sha256,
     )
 
 
@@ -135,20 +160,27 @@ def benchmark_project(
     root: str | Path,
     workers: int = 1,
     confidence_threshold: float = 0.72,
+    *,
+    language: str = "python",
+    dialect: str | None = None,
 ) -> ProjectBenchmarkReport:
     root_path = Path(root)
-    paths = sorted(path for path in root_path.rglob("*.py") if path.is_file())
+    extensions = LANGUAGE_BY_ID[language].accepted_extensions
+    paths = sorted(
+        path for path in root_path.rglob("*")
+        if path.is_file() and path.suffix.lower() in extensions
+    )
     start = time.perf_counter()
     if workers > 1 and len(paths) > 1:
         with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as pool:
             files = tuple(
                 pool.map(
                     _benchmark_path_for_pool,
-                    [(str(path), confidence_threshold) for path in paths],
+                    [(str(path), confidence_threshold, language, dialect) for path in paths],
                 )
             )
     else:
-        files = tuple(_benchmark_path(path, confidence_threshold) for path in paths)
+        files = tuple(_benchmark_path(path, confidence_threshold, language, dialect) for path in paths)
     elapsed_ms = (time.perf_counter() - start) * 1000
     return ProjectBenchmarkReport(
         root=str(root_path),
@@ -162,37 +194,53 @@ def benchmark_project(
         elapsed_ms=elapsed_ms,
         workers=workers,
         files=files,
+        language=language,
+        dialect=dialect,
     )
 
 
-def trace_comparison(source: str, path: str = "<memory>", max_units: int = 24) -> str:
-    adapter = PythonAdapter()
-    document = adapter.parse(source, path=path)
-    units = list(adapter.to_units(document))
+def trace_comparison(
+    source: str,
+    path: str = "<memory>",
+    max_units: int = 24,
+    *,
+    language: str = "python",
+    dialect: str | None = None,
+) -> str:
+    adapter = BCNLTMultilingualAdapter(engine=TreeSitterSemanticEngine())
+    document = adapter.parse(source, language=language, path=path, dialect=dialect)
+    units = list(adapter.extract(document).units)
     standard = standard_token_count(source)
-    lexical_preview = _lexical_preview(source, max_units=max_units)
+    lexical_preview = _lexical_preview(source, max_units=max_units, language=language)
     semantic_preview = "\n".join(
         f"{unit.event} {unit.surface} ({unit.scope})" for unit in units[:max_units]
     )
     return (
         f"Standard tokens ({standard.tokenizer_name}): {standard.count}\n"
-        f"Python lexical preview: {lexical_preview}\n\n"
+        f"{language} lexical preview: {lexical_preview}\n\n"
         "BCNLT semantic events:\n"
         f"{semantic_preview}\n"
     )
 
 
-def _benchmark_path_for_pool(args: tuple[str, float]) -> BenchmarkReport:
-    path, confidence_threshold = args
-    return _benchmark_path(Path(path), confidence_threshold)
+def _benchmark_path_for_pool(args: tuple[str, float, str, str | None]) -> BenchmarkReport:
+    path, confidence_threshold, language, dialect = args
+    return _benchmark_path(Path(path), confidence_threshold, language, dialect)
 
 
-def _benchmark_path(path: Path, confidence_threshold: float) -> BenchmarkReport:
+def _benchmark_path(
+    path: Path, confidence_threshold: float, language: str, dialect: str | None
+) -> BenchmarkReport:
     source = path.read_text(encoding="utf-8")
-    return benchmark_source(source, path=str(path), confidence_threshold=confidence_threshold)
+    return benchmark_source(
+        source, path=str(path), confidence_threshold=confidence_threshold,
+        language=language, dialect=dialect,
+    )
 
 
-def _lexical_preview(source: str, max_units: int) -> str:
+def _lexical_preview(source: str, max_units: int, language: str = "python") -> str:
+    if language != "python":
+        return " | ".join(re.findall(r"\w+|[^\w\s]", source, flags=re.UNICODE)[:max_units])
     tokens = tokenize.generate_tokens(io.StringIO(source).readline)
     pieces = [
         token.string

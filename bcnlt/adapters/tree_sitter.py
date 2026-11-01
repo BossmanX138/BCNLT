@@ -7,7 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
-from bcnlt.cache import ProjectIndex
+from bcnlt.cache import ProjectIndex, parser_bundle_sha256
 from bcnlt.core import ContextualUnit, SourceDocument, Span
 from bcnlt.ir import CommonCodingCore, IRKind, IRNode
 from bcnlt.parsers.bundle import MAX_SOURCE_BYTES, PARSE_TIMEOUT_MS, assert_clean_parse_tree
@@ -61,13 +61,17 @@ class TreeSitterSemanticEngine:
         *,
         parser_provider: ParserProvider | None = None,
         wildcard_memory_root: str | Path | None = None,
+        wildcard_memory_path: str | Path | None = None,
     ) -> None:
         self._parser_provider = parser_provider or _default_parser_provider
         self._wildcard_memory_root = (
             Path(wildcard_memory_root) if wildcard_memory_root is not None else None
         )
         self._core = CommonCodingCore()
-        self._preprocessor = SemanticPreprocessor(memory_root=self._wildcard_memory_root)
+        self._preprocessor = SemanticPreprocessor(
+            memory_root=self._wildcard_memory_root,
+            memory_path=wildcard_memory_path,
+        )
 
     def parse(
         self,
@@ -91,7 +95,12 @@ class TreeSitterSemanticEngine:
             path=path,
             source=source,
             tree=tree,
-            index=ProjectIndex(),
+            index=ProjectIndex(
+                language=cartridge.definition.canonical_id,
+                dialect=dialect,
+                parser_bundle_sha256=parser_bundle_sha256(),
+                semantic_spec_sha256=cartridge.spec.canonical_hash,
+            ),
             language=cartridge.definition.canonical_id,
             dialect=dialect,
         )

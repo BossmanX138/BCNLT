@@ -8,12 +8,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
-from .adapters.python import PythonAdapter
+from .adapters.carousel import BCNLTMultilingualAdapter
+from .adapters.tree_sitter import TreeSitterSemanticEngine
+from .cache import adapter_cache_identity
+from .languages import LANGUAGE_BY_ID
 from .model_eval import _bcnlt_context, _generate_definition_probes, _standard_context
 
 
-SCHEMA_VERSION = "1"
-GENERATOR_VERSION = "bcnlt-semantic-pairs-v1"
+SCHEMA_VERSION = "2"
+GENERATOR_VERSION = "bcnlt-semantic-pairs-v2"
 EXCLUDED_DIRS = {".git", ".pytest_cache", ".venv", "venv", "__pycache__", "outputs", "data"}
 
 
@@ -27,8 +30,17 @@ class BuildStats:
 
 
 def discover_python_files(root: Path) -> list[Path]:
+    return discover_source_files(root, "python")
+
+
+def discover_source_files(root: Path, language: str) -> list[Path]:
+    extensions = LANGUAGE_BY_ID[language].accepted_extensions
     return sorted(
-        (path.resolve() for path in root.rglob("*.py") if not EXCLUDED_DIRS.intersection(path.parts)),
+        (
+            path.resolve() for path in root.rglob("*")
+            if path.is_file() and path.suffix.lower() in extensions
+            and not EXCLUDED_DIRS.intersection(path.parts)
+        ),
         key=lambda path: path.as_posix().lower(),
     )
 
@@ -55,10 +67,14 @@ def open_database(path: Path) -> sqlite3.Connection:
         );
         CREATE TABLE IF NOT EXISTS documents (
             document_id INTEGER PRIMARY KEY,
-            source_path TEXT NOT NULL UNIQUE,
+            source_identity TEXT NOT NULL UNIQUE,
+            source_path TEXT NOT NULL,
             relative_path TEXT NOT NULL,
             source_sha256 TEXT NOT NULL,
             language TEXT NOT NULL,
+            dialect TEXT NOT NULL DEFAULT '',
+            parser_bundle_sha256 TEXT NOT NULL DEFAULT 'legacy-python',
+            semantic_spec_sha256 TEXT NOT NULL DEFAULT 'legacy-python',
             byte_count INTEGER NOT NULL,
             line_count INTEGER NOT NULL,
             source_text TEXT NOT NULL,
@@ -121,11 +137,31 @@ def open_database(path: Path) -> sqlite3.Connection:
         );
         """
     )
+    columns = {
+        str(row[1]) for row in connection.execute("PRAGMA table_info(documents)")
+    }
+    for name, definition in (
+        ("source_identity", "TEXT"),
+        ("dialect", "TEXT NOT NULL DEFAULT ''"),
+        ("parser_bundle_sha256", "TEXT NOT NULL DEFAULT 'legacy-python'"),
+        ("semantic_spec_sha256", "TEXT NOT NULL DEFAULT 'legacy-python'"),
+    ):
+        if name not in columns:
+            connection.execute(f"ALTER TABLE documents ADD COLUMN {name} {definition}")
+    connection.execute(
+        "UPDATE documents SET source_identity = source_path || ':python:' "
+        "WHERE source_identity IS NULL OR source_identity = ''"
+    )
+    connection.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_source_identity "
+        "ON documents(source_identity)"
+    )
     connection.execute(
         "INSERT INTO schema_meta(key, value) VALUES('schema_version', ?) "
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         (SCHEMA_VERSION,),
     )
+    connection.commit()
     return connection
 
 
@@ -149,21 +185,33 @@ def build_database(
     database_path: Path,
     holdout_paths: Iterable[Path] = (),
     observations_path: Path | None = None,
+    *,
+    language: str = "python",
+    dialect: str | None = None,
 ) -> BuildStats:
     root = root.resolve()
-    files = discover_python_files(root)
+    files = discover_source_files(root, language)
     holdouts = {path.resolve() for path in holdout_paths}
-    manifest = [
-        {"path": _relative_path(path, root), "sha256": _sha256_bytes(path.read_bytes())}
-        for path in files
-    ]
+    adapter = BCNLTMultilingualAdapter(
+        engine=TreeSitterSemanticEngine(
+            wildcard_memory_path=database_path.with_suffix(".learned-definitions.jsonl")
+        )
+    )
+    adapter_identity = adapter_cache_identity(adapter, language, dialect)
+    manifest = {
+        "language": language,
+        "dialect": dialect,
+        "parser_bundle_sha256": adapter_identity.parser_bundle_sha256,
+        "semantic_spec_sha256": adapter_identity.semantic_spec_sha256,
+        "files": [
+            {"path": _relative_path(path, root), "sha256": _sha256_bytes(path.read_bytes())}
+            for path in files
+        ],
+    }
     manifest_sha = _canonical_hash(manifest)
     run_id = f"ingest-{manifest_sha[:16]}"
     now = datetime.now(timezone.utc).isoformat()
     connection = open_database(database_path)
-    adapter = PythonAdapter(
-        wildcard_memory_path=database_path.with_suffix(".learned-definitions.jsonl")
-    )
     pair_total = 0
     unit_total = 0
     try:
@@ -172,37 +220,47 @@ def build_database(
                 source = path.read_text(encoding="utf-8-sig")
                 source_sha = _sha256_bytes(source.encode("utf-8"))
                 relative = _relative_path(path, root)
+                source_identity = _canonical_hash(
+                    {"source_path": str(path), "language": language, "dialect": dialect}
+                )
                 split = "evaluation_holdout" if path in holdouts else "train_candidate"
                 holdout_reason = "wizard-v02-vs-runeforge-mk2-head-to-head" if path in holdouts else None
                 connection.execute(
                     """
                     INSERT INTO documents(
-                        source_path, relative_path, source_sha256, language, byte_count,
+                        source_identity, source_path, relative_path, source_sha256, language,
+                        dialect, parser_bundle_sha256, semantic_spec_sha256, byte_count,
                         line_count, source_text, split, holdout_reason, updated_at
-                    ) VALUES(?, ?, ?, 'python', ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(source_path) DO UPDATE SET
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(source_identity) DO UPDATE SET
                         relative_path=excluded.relative_path,
                         source_sha256=excluded.source_sha256,
                         byte_count=excluded.byte_count,
                         line_count=excluded.line_count,
                         source_text=excluded.source_text,
+                        parser_bundle_sha256=excluded.parser_bundle_sha256,
+                        semantic_spec_sha256=excluded.semantic_spec_sha256,
                         split=excluded.split,
                         holdout_reason=excluded.holdout_reason,
                         updated_at=excluded.updated_at
                     """,
                     (
-                        str(path), relative, source_sha, len(source.encode("utf-8")),
+                        source_identity, str(path), relative, source_sha, language,
+                        dialect or "", adapter_identity.parser_bundle_sha256,
+                        adapter_identity.semantic_spec_sha256, len(source.encode("utf-8")),
                         len(source.splitlines()), source, split, holdout_reason, now,
                     ),
                 )
                 document_id = connection.execute(
-                    "SELECT document_id FROM documents WHERE source_path = ?", (str(path),)
+                    "SELECT document_id FROM documents WHERE source_identity = ?", (source_identity,)
                 ).fetchone()[0]
                 connection.execute("DELETE FROM semantic_units WHERE document_id = ?", (document_id,))
                 connection.execute("DELETE FROM semantic_pairs WHERE document_id = ?", (document_id,))
                 try:
-                    document = adapter.parse(source, path=str(path))
-                except SyntaxError:
+                    document = adapter.parse(
+                        source, language=language, path=str(path), dialect=dialect
+                    )
+                except (SyntaxError, ValueError):
                     continue
                 extraction = adapter.extract(document)
                 units = list(extraction.units)
@@ -231,6 +289,10 @@ def build_database(
                     bcnlt = _bcnlt_context(units, probe, 2)
                     identity = {
                         "source_sha256": source_sha,
+                        "language": language,
+                        "dialect": dialect,
+                        "parser_bundle_sha256": adapter_identity.parser_bundle_sha256,
+                        "semantic_spec_sha256": adapter_identity.semantic_spec_sha256,
                         "question": probe.question,
                         "standard_context": standard,
                         "bcnlt_context": bcnlt,
@@ -243,6 +305,10 @@ def build_database(
                         "source_sha256": source_sha,
                         "split": split,
                         "holdout_reason": holdout_reason,
+                        "language": language,
+                        "dialect": dialect,
+                        "parser_bundle_sha256": adapter_identity.parser_bundle_sha256,
+                        "semantic_spec_sha256": adapter_identity.semantic_spec_sha256,
                     }
                     connection.execute(
                         """
@@ -293,17 +359,21 @@ def import_observations(connection: sqlite3.Connection, results_path: Path) -> i
             model_id = str(model["model_id"])
             for report in model.get("files", []):
                 source_path = str(Path(report["path"]).resolve())
+                language = str(report.get("language") or payload.get("language") or "python")
+                dialect = str(report.get("dialect") or payload.get("dialect") or "")
                 for result in report.get("results", []):
                     probe = result["probe"]
                     row = connection.execute(
                         """
                         SELECT p.pair_id FROM semantic_pairs p
                         JOIN documents d ON d.document_id = p.document_id
-                        WHERE d.source_path = ? AND p.question = ? AND p.expected_line = ?
+                        WHERE d.source_path = ? AND d.language = ? AND d.dialect = ?
+                          AND p.question = ? AND p.expected_line = ?
                           AND p.standard_context = ? AND p.bcnlt_context = ?
                         """,
                         (
-                            source_path, probe["question"], result["expected_line"],
+                            source_path, language, dialect, probe["question"],
+                            result["expected_line"],
                             result["standard_context"], result["bcnlt_context"],
                         ),
                     ).fetchone()

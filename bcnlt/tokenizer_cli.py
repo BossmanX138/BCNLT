@@ -14,6 +14,7 @@ from .hf_tokenizer import (
 )
 from .tokenizer import BCNLTTokenizer
 from .tokenizer_manifest import build_manifest
+from .languages import CANONICAL_LANGUAGE_IDS
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -29,12 +30,14 @@ def build_parser() -> argparse.ArgumentParser:
     inspect = commands.add_parser("inspect", help="inspect an artifact manifest")
     inspect.add_argument("--artifact", required=True)
 
-    encode = commands.add_parser("encode", help="encode text or Python source")
+    encode = commands.add_parser("encode", help="encode text or source code")
     encode.add_argument("--artifact", required=True)
     encode.add_argument("--base", required=True)
     encode.add_argument(
         "--mode", choices=("text", "raw_code", "semantic_code"), required=True
     )
+    encode.add_argument("--language", choices=CANONICAL_LANGUAGE_IDS)
+    encode.add_argument("--dialect")
     content = encode.add_mutually_exclusive_group(required=True)
     content.add_argument("--text")
     content.add_argument("--file")
@@ -110,10 +113,19 @@ def _encode(args: argparse.Namespace) -> int:
     elif args.mode == "raw_code":
         ids = tokenizer.encode_raw_code(content)
     else:
-        ids = tokenizer.encode_source(content, path=args.file or "<cli>")
+        if not args.language:
+            raise ValueError("semantic_code encoding requires --language")
+        ids = tokenizer.encode_source(
+            content,
+            path=args.file or "<cli>",
+            language=args.language,
+            dialect=args.dialect,
+        )
     payload = {"mode": args.mode, "ids": ids, "decoded": tokenizer.decode(ids)}
     if args.mode == "semantic_code":
         payload["record_count"] = len(tokenizer.decode_records(ids))
+        payload["language"] = args.language
+        payload["dialect"] = args.dialect
     _print_json(payload)
     return 0
 
@@ -124,7 +136,9 @@ def _verify(args: argparse.Namespace) -> int:
     text_ids = tokenizer.encode_text(text)
     if tokenizer.decode(text_ids) != text:
         raise ValueError("text round-trip check failed")
-    semantic_ids = tokenizer.encode_source("answer = 42\n", path="<verify>")
+    semantic_ids = tokenizer.encode_source(
+        "answer = 42\n", path="<verify>", language="python"
+    )
     records = tokenizer.decode_records(semantic_ids)
     if not records or tokenizer.encode_records(records) != semantic_ids:
         raise ValueError("semantic round-trip check failed")

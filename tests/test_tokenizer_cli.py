@@ -81,6 +81,8 @@ def test_cli_semantic_encode_accepts_a_python_file(tmp_path: Path):
         str(base),
         "--mode",
         "semantic_code",
+        "--language",
+        "python",
         "--file",
         str(source),
     )

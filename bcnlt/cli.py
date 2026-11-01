@@ -5,15 +5,23 @@ import json
 import os
 from pathlib import Path
 
-from .adapters.python import PythonAdapter
+from .adapters.carousel import BCNLTMultilingualAdapter
+from .adapters.tree_sitter import TreeSitterSemanticEngine
+from .cache import adapter_cache_identity
 from .benchmark import benchmark_project, benchmark_source, trace_comparison
 from .meaning_eval import evaluate_meaning_file
 from .model_eval import OllamaChatModel, OpenAICompatibleChatModel, evaluate_model_file
+from .languages import CANONICAL_LANGUAGE_IDS
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="bcnlt", description="BCNLT Python v0.1 prototype")
-    parser.add_argument("file", help="Python file or directory to analyze")
+    parser = argparse.ArgumentParser(prog="bcnlt", description="BCNLT multilingual semantic analyzer")
+    parser.add_argument("file", help="Source file or directory to analyze")
+    parser.add_argument(
+        "--language", choices=CANONICAL_LANGUAGE_IDS, required=True,
+        help="Exact canonical BCNLT language id",
+    )
+    parser.add_argument("--dialect")
     parser.add_argument("--jsonl", help="Path to write contextual unit JSONL")
     parser.add_argument("--trace", help="Path to write a human-readable trace")
     parser.add_argument("--benchmark", action="store_true", help="Print benchmark summary")
@@ -51,6 +59,8 @@ def main(argv: list[str] | None = None) -> int:
                 path,
                 workers=args.workers,
                 confidence_threshold=args.confidence_threshold,
+                language=args.language,
+                dialect=args.dialect,
             )
             payload = report.to_dict()
         else:
@@ -59,6 +69,8 @@ def main(argv: list[str] | None = None) -> int:
                 source,
                 str(path),
                 confidence_threshold=args.confidence_threshold,
+                language=args.language,
+                dialect=args.dialect,
             ).to_dict()
         Path(args.compare_report).write_text(
             json.dumps(payload, indent=2, sort_keys=True),
@@ -74,13 +86,18 @@ def main(argv: list[str] | None = None) -> int:
                 path,
                 workers=args.workers,
                 confidence_threshold=args.confidence_threshold,
+                language=args.language,
+                dialect=args.dialect,
             )
             print(json.dumps(report.to_dict(), sort_keys=True))
             return 0
         raise SystemExit("Directory input requires --compare-report or --benchmark")
 
     if args.meaning_report:
-        report = evaluate_meaning_file(path, max_probes=args.meaning_max_probes)
+        report = evaluate_meaning_file(
+            path, max_probes=args.meaning_max_probes,
+            language=args.language, dialect=args.dialect,
+        )
         Path(args.meaning_report).write_text(
             json.dumps(report.to_dict(), indent=2, sort_keys=True),
             encoding="utf-8",
@@ -103,7 +120,10 @@ def main(argv: list[str] | None = None) -> int:
                 model=args.model_eval_model,
                 base_url=args.model_eval_ollama_url,
             )
-        report = evaluate_model_file(path, max_probes=args.model_eval_max_probes, model=model)
+        report = evaluate_model_file(
+            path, max_probes=args.model_eval_max_probes, model=model,
+            language=args.language, dialect=args.dialect,
+        )
         Path(args.model_eval_report).write_text(
             json.dumps(report.to_dict(), indent=2, sort_keys=True),
             encoding="utf-8",
@@ -111,8 +131,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"BCNLT model-context eval report written to {args.model_eval_report}")
 
     source = path.read_text(encoding="utf-8")
-    adapter = PythonAdapter(wildcard_memory_path=args.wildcard_memory)
-    document = adapter.parse(source, path=str(path))
+    adapter = BCNLTMultilingualAdapter(
+        engine=TreeSitterSemanticEngine(wildcard_memory_path=args.wildcard_memory)
+    )
+    identity = adapter_cache_identity(adapter, args.language, args.dialect)
+    document = adapter.parse(
+        source, language=args.language, path=str(path), dialect=args.dialect
+    )
     extraction = adapter.extract(document)
     units = list(extraction.units)
     assessments = list(extraction.assessments)
@@ -122,6 +147,10 @@ def main(argv: list[str] | None = None) -> int:
             for unit, assessment in zip(units, assessments):
                 score = assessment.final_score
                 payload = unit.to_dict()
+                payload["language"] = args.language
+                payload["dialect"] = args.dialect
+                payload["parser_bundle_sha256"] = identity.parser_bundle_sha256
+                payload["semantic_spec_sha256"] = identity.semantic_spec_sha256
                 payload["uncertainty"] = score.uncertainty
                 payload["confidence"] = score.confidence
                 payload["uncertainty_signals"] = list(score.signals)
@@ -140,7 +169,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.trace_comparison:
         Path(args.trace_comparison).write_text(
-            trace_comparison(source, str(path)),
+            trace_comparison(
+                source, str(path), language=args.language, dialect=args.dialect
+            ),
             encoding="utf-8",
         )
 
@@ -152,6 +183,8 @@ def main(argv: list[str] | None = None) -> int:
                     source,
                     str(path),
                     confidence_threshold=args.confidence_threshold,
+                    language=args.language,
+                    dialect=args.dialect,
                 ).to_dict(),
                 sort_keys=True,
             )

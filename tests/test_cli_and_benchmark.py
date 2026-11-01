@@ -21,6 +21,8 @@ def test_cli_outputs_jsonl_and_trace(tmp_path: Path):
             "-m",
             "bcnlt.cli",
             str(sample),
+            "--language",
+            "python",
             "--jsonl",
             str(jsonl),
             "--trace",
@@ -34,7 +36,10 @@ def test_cli_outputs_jsonl_and_trace(tmp_path: Path):
     assert "BCNLT emitted" in result.stdout
     first = json.loads(jsonl.read_text(encoding="utf-8").splitlines()[0])
     assert {"surface", "event", "scope", "span", "recent_history"}.issubset(first)
-    assert "IMPORT os" in trace.read_text(encoding="utf-8")
+    assert first["language"] == "python"
+    assert len(first["parser_bundle_sha256"]) == 64
+    assert len(first["semantic_spec_sha256"]) == 64
+    assert "IMPORT import os" in trace.read_text(encoding="utf-8")
 
 
 def test_cli_appends_wildcard_memory(tmp_path: Path):
@@ -53,6 +58,8 @@ def test_cli_appends_wildcard_memory(tmp_path: Path):
             "-m",
             "bcnlt.cli",
             str(sample),
+            "--language",
+            "python",
             "--jsonl",
             str(jsonl),
             "--wildcard-memory",
@@ -79,6 +86,9 @@ def test_benchmark_reports_lexical_tokens_events_and_latency():
     assert report.event_to_standard_ratio > 0
     assert report.elapsed_ms >= 0
     assert report.path == "bench.py"
+    assert report.language == "python"
+    assert len(report.parser_bundle_sha256) == 64
+    assert len(report.semantic_spec_sha256) == 64
 
 
 def test_trace_comparison_shows_standard_tokens_and_semantic_events():
@@ -120,6 +130,8 @@ def test_cli_writes_comparison_report_for_directory(tmp_path: Path):
             "-m",
             "bcnlt.cli",
             str(tmp_path),
+            "--language",
+            "python",
             "--compare-report",
             str(report_path),
             "--workers",
@@ -135,3 +147,46 @@ def test_cli_writes_comparison_report_for_directory(tmp_path: Path):
     assert payload["file_count"] == 1
     assert payload["total_standard_token_count"] > 0
     assert payload["total_event_count"] > 0
+    assert payload["language"] == "python"
+
+
+def test_cli_requires_a_canonical_language_and_does_not_guess_from_extension(tmp_path: Path):
+    sample = tmp_path / "sample.js"
+    sample.write_text("const answer = 42;\n", encoding="utf-8")
+
+    missing = subprocess.run(
+        [sys.executable, "-m", "bcnlt.cli", str(sample), "--benchmark"],
+        text=True,
+        capture_output=True,
+    )
+    alias = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "bcnlt.cli",
+            str(sample),
+            "--language",
+            "js",
+            "--benchmark",
+        ],
+        text=True,
+        capture_output=True,
+    )
+
+    assert missing.returncode != 0
+    assert "--language" in missing.stderr
+    assert alias.returncode != 0
+    assert "invalid choice" in alias.stderr
+
+
+def test_javascript_benchmark_and_trace_use_the_multilingual_carousel():
+    source = "function add(left, right) { return left + right; }\n"
+
+    report = benchmark_source(source, path="bench.js", language="javascript")
+    comparison = trace_comparison(source, path="bench.js", language="javascript")
+
+    assert report.language == "javascript"
+    assert report.event_count > 0
+    assert len(report.semantic_spec_sha256) == 64
+    assert "javascript lexical preview" in comparison
+    assert "DEFINE add" in comparison

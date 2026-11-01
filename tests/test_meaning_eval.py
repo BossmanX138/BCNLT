@@ -28,6 +28,8 @@ def test_meaning_eval_compares_standard_text_and_bcnlt_semantic_retrieval():
     assert report.bcnlt_accuracy >= report.standard_accuracy
     assert any(result.standard_hit is False for result in report.results)
     assert all(result.bcnlt_hit for result in report.results)
+    assert report.language == "python"
+    assert len(report.semantic_spec_sha256) == 64
 
 
 def test_cli_writes_meaning_eval_report(tmp_path: Path):
@@ -41,6 +43,8 @@ def test_cli_writes_meaning_eval_report(tmp_path: Path):
             "-m",
             "bcnlt.cli",
             str(sample),
+            "--language",
+            "python",
             "--meaning-report",
             str(report_path),
         ],
@@ -53,3 +57,4 @@ def test_cli_writes_meaning_eval_report(tmp_path: Path):
     assert "BCNLT meaning report" in result.stdout
     assert payload["probe_count"] >= 3
     assert payload["bcnlt_accuracy"] >= payload["standard_accuracy"]
+    assert payload["language"] == "python"
