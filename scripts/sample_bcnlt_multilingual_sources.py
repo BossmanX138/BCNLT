@@ -174,6 +174,8 @@ def _hub_rows(spec: SourceSpec, limit: int) -> Iterable[Mapping[str, object]]:
         system_ca = Path("/etc/ssl/certs/ca-certificates.crt")
         if system_ca.is_file():
             os.environ.setdefault("REQUESTS_CA_BUNDLE", str(system_ca))
+    os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "60")
+    os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "60")
     import pyarrow.parquet as pq
     from huggingface_hub import HfApi, HfFileSystem, get_token
 
