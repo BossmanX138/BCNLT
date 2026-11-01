@@ -39,22 +39,49 @@ $identityBytes = [Text.Encoding]::UTF8.GetBytes(
 $identityHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($identityBytes)).ToLowerInvariant()
 $runRoot = "$($OutputRoot.TrimEnd('/'))/multilingual-$PolicyProfile-$($identityHash.Substring(0, 16))"
 
-function Invoke-WslPhase([string]$Name, [string]$Command, [string]$Output) {
+function Invoke-WslPhase(
+    [string]$Name,
+    [string]$Command,
+    [string]$Output,
+    [string[]]$CleanupPaths = @($Output)
+) {
+    $marker = "$phaseRoot/$Name.complete"
     & wsl.exe -d $Distribution -- test -e $Output
     $exists = $LASTEXITCODE -eq 0
-    if ($exists -and -not $Resume) { throw "Phase $Name output already exists: $Output" }
-    if ($exists) {
+    & wsl.exe -d $Distribution -- test -e $marker
+    $complete = $LASTEXITCODE -eq 0
+    if ($exists -and $complete -and -not $Resume) {
+        throw "Phase $Name output already exists: $Output"
+    }
+    if ($exists -and $complete) {
         Write-Host "Reusing content-addressed phase output: $Name"
         return
+    }
+    if (($exists -or $complete) -and -not $Resume) {
+        throw "Phase $Name has incomplete output; rerun with -Resume to clean and rebuild it."
+    }
+    if ($exists -or $complete) {
+        Write-Host "Removing incomplete phase output: $Name"
+        foreach ($path in $CleanupPaths) {
+            & wsl.exe -d $Distribution -- rm -rf -- $path
+            if ($LASTEXITCODE -ne 0) { throw "Could not clean incomplete phase path: $path" }
+        }
+        & wsl.exe -d $Distribution -- rm -f -- $marker
+        if ($LASTEXITCODE -ne 0) { throw "Could not remove incomplete phase marker: $marker" }
     }
     & wsl.exe -d $Distribution -- bash -lc "set -euo pipefail; cd '$repoWsl'; $Command"
     if ($LASTEXITCODE -ne 0) { throw "Phase $Name failed with exit code $LASTEXITCODE." }
     & wsl.exe -d $Distribution -- test -e $Output
     if ($LASTEXITCODE -ne 0) { throw "Phase $Name did not create $Output." }
+    & wsl.exe -d $Distribution -- touch $marker
+    if ($LASTEXITCODE -ne 0) { throw "Could not mark phase $Name complete." }
 }
 
 & wsl.exe -d $Distribution -- mkdir -p $runRoot
 if ($LASTEXITCODE -ne 0) { throw 'Could not create the content-addressed run root.' }
+$phaseRoot = "$runRoot/.phases"
+& wsl.exe -d $Distribution -- mkdir -p $phaseRoot
+if ($LASTEXITCODE -ne 0) { throw 'Could not create the phase marker directory.' }
 $registry = "$repoWsl/configs/bcnlt_corpus_sources_v2.json"
 $trainingConfig = "$repoWsl/configs/$trainingConfigName"
 $sample = "$runRoot/source-sample.json"
@@ -71,16 +98,30 @@ $limitArg = if ($SourceLimit -gt 0) { " --limit $SourceLimit" } else { '' }
 
 Invoke-WslPhase 'source-sample' "'$Python' -m scripts.sample_bcnlt_multilingual_sources --config '$registry' --rows-per-language $RowsPerLanguage --minimum-admitted 25 --output '$sample'" $sample
 Invoke-WslPhase 'ingestion' "'$Python' -m scripts.ingest_bcnlt_corpus --config '$registry' --database '$database'$holdoutArg$limitArg" $database
-Invoke-WslPhase 'curriculum' "'$Python' -m scripts.generate_bcnlt_curriculum --database '$database' --output '$curriculum' --wildcard-memory '$wildcardMemory'" $curriculum
+Invoke-WslPhase 'curriculum' "'$Python' -m scripts.generate_bcnlt_curriculum --database '$database' --output '$curriculum' --wildcard-memory '$wildcardMemory'" $curriculum @($curriculum, $wildcardMemory)
 
+$validationMarker = "$phaseRoot/validation.complete"
 & wsl.exe -d $Distribution -- test -e $validation
-if ($LASTEXITCODE -ne 0) {
+$validationExists = $LASTEXITCODE -eq 0
+& wsl.exe -d $Distribution -- test -e $accepted
+$acceptedExists = $LASTEXITCODE -eq 0
+& wsl.exe -d $Distribution -- test -e $validationMarker
+$validationComplete = $LASTEXITCODE -eq 0
+if ($validationExists -and $acceptedExists -and $validationComplete) {
+    if (-not $Resume) { throw "Validation output already exists: $validation" }
+    Write-Host 'Reusing content-addressed phase output: validation'
+} else {
+    if (($validationExists -or $acceptedExists -or $validationComplete) -and -not $Resume) {
+        throw 'Validation has incomplete output; rerun with -Resume to clean and rebuild it.'
+    }
+    & wsl.exe -d $Distribution -- rm -f -- $validation $accepted $validationMarker
+    if ($LASTEXITCODE -ne 0) { throw 'Could not clean incomplete validation output.' }
     & wsl.exe -d $Distribution -- bash -lc "set -euo pipefail; cd '$repoWsl'; '$Python' -m scripts.validate_bcnlt_corpus --database '$database' --curriculum '$curriculum' --tokenizer-artifact '$TokenizerArtifact' --base-tokenizer '$BaseTokenizer' --report '$validation' --accepted-output '$accepted' --policy-profile '$PolicyProfile'$holdoutArg"
     if ($LASTEXITCODE -ne 0) { throw 'Multilingual corpus admission gates failed.' }
-} elseif (-not $Resume) {
-    throw "Validation output already exists: $validation"
+    & wsl.exe -d $Distribution -- touch $validationMarker
+    if ($LASTEXITCODE -ne 0) { throw 'Could not mark validation complete.' }
 }
-Invoke-WslPhase 'packing' "'$Python' -m scripts.export_bcnlt_training_shards --records '$accepted' --tokenizer-artifact '$TokenizerArtifact' --base-tokenizer '$BaseTokenizer' --output '$packed'" "$packed/dataset_manifest.json"
+Invoke-WslPhase 'packing' "'$Python' -m scripts.export_bcnlt_training_shards --records '$accepted' --tokenizer-artifact '$TokenizerArtifact' --base-tokenizer '$BaseTokenizer' --output '$packed'" "$packed/dataset_manifest.json" @($packed)
 Invoke-WslPhase 'packed-audit' "'$Python' -m bcnlt.multilingual_training --packed '$packed' --config '$trainingConfig' --output '$packedAudit'" $packedAudit
 & wsl.exe -d $Distribution -- test -e $semanticSpecs
 $semanticExists = $LASTEXITCODE -eq 0

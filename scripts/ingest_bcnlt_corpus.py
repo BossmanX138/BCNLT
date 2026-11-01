@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -93,6 +94,10 @@ def main(argv: list[str] | None = None) -> int:
                     pass
                 else:
                     truststore.inject_into_ssl()
+            else:
+                system_ca = Path("/etc/ssl/certs/ca-certificates.crt")
+                if system_ca.is_file():
+                    os.environ.setdefault("REQUESTS_CA_BUNDLE", str(system_ca))
             from datasets import load_dataset
 
             kwargs = {

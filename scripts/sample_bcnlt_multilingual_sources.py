@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+import os
 import sys
 from collections import Counter
 from dataclasses import asdict, dataclass
@@ -169,6 +170,10 @@ def _hub_rows(spec: SourceSpec, limit: int) -> Iterable[Mapping[str, object]]:
             pass
         else:
             truststore.inject_into_ssl()
+    if sys.platform != "win32":
+        system_ca = Path("/etc/ssl/certs/ca-certificates.crt")
+        if system_ca.is_file():
+            os.environ.setdefault("REQUESTS_CA_BUNDLE", str(system_ca))
     import pyarrow.parquet as pq
     from huggingface_hub import HfApi, HfFileSystem, get_token
 
