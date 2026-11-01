@@ -90,6 +90,7 @@ $curriculum = "$runRoot/curriculum.jsonl"
 $wildcardMemory = "$runRoot/learned-definitions"
 $validation = "$runRoot/corpus-validation.json"
 $accepted = "$runRoot/accepted.jsonl"
+$decisions = "$runRoot/corpus-validation-decisions.jsonl"
 $packed = "$runRoot/packed"
 $packedAudit = "$runRoot/per-language-validation.json"
 $semanticSpecs = "$runRoot/semantic-specs.json"
@@ -105,18 +106,20 @@ $validationMarker = "$phaseRoot/validation.complete"
 $validationExists = $LASTEXITCODE -eq 0
 & wsl.exe -d $Distribution -- test -e $accepted
 $acceptedExists = $LASTEXITCODE -eq 0
+& wsl.exe -d $Distribution -- test -e $decisions
+$decisionsExists = $LASTEXITCODE -eq 0
 & wsl.exe -d $Distribution -- test -e $validationMarker
 $validationComplete = $LASTEXITCODE -eq 0
-if ($validationExists -and $acceptedExists -and $validationComplete) {
+if ($validationExists -and $acceptedExists -and $decisionsExists -and $validationComplete) {
     if (-not $Resume) { throw "Validation output already exists: $validation" }
     Write-Host 'Reusing content-addressed phase output: validation'
 } else {
-    if (($validationExists -or $acceptedExists -or $validationComplete) -and -not $Resume) {
+    if (($validationExists -or $acceptedExists -or $decisionsExists -or $validationComplete) -and -not $Resume) {
         throw 'Validation has incomplete output; rerun with -Resume to clean and rebuild it.'
     }
-    & wsl.exe -d $Distribution -- rm -f -- $validation $accepted $validationMarker
+    & wsl.exe -d $Distribution -- rm -f -- $validation $accepted $decisions $validationMarker
     if ($LASTEXITCODE -ne 0) { throw 'Could not clean incomplete validation output.' }
-    & wsl.exe -d $Distribution -- bash -lc "set -euo pipefail; cd '$repoWsl'; '$Python' -m scripts.validate_bcnlt_corpus --database '$database' --curriculum '$curriculum' --tokenizer-artifact '$TokenizerArtifact' --base-tokenizer '$BaseTokenizer' --report '$validation' --accepted-output '$accepted' --policy-profile '$PolicyProfile'$holdoutArg"
+    & wsl.exe -d $Distribution -- bash -lc "set -euo pipefail; cd '$repoWsl'; '$Python' -m scripts.validate_bcnlt_corpus --database '$database' --curriculum '$curriculum' --tokenizer-artifact '$TokenizerArtifact' --base-tokenizer '$BaseTokenizer' --report '$validation' --accepted-output '$accepted' --decisions-output '$decisions' --policy-profile '$PolicyProfile'$holdoutArg"
     if ($LASTEXITCODE -ne 0) { throw 'Multilingual corpus admission gates failed.' }
     & wsl.exe -d $Distribution -- touch $validationMarker
     if ($LASTEXITCODE -ne 0) { throw 'Could not mark validation complete.' }
@@ -150,7 +153,7 @@ if (-not $semanticExists) {
 }
 
 $manifest = "$runRoot/corpus-pipeline-manifest.json"
-& wsl.exe -d $Distribution -- $Python -c "import hashlib,json,pathlib,sys; root=pathlib.Path(sys.argv[1]); names=['source-sample.json','corpus.sqlite','curriculum.jsonl','corpus-validation.json','accepted.jsonl','packed/dataset_manifest.json','per-language-validation.json','semantic-specs.json']; h=lambda p: hashlib.sha256(p.read_bytes()).hexdigest(); payload={'schema_version':'bcnlt-multilingual-corpus-pipeline-v1','identity':sys.argv[2],'artifacts':{n:{'path':str(root/n),'sha256':h(root/n)} for n in names}}; (root/'corpus-pipeline-manifest.json').write_text(json.dumps(payload,indent=2,sort_keys=True)+'\n')" $runRoot $identityHash
+& wsl.exe -d $Distribution -- $Python -c "import hashlib,json,pathlib,sys; root=pathlib.Path(sys.argv[1]); names=['source-sample.json','corpus.sqlite','curriculum.jsonl','corpus-validation.json','corpus-validation-decisions.jsonl','accepted.jsonl','packed/dataset_manifest.json','per-language-validation.json','semantic-specs.json']; h=lambda p: hashlib.file_digest(p.open('rb'),'sha256').hexdigest(); payload={'schema_version':'bcnlt-multilingual-corpus-pipeline-v1','identity':sys.argv[2],'artifacts':{n:{'path':str(root/n),'sha256':h(root/n)} for n in names}}; (root/'corpus-pipeline-manifest.json').write_text(json.dumps(payload,indent=2,sort_keys=True)+'\n')" $runRoot $identityHash
 if ($LASTEXITCODE -ne 0) { throw 'Could not write the multilingual corpus manifest.' }
 Write-Host "Multilingual corpus root: $runRoot"
 Write-Host "Pipeline manifest: $manifest"

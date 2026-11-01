@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 import struct
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -81,71 +83,137 @@ def pack_training_shards(
     if maximum_sequence_tokens <= 0 or shard_token_limit <= 0:
         raise ValueError("packing token limits must be positive")
     manifest_digest, vocab_size = _tokenizer_identity(tokenizer)
-    ordered = tuple(sorted(records, key=lambda item: (item.split, item.record_id)))
-    input_digest = _input_digest(ordered)
-    lineage_digest = _lineage_digest(ordered)
     output = Path(output_path)
     manifest_path = output / "dataset_manifest.json"
-    if output.exists():
-        if not resume:
-            raise FileExistsError(f"output already exists: {output}")
-        if not manifest_path.is_file():
-            raise ValueError("resume output has no dataset manifest")
-        existing = _load_manifest(manifest_path)
-        if existing.lineage_manifest_sha256 != lineage_digest:
-            raise ValueError("resume parser/spec/registry lineage does not match")
-        if existing.input_record_sha256 != input_digest:
-            raise ValueError("resume input range does not match the existing manifest")
-        if existing.tokenizer_manifest_sha256 != manifest_digest:
-            raise ValueError("resume tokenizer manifest digest does not match")
-        if (
-            existing.maximum_sequence_tokens != maximum_sequence_tokens
-            or existing.shard_token_limit != shard_token_limit
-        ):
-            raise ValueError("resume packing policy does not match the existing manifest")
-        _verify_manifest_files(output, existing)
-        return existing
-
-    encoded: list[_EncodedRecord] = []
-    rejections: list[dict[str, object]] = []
-    for record in ordered:
-        provenance_language = dict(record.provenance).get("canonical_language")
-        if provenance_language != record.language:
-            raise ValueError("curriculum record language does not match provenance")
-        prefix, prompt_body = _split_language_prefix(record.prompt, record.language)
-        prompt_ids = list(tokenizer.encode_text(prefix)) + _encode_mode(
-            tokenizer, record.prompt_mode, prompt_body
+    with tempfile.TemporaryDirectory(prefix="bcnlt-packing-") as state_root:
+        state = sqlite3.connect(Path(state_root) / "packing-state.sqlite3")
+        state.execute("PRAGMA journal_mode=WAL")
+        state.execute("PRAGMA synchronous=NORMAL")
+        state.execute("PRAGMA temp_store=FILE")
+        state.execute(
+            "CREATE TABLE records ("
+            "row_id INTEGER PRIMARY KEY, split TEXT NOT NULL, "
+            "record_id TEXT NOT NULL, payload TEXT NOT NULL)"
         )
-        target_ids = _encode_mode(tokenizer, record.target_mode, record.target)
-        _validate_token_ids(prompt_ids, vocab_size)
-        _validate_token_ids(target_ids, vocab_size)
-        input_ids = tuple(prompt_ids + target_ids)
-        if len(input_ids) > maximum_sequence_tokens:
-            rejections.append(
-                {
-                    "record_id": record.record_id,
-                    "reason_code": "sequence_too_long",
-                    "encoded_tokens": len(input_ids),
-                    "maximum_sequence_tokens": maximum_sequence_tokens,
-                }
+        state.execute("CREATE INDEX records_order ON records(split, record_id, row_id)")
+        state.execute("BEGIN")
+        lineage_rows: set[str] = set()
+        input_count = 0
+        for record in records:
+            provenance = dict(record.provenance)
+            if provenance.get("canonical_language") != record.language:
+                state.close()
+                raise ValueError("curriculum record language does not match provenance")
+            payload = json.dumps(
+                record.to_dict(),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
             )
-            continue
-        encoded.append(_EncodedRecord(record, input_ids, len(prompt_ids)))
+            state.execute(
+                "INSERT INTO records(row_id, split, record_id, payload) VALUES (?, ?, ?, ?)",
+                (input_count, record.split, record.record_id, payload),
+            )
+            lineage_rows.add(_lineage_row(record))
+            input_count += 1
+            if input_count % 10_000 == 0:
+                state.commit()
+                state.execute("BEGIN")
+        state.commit()
 
-    output.mkdir(parents=True, exist_ok=False)
-    rejection_bytes = b"".join(
-        (json.dumps(item, sort_keys=True, separators=(",", ":")) + "\n").encode()
-        for item in rejections
-    )
-    (output / "rejections.jsonl").write_bytes(rejection_bytes)
-    shards: list[PackedShardManifest] = []
-    by_split: dict[str, list[_EncodedRecord]] = {}
-    for item in encoded:
-        by_split.setdefault(item.record.split, []).append(item)
-    for split in sorted(by_split):
-        batches = _shard_batches(by_split[split], shard_token_limit)
-        for shard_index, batch in enumerate(batches):
-            shards.append(_write_shard(output, split, shard_index, batch))
+        input_digest = _streaming_input_digest(state)
+        lineage_digest = _canonical_hash(sorted(lineage_rows))
+        if output.exists():
+            if not resume:
+                state.close()
+                raise FileExistsError(f"output already exists: {output}")
+            if not manifest_path.is_file():
+                state.close()
+                raise ValueError("resume output has no dataset manifest")
+            existing = _load_manifest(manifest_path)
+            if existing.lineage_manifest_sha256 != lineage_digest:
+                state.close()
+                raise ValueError("resume parser/spec/registry lineage does not match")
+            if existing.input_record_sha256 != input_digest:
+                state.close()
+                raise ValueError("resume input range does not match the existing manifest")
+            if existing.tokenizer_manifest_sha256 != manifest_digest:
+                state.close()
+                raise ValueError("resume tokenizer manifest digest does not match")
+            if (
+                existing.maximum_sequence_tokens != maximum_sequence_tokens
+                or existing.shard_token_limit != shard_token_limit
+            ):
+                state.close()
+                raise ValueError("resume packing policy does not match the existing manifest")
+            state.close()
+            _verify_manifest_files(output, existing)
+            return existing
+
+        output.mkdir(parents=True, exist_ok=False)
+        shards: list[PackedShardManifest] = []
+        accepted_count = 0
+        rejected_count = 0
+        current_split: str | None = None
+        shard_index = 0
+        batch: list[_EncodedRecord] = []
+        batch_tokens = 0
+
+        def flush_batch() -> None:
+            nonlocal batch, batch_tokens, shard_index
+            if not batch or current_split is None:
+                return
+            shards.append(_write_shard(output, current_split, shard_index, batch))
+            shard_index += 1
+            batch = []
+            batch_tokens = 0
+
+        with (output / "rejections.jsonl").open(
+            "x", encoding="utf-8", newline="\n"
+        ) as rejection_handle:
+            rows = state.execute(
+                "SELECT payload FROM records ORDER BY split, record_id, row_id"
+            )
+            for (payload,) in rows:
+                record = _record_from_dict(json.loads(str(payload)))
+                if current_split != record.split:
+                    flush_batch()
+                    current_split = record.split
+                    shard_index = 0
+                prefix, prompt_body = _split_language_prefix(
+                    record.prompt, record.language
+                )
+                prompt_ids = list(tokenizer.encode_text(prefix)) + _encode_mode(
+                    tokenizer, record.prompt_mode, prompt_body
+                )
+                target_ids = _encode_mode(tokenizer, record.target_mode, record.target)
+                _validate_token_ids(prompt_ids, vocab_size)
+                _validate_token_ids(target_ids, vocab_size)
+                input_ids = tuple(prompt_ids + target_ids)
+                if len(input_ids) > maximum_sequence_tokens:
+                    rejection_handle.write(
+                        json.dumps(
+                            {
+                                "record_id": record.record_id,
+                                "reason_code": "sequence_too_long",
+                                "encoded_tokens": len(input_ids),
+                                "maximum_sequence_tokens": maximum_sequence_tokens,
+                            },
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        )
+                        + "\n"
+                    )
+                    rejected_count += 1
+                    continue
+                encoded = _EncodedRecord(record, input_ids, len(prompt_ids))
+                if batch and batch_tokens + len(input_ids) > shard_token_limit:
+                    flush_batch()
+                batch.append(encoded)
+                batch_tokens += len(input_ids)
+                accepted_count += 1
+            flush_batch()
+        state.close()
 
     body = {
         "schema_version": "bcnlt-packed-dataset-v2",
@@ -155,8 +223,8 @@ def pack_training_shards(
         "shard_token_limit": shard_token_limit,
         "input_record_sha256": input_digest,
         "lineage_manifest_sha256": lineage_digest,
-        "accepted_record_count": len(encoded),
-        "rejected_record_count": len(rejections),
+        "accepted_record_count": accepted_count,
+        "rejected_record_count": rejected_count,
         "shards": [shard.to_dict() for shard in shards],
     }
     dataset_digest = _canonical_hash(body)
@@ -168,8 +236,8 @@ def pack_training_shards(
         shard_token_limit=shard_token_limit,
         input_record_sha256=input_digest,
         lineage_manifest_sha256=lineage_digest,
-        accepted_record_count=len(encoded),
-        rejected_record_count=len(rejections),
+        accepted_record_count=accepted_count,
+        rejected_record_count=rejected_count,
         shards=tuple(shards),
         dataset_manifest_sha256=dataset_digest,
     )
@@ -384,7 +452,27 @@ def _input_digest(records: Sequence[CurriculumRecord]) -> str:
     return _canonical_hash(payload)
 
 
+def _streaming_input_digest(connection: sqlite3.Connection) -> str:
+    digest = hashlib.sha256()
+    digest.update(b"[")
+    first = True
+    rows = connection.execute(
+        "SELECT payload FROM records ORDER BY split, record_id, row_id"
+    )
+    for (payload,) in rows:
+        if not first:
+            digest.update(b",")
+        digest.update(str(payload).encode("utf-8"))
+        first = False
+    digest.update(b"]")
+    return digest.hexdigest()
+
+
 def _lineage_digest(records: Sequence[CurriculumRecord]) -> str:
+    return _canonical_hash(sorted({_lineage_row(record) for record in records}))
+
+
+def _lineage_row(record: CurriculumRecord) -> str:
     keys = (
         "registry_entry_sha256",
         "parser_bundle_sha256",
@@ -392,20 +480,40 @@ def _lineage_digest(records: Sequence[CurriculumRecord]) -> str:
         "semantic_spec_sha256",
         "extraction_rule_version",
     )
-    payload = set()
-    for record in records:
-        provenance = dict(record.provenance)
-        payload.add(
-            json.dumps(
-                {
-                    "language": record.language,
-                    **{key: provenance.get(key, "") for key in keys},
-                },
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-        )
-    return _canonical_hash(sorted(payload))
+    provenance = dict(record.provenance)
+    return json.dumps(
+        {
+            "language": record.language,
+            **{key: provenance.get(key, "") for key in keys},
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _record_from_dict(raw: dict[str, object]) -> CurriculumRecord:
+    provenance = raw.get("provenance")
+    if not isinstance(provenance, dict):
+        raise ValueError("packed curriculum provenance must be an object")
+    source_ids = raw.get("source_document_ids")
+    if not isinstance(source_ids, list):
+        raise ValueError("packed curriculum source_document_ids must be a list")
+    return CurriculumRecord(
+        record_id=str(raw["record_id"]),
+        family=str(raw["family"]),
+        template_id=str(raw["template_id"]),
+        source_document_ids=tuple(str(item) for item in source_ids),
+        prompt_mode=str(raw["prompt_mode"]),
+        target_mode=str(raw["target_mode"]),
+        prompt=str(raw["prompt"]),
+        target=str(raw["target"]),
+        provenance=tuple(
+            sorted((str(key), str(value)) for key, value in provenance.items())
+        ),
+        split=str(raw["split"]),
+        language=str(raw.get("language", provenance.get("canonical_language", "python"))),
+        dialect=(str(raw["dialect"]) if raw.get("dialect") is not None else None),
+    )
 
 
 def _split_language_prefix(value: str, language: str) -> tuple[str, str]:

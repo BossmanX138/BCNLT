@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import io
+import json
 from dataclasses import replace
 
 from bcnlt.adapters.python import PythonAdapter
@@ -12,6 +14,7 @@ from bcnlt.corpus.admission import (
 )
 from bcnlt.corpus.curriculum import CurriculumRecord, generate_document_curriculum
 from bcnlt.corpus.database import SourceDocumentRecord, stable_document_id
+from bcnlt.corpus.streaming_admission import validate_corpus_streaming
 from bcnlt.semantic_record import records_from_units
 from scripts.validate_bcnlt_corpus import admission_policy_for_profile
 
@@ -126,6 +129,45 @@ def test_split_assignment_clusters_copies_and_semantic_duplicates():
         decision.split == report.split_manifest[decision.source_document_ids[0]]
         for decision in report.decisions
     )
+
+
+def test_streaming_admission_matches_small_in_memory_validation(tmp_path):
+    first = _document("value = 1\n", path="one.py")
+    second = _document("def add(a, b):\n    return a + b\n", path="two.py")
+    candidates = tuple(_curriculum(first) + _curriculum(second))
+    policy = _permissive()
+    expected = validate_corpus(
+        CorpusValidationInput(documents=(first, second), candidates=candidates),
+        CountingTokenizer(),
+        policy,
+    )
+    accepted = io.StringIO()
+    decisions = io.StringIO()
+
+    actual = validate_corpus_streaming(
+        (first, second),
+        iter(candidates),
+        candidate_count=len(candidates),
+        tokenizer=CountingTokenizer(),
+        policy=policy,
+        accepted_handle=accepted,
+        decisions_handle=decisions,
+        state_database=tmp_path / "streaming-state.sqlite3",
+        progress_interval=0,
+    )
+
+    accepted_ids = {
+        json.loads(line)["record_id"] for line in accepted.getvalue().splitlines()
+    }
+    decision_reasons = [
+        json.loads(line)["reason_code"] for line in decisions.getvalue().splitlines()
+    ]
+    assert accepted_ids == {record.record_id for record in expected.accepted_records}
+    assert decision_reasons == [decision.reason_code for decision in expected.decisions]
+    assert actual.split_manifest == expected.split_manifest
+    assert actual.distributions["family"] == expected.distributions["family"]
+    assert actual.distributions["event"] == expected.distributions["event"]
+    assert actual.failure_codes == expected.failure_codes
 
 
 def test_holdout_hash_quarantines_every_copy_before_expansion():
