@@ -40,3 +40,14 @@ def test_control_replay_covers_each_failure_mode_with_correct_target_stream():
     assert by_category["raw_code"].target_mode == "raw_code"
     assert by_category["semantic_to_code"].target_mode == "raw_code"
     assert by_category["unicode_roundtrip"].target_mode == "raw_code"
+
+
+def test_control_replay_can_isolate_one_predeclared_failure_mode():
+    records = build_replay_records(
+        32, seed=1729, categories=("ordinary_instruction",)
+    )
+
+    assert len(records) == 32
+    assert {
+        dict(item.provenance)["replay_category"] for item in records
+    } == {"ordinary_instruction"}

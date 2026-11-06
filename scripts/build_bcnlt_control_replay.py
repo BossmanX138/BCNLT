@@ -21,15 +21,24 @@ _CATEGORIES = (
 )
 
 
-def build_replay_records(count: int, *, seed: int) -> tuple[CurriculumRecord, ...]:
+def build_replay_records(
+    count: int,
+    *,
+    seed: int,
+    categories: tuple[str, ...] = _CATEGORIES,
+) -> tuple[CurriculumRecord, ...]:
     if count <= 0:
         raise ValueError("control replay count must be positive")
+    if not categories or any(category not in _CATEGORIES for category in categories):
+        raise ValueError("control replay categories must be known and non-empty")
+    if len(set(categories)) != len(categories):
+        raise ValueError("control replay categories must be unique")
     randomizer = random.Random(seed)
-    categories = list(_CATEGORIES)
-    randomizer.shuffle(categories)
+    category_order = list(categories)
+    randomizer.shuffle(category_order)
     records = []
     for index in range(count):
-        category = categories[index % len(categories)]
+        category = category_order[index % len(category_order)]
         prompt_body, target, target_mode, family, language = _example(category, index)
         prompt = f"Language: {language}\n{prompt_body}"
         content_digest = hashlib.sha256(
@@ -151,6 +160,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", required=True)
     parser.add_argument("--count", type=int, default=256)
     parser.add_argument("--seed", type=int, default=1729)
+    parser.add_argument("--category", action="append", choices=_CATEGORIES)
     args = parser.parse_args(argv)
 
     output = Path(args.output)
@@ -159,7 +169,8 @@ def main(argv: list[str] | None = None) -> int:
 
     from bcnlt.tokenizer import BCNLTTokenizer
 
-    records = build_replay_records(args.count, seed=args.seed)
+    categories = tuple(args.category) if args.category else _CATEGORIES
+    records = build_replay_records(args.count, seed=args.seed, categories=categories)
     output.mkdir(parents=True)
     curriculum = output / "curriculum.jsonl"
     curriculum.write_text(
