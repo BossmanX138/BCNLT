@@ -82,6 +82,21 @@ class EvaluationRun:
             "heldout_loss": self.heldout_loss,
         }
 
+    @classmethod
+    def from_dict(cls, value: dict[str, object]) -> "EvaluationRun":
+        settings = GenerationSettings(**value["settings"])
+        results = tuple(CaseResult(**item) for item in value["results"])
+        metrics = {str(key): float(item) for key, item in value["metrics"].items()}
+        runtime_failures = tuple(str(item) for item in value["runtime_failures"])
+        return cls(
+            identity=str(value["identity"]),
+            settings=settings,
+            results=results,
+            metrics=metrics,
+            runtime_failures=runtime_failures,
+            heldout_loss=float(value["heldout_loss"]),
+        )
+
 
 @dataclass(frozen=True)
 class PromotionDecision:
@@ -222,6 +237,13 @@ def decode_generated_stream(tokenizer, token_ids: Sequence[int]) -> str:
     except ValueError as exc:
         raise ValueError("generated completion has no BCNLT stream end token") from exc
     return tokenizer.decode(list(token_ids)[: boundary + 1])
+
+
+def encode_evaluation_prompt(tokenizer, prompt: str, *, language: str) -> list[int]:
+    """Frame an evaluation prompt exactly like a packed multilingual prompt."""
+    return list(tokenizer.encode_text(f"Language: {language}\n")) + list(
+        tokenizer.encode_text(prompt)
+    )
 
 
 def semantic_projection_equivalent(

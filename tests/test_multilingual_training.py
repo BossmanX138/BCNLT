@@ -12,6 +12,7 @@ from bcnlt.multilingual_training import (
     LORA_TARGET_MODULES,
     TRAINING_FAMILIES,
     LanguageBalancedSampler,
+    IndexedDatasetView,
     MultilingualTrainingConfig,
     SmokeMetrics,
     audit_packed_multilingual_dataset,
@@ -92,6 +93,36 @@ def test_balanced_sampler_refuses_a_missing_language_family_cell() -> None:
 
     with pytest.raises(ValueError, match="bash/knowledge_boundary"):
         LanguageBalancedSampler(rows)
+
+
+def test_balanced_eval_selection_uses_dataset_metadata_without_loading_payloads() -> None:
+    rows = _records()
+
+    class MetadataDataset:
+        def __len__(self) -> int:
+            return len(rows)
+
+        def metadata(self, index: int) -> dict[str, str]:
+            return rows[index]
+
+        def __getitem__(self, index: int) -> dict[str, list[int]]:
+            return {
+                "input_ids": [index],
+                "labels": [index],
+                "attention_mask": [1],
+            }
+
+    dataset = MetadataDataset()
+    sampler = LanguageBalancedSampler(dataset, seed=1729)
+    indices = sampler.sample_indices(32 * len(CANONICAL_LANGUAGE_IDS))
+    counts = sampler.balance_counts(indices)
+    view = IndexedDatasetView(dataset, indices)
+
+    assert set(counts["languages"]) == set(CANONICAL_LANGUAGE_IDS)
+    assert set(counts["languages"].values()) == {32}
+    assert max(counts["families"].values()) - min(counts["families"].values()) <= 1
+    assert view.metadata(0) == rows[indices[0]]
+    assert view[0]["input_ids"] == [indices[0]]
 
 
 def test_smoke_gate_requires_finite_improving_global_and_per_language_losses() -> None:

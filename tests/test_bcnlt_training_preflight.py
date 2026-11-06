@@ -19,6 +19,7 @@ from integrations.runeforge_mk2_tokenizer.train_bcnlt_adapter import (
     evaluate_packed_loss,
     load_bcnlt_adapter_state,
     save_bcnlt_adapter,
+    verify_continuation_parent,
     verify_training_preflight,
     QLoRAConfig,
     run_bounded_training_trace,
@@ -107,6 +108,24 @@ def test_resume_identity_is_exact_and_whole_tables_cannot_be_trainable():
             observed=_lineage(),
             cuda_available=True,
         )
+
+
+def test_continuation_parent_preserves_base_tokenizer_and_engine_but_can_change_data():
+    child = TrainingLineage(
+        **{
+            **_lineage().__dict__,
+            "corpus_manifest_sha256": "5" * 64,
+            "training_config_sha256": "6" * 64,
+        }
+    )
+
+    verify_continuation_parent(child=child, parent=_lineage())
+
+    incompatible = TrainingLineage(
+        **{**_lineage().__dict__, "base_model_sha256": "7" * 64}
+    )
+    with pytest.raises(ValueError, match="parent base_model_sha256"):
+        verify_continuation_parent(child=child, parent=incompatible)
 
 
 def test_adapter_save_keeps_sparse_and_lora_weights_with_lineage(tmp_path: Path):

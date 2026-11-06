@@ -204,8 +204,9 @@ class LanguageBalancedSampler:
     def balance_counts(self, indices: Sequence[int]) -> dict[str, dict[str, int]]:
         language_counts: Counter[str] = Counter()
         family_counts: Counter[str] = Counter()
+        metadata = getattr(self.records, "metadata", None)
         for index in indices:
-            row = self.records[index]
+            row = metadata(index) if callable(metadata) else self.records[index]
             language_counts[str(row["language"])] += 1
             family_counts[str(row["family"])] += 1
         return {
@@ -224,6 +225,13 @@ class IndexedDatasetView(Sequence[Mapping[str, Any]]):
 
     def __getitem__(self, index: int) -> Mapping[str, Any]:
         return self.dataset[self.indices[index]]
+
+    def metadata(self, index: int) -> Mapping[str, Any]:
+        source_index = self.indices[index]
+        metadata = getattr(self.dataset, "metadata", None)
+        if callable(metadata):
+            return metadata(source_index)
+        return self.dataset[source_index]
 
 
 @dataclass(frozen=True)

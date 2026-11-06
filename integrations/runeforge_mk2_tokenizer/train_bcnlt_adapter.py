@@ -547,6 +547,15 @@ def verify_training_preflight(
     )
 
 
+def verify_continuation_parent(
+    *, child: TrainingLineage, parent: TrainingLineage
+) -> None:
+    """Allow new replay data while preserving the exact model/tokenizer foundation."""
+    for field in ("base_model_sha256", "tokenizer_manifest_sha256", "engine"):
+        if getattr(child, field) != getattr(parent, field):
+            raise ValueError(f"parent {field} does not match continuation lineage")
+
+
 def lora_adapter_count(model: nn.Module) -> int:
     peft_config = getattr(model, "peft_config", None)
     if isinstance(peft_config, dict):
@@ -805,6 +814,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--engine", default="auto")
     parser.add_argument("--resume")
     parser.add_argument("--resume-sha256")
+    parser.add_argument("--initial-adapter")
+    parser.add_argument("--initial-adapter-sha256")
     args = parser.parse_args(argv)
 
     if args.engine in {"auto", "unsloth"}:
@@ -887,6 +898,25 @@ def main(argv: list[str] | None = None) -> int:
         observed=observed,
         cuda_available=torch.cuda.is_available(),
     )
+    continuation_parent = None
+    if bool(args.initial_adapter) != bool(args.initial_adapter_sha256):
+        raise ValueError("initial adapter path and SHA-256 are both required")
+    if args.initial_adapter:
+        initial_root = Path(args.initial_adapter)
+        initial_manifest_path = initial_root / "artifact_manifest.json"
+        if not initial_manifest_path.is_file():
+            raise FileNotFoundError("initial adapter artifact manifest is missing")
+        initial_manifest = json.loads(initial_manifest_path.read_text(encoding="utf-8"))
+        initial_weights_sha256 = initial_manifest.get("adapter_weights_sha256")
+        if initial_weights_sha256 != args.initial_adapter_sha256:
+            raise ValueError("initial adapter SHA-256 does not match the requested parent")
+        parent_lineage = load_bcnlt_adapter_state(model, initial_root)
+        verify_continuation_parent(child=observed, parent=parent_lineage)
+        continuation_parent = {
+            "adapter_path": str(initial_root),
+            "adapter_weights_sha256": initial_weights_sha256,
+            "lineage": parent_lineage.to_dict(),
+        }
     dataset = PackedBCNLTDataset(
         args.packed_dataset,
         args.split,
@@ -1035,6 +1065,8 @@ def main(argv: list[str] | None = None) -> int:
         "adapter_weights_sha256": artifact.weights_sha256,
         "checkpoints": checkpoint_artifacts,
     }
+    if continuation_parent is not None:
+        smoke_manifest["continuation_parent"] = continuation_parent
     if multilingual_config is not None and multilingual_config.run_kind == "smoke":
         metrics = SmokeMetrics(
             optimizer_steps=trace.optimizer_steps,

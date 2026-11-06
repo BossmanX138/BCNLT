@@ -1,0 +1,12 @@
+{
+  "schema_version": "bcnlt-control-replay-training-v1",
+  "target_modules": [
+    "q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"
+  ],
+  "rank": 16,
+  "alpha": 32,
+  "dropout": 0.0,
+  "maximum_sequence_tokens": 4096,
+  "learning_rate": 0.00005,
+  "gradient_accumulation_steps": 8
+}

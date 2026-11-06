@@ -7,8 +7,10 @@ import pytest
 
 from bcnlt.tokenizer_eval import (
     EvaluationCase,
+    EvaluationRun,
     GenerationSettings,
     decode_generated_stream,
+    encode_evaluation_prompt,
     evaluate_model,
     evaluate_promotion,
     load_evaluation_suite,
@@ -52,6 +54,12 @@ def test_evaluator_scores_frozen_categories_deterministically():
     }
     assert not first.runtime_failures
     assert all(result.prompt == case.prompt for result, case in zip(first.results, CASES))
+
+
+def test_evaluation_run_round_trips_through_cache_payload():
+    report = evaluate_model("base", CASES, SETTINGS, _perfect, heldout_loss=2.0)
+
+    assert EvaluationRun.from_dict(report.to_dict()) == report
 
 
 def test_semantic_code_requires_parseable_ast_equivalence_and_failures_are_recorded():
@@ -158,3 +166,18 @@ def test_generated_hybrid_stream_is_trimmed_at_its_structural_end_token():
     assert decode_generated_stream(Tokenizer(), [10, 11, 99, 2, 2]) == "ready"
     with pytest.raises(ValueError, match="stream end"):
         decode_generated_stream(Tokenizer(), [10, 11, 2])
+
+
+def test_evaluation_prompt_matches_packed_language_and_body_stream_framing():
+    class Tokenizer:
+        def __init__(self):
+            self.calls = []
+
+        def encode_text(self, value):
+            self.calls.append(value)
+            return [len(self.calls)]
+
+    tokenizer = Tokenizer()
+
+    assert encode_evaluation_prompt(tokenizer, "Reply ready.", language="python") == [1, 2]
+    assert tokenizer.calls == ["Language: python\n", "Reply ready."]
