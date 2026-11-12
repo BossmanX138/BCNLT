@@ -9,6 +9,7 @@ from .adapters.python import PythonAdapter
 from .benchmark import benchmark_project, benchmark_source, trace_comparison
 from .meaning_eval import evaluate_meaning_file
 from .model_eval import OllamaChatModel, OpenAICompatibleChatModel, evaluate_model_file
+from .payload_eval import evaluate_payload_source
 from .uncertainty import HeuristicUncertaintyScorer
 from .uyr import UYRResolver
 from .wildcard import WildcardMemory, WildcardResolver
@@ -21,6 +22,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--trace", help="Path to write a human-readable trace")
     parser.add_argument("--benchmark", action="store_true", help="Print benchmark summary")
     parser.add_argument("--compare-report", help="Path to write BCNLT vs standard JSON report")
+    parser.add_argument("--payload-report", help="Path to write actual serialized-context cost report (single file)")
+    parser.add_argument("--payload-encoding", default="cl100k_base", help="tiktoken encoding for all payload comparisons")
     parser.add_argument("--meaning-report", help="Path to write deterministic meaning retrieval report")
     parser.add_argument("--meaning-max-probes", type=int, default=50)
     parser.add_argument("--model-eval-report", help="Path to write context-answer model eval report")
@@ -47,6 +50,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     path = Path(args.file)
+
+    if path.is_dir() and args.payload_report:
+        raise SystemExit("--payload-report requires a single Python file")
 
     if args.compare_report:
         if path.is_dir():
@@ -113,7 +119,16 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(f"BCNLT model-context eval report written to {args.model_eval_report}")
 
-    source = path.read_text(encoding="utf-8")
+    # Preserve source newlines for payload accounting. Hashes describe the
+    # decoded text encoded as UTF-8, not original file bytes (a BOM is omitted).
+    with path.open(encoding="utf-8-sig", newline="") as handle:
+        source = handle.read()
+    if args.payload_report:
+        report = evaluate_payload_source(source, str(path), encoding_name=args.payload_encoding)
+        Path(args.payload_report).write_text(
+            json.dumps(report.to_dict(), indent=2, sort_keys=True), encoding="utf-8"
+        )
+        print(f"BCNLT payload report written to {args.payload_report}")
     adapter = PythonAdapter()
     document = adapter.parse(source, path=str(path))
     units = list(adapter.to_units(document))

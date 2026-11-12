@@ -4,6 +4,7 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+.work/
 
 # Generated BCNLT outputs and benchmark reports.
 *.json

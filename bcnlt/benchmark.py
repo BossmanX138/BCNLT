@@ -100,10 +100,10 @@ def standard_token_count(source: str) -> StandardTokenCount:
         import tiktoken  # type: ignore
 
         encoding = tiktoken.get_encoding("cl100k_base")
-        return StandardTokenCount(len(encoding.encode(source)), "tiktoken:cl100k_base")
+        return StandardTokenCount(len(encoding.encode(source, disallowed_special=())), "tiktoken:cl100k_base")
     except Exception:
         pieces = re.findall(r"\w+|[^\w\s]|\s+", source, flags=re.UNICODE)
-        return StandardTokenCount(len([piece for piece in pieces if piece]), "regex-bpe-style-fallback")
+        return StandardTokenCount(len([piece for piece in pieces if piece]), "regex-piece-estimate")
 
 
 def benchmark_source(

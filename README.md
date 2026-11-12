@@ -42,6 +42,7 @@ python -m bcnlt.cli fixtures/ambiguous.py --jsonl ambiguous.jsonl --wildcard-mem
 - `bcnlt.incremental`: changed-file and changed-region invalidation hooks.
 - `bcnlt.cli`: JSONL and trace command-line interface.
 - `bcnlt.benchmark`: lexical-token count versus BCNLT event count and latency.
+- `bcnlt.payload_eval`: actual serialized-context size using the same encoder for raw, semantic-only, and augmented source.
 
 ## BCNLT vs Standard Tokenizer Report
 
@@ -60,7 +61,7 @@ python -m bcnlt.cli path\to\file.py --compare-report file-comparison.json --trac
 The report includes:
 
 - Standard token count, using `tiktoken:cl100k_base` when installed.
-- A deterministic regex BPE-style fallback when `tiktoken` is unavailable.
+- A deterministic regex-piece estimate when `tiktoken` is unavailable (not a BPE tokenizer).
 - Python lexical token count.
 - BCNLT semantic event count.
 - Event-to-standard-token ratio.
@@ -70,6 +71,27 @@ The report includes:
 - Per-file latency and project totals.
 
 The side-by-side trace shows ordinary token pieces next to BCNLT semantic events, which makes the comparison visible instead of only numeric.
+
+## Serialized Context Cost
+
+Semantic event counts are not model token counts. Sending a semantic event to an existing model requires serializing its text and metadata; fewer events can still produce a much larger model input.
+
+```powershell
+python -m bcnlt.cli fixtures/sample.py --payload-report payload-cost.json
+python -m bcnlt.cli fixtures/sample.py --payload-report payload-cost.json --payload-encoding o200k_base
+```
+
+This single-file diagnostic compares three exact strings with the same encoder:
+
+- Original source text.
+- Compact JSONL of complete contextual units, including scope, spans, links, IR, history, and metadata.
+- Original source plus a labeled separator and that semantic JSONL. The combined string is encoded directly, not estimated by adding two counts.
+
+Each representation reports its character count, UTF-8 byte size, count, and SHA-256. Digests describe the exact compared strings encoded as UTF-8, not the original file bytes. Source newlines are preserved; an optional UTF-8 BOM is omitted when decoding the file. Ratios use raw-source counts as the baseline and are null for an empty baseline. The selected `tiktoken` encoding is recorded; it defaults to `cl100k_base` and must match the intended model for a useful comparison. Literal special-token spellings in source are treated as ordinary text.
+
+If the encoder cannot load or fails on any representation, all three are recounted as `regex-piece-estimate`. The report then sets `model_token_counts_available` to false and records the error type. These fallback counts are not BPE or measured model-token savings. An optional `tiktoken` installation may need its encoding cached for offline use.
+
+The semantic format is deterministic but is not guaranteed to reconstruct the source. Counts exclude chat wrappers, instructions, outputs, and the CLI's additional uncertainty, UYR, and wildcard enrichment. This diagnostic measures payload size only, not semantic correctness, answer quality, native-tokenizer compression, or training readiness. It makes no model calls, executes no analyzed source, and does not promote vocabulary entries or model checkpoints. Compare downstream quality separately before selecting a smaller representation.
 
 ## Meaning Retrieval Evaluation
 
@@ -190,12 +212,12 @@ The key rule is to avoid shared mutable state during parallel work. Workers shou
 - Wildcard memory is local JSONL persistence, not a vetted global knowledge base yet.
 - IR rendering supports a narrow subset: modules, assignments, functions, returns, literals, variables, and calls.
 - Incremental support is an invalidation abstraction, not a full changed-AST rewriter.
-- The benchmark uses Python lexical token counts as the ordinary-token baseline, not a real BPE tokenizer yet.
+- The event benchmark prefers `tiktoken` when available but its event-to-token ratio is not a model-input compression ratio. Use `--payload-report` for serialized-context accounting.
 
 ## Experiment Plan
 
 1. Compare event count and latency against lexical token counts across real BossCrafts Python files.
-2. Add a real BPE tokenizer baseline.
+2. Measure serialized-context cost with a real model-matched BPE encoder, then test downstream quality at equal context budgets.
 3. Add Tree-sitter as an optional parser backend.
 4. Expand symbol resolution with import graphs and cross-file definitions.
 5. Add type evidence retrieval for high-uncertainty member access and calls.
