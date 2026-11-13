@@ -3,28 +3,10 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import json
-from pathlib import Path
 
 import pytest
 
 from bosscrafts_model.tokenizer import NativeTokenizerBinding
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-ADMISSION_ROOT = (
-    PROJECT_ROOT
-    / "artifacts"
-    / "corpora"
-    / "bcnlt-v10-current-heldout-admission-v1"
-)
-REVIEW_ROOT = (
-    PROJECT_ROOT
-    / "artifacts"
-    / "reviews"
-    / "bcnlt-v10-current-heldout-review-v2-context"
-)
-SMALL_JAVASCRIPT_REVIEW_ID = (
-    "ff50ec8d5ffb7a8e422ac63d76160448d78a7061007a41a50e77dd015cf4bd25"
-)
 
 
 def _feature():
@@ -72,13 +54,16 @@ def test_live_replay_rebuilds_the_selected_record_from_full_source(
     ) == result
 
 
-def test_live_replay_rejects_preserved_stale_runtime_evidence(tmp_path):
+def test_live_replay_rejects_preserved_stale_runtime_evidence(
+    tmp_path,
+    stale_runtime_semantic_evidence,
+):
     auditor = _feature().SourceSemanticReplayAuditor(NativeTokenizerBinding.load())
 
     with pytest.raises(ValueError, match="lineage mismatch"):
         auditor.materialize(
-            ADMISSION_ROOT,
-            REVIEW_ROOT,
+            stale_runtime_semantic_evidence.admission_root,
+            stale_runtime_semantic_evidence.review_root,
             tmp_path / "stale-replay",
-            review_ids=(SMALL_JAVASCRIPT_REVIEW_ID,),
+            review_ids=(stale_runtime_semantic_evidence.selected_review_id,),
         )

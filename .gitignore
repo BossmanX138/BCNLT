@@ -72,6 +72,18 @@ artifacts/bcnlt/*
 !artifacts/bcnlt/multilingual-parser-output-v1/
 !artifacts/bcnlt/multilingual-parser-output-v1/fixture-manifest.json
 !artifacts/bcnlt/multilingual-parser-output-v1/real-output.jsonl
+!artifacts/bcnlt/runtime-recovery-v1/
+!artifacts/bcnlt/runtime-recovery-v1/**
+
+# Frozen semantic-audit controls are required to reproduce qualification tests.
+!artifacts/reviews/
+artifacts/reviews/*
+!artifacts/reviews/bcnlt-v10-semantic-challenge-v1/
+!artifacts/reviews/bcnlt-v10-semantic-challenge-v1/**
+!artifacts/reviews/bcnlt-v10-semantic-challenge-deterministic-audit-v1/
+!artifacts/reviews/bcnlt-v10-semantic-challenge-deterministic-audit-v1/**
+!artifacts/reviews/bcnlt-v10-semantic-challenge-raw-ast-audit-v1/
+!artifacts/reviews/bcnlt-v10-semantic-challenge-raw-ast-audit-v1/**
 
 !vendor/tokenizers_runtime_0_23/
 !vendor/tokenizers_runtime_0_23/**

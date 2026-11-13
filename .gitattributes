@@ -37,6 +37,10 @@ vendor/bcnlt_runtime_v10_learning_candidate/site-packages/**/*.pyd filter=lfs di
 # its JSON manifests and checksum sidecar.
 artifacts/tokenizers/bcnlt-native-foundation-65536-v1/** -text whitespace=-trailing-space
 artifacts/bcnlt/multilingual-parser-output-v1/** -text whitespace=-trailing-space
+artifacts/bcnlt/runtime-recovery-v1/** -text whitespace=-trailing-space
+artifacts/reviews/bcnlt-v10-semantic-challenge-v1/** -text whitespace=-trailing-space
+artifacts/reviews/bcnlt-v10-semantic-challenge-deterministic-audit-v1/** -text whitespace=-trailing-space
+artifacts/reviews/bcnlt-v10-semantic-challenge-raw-ast-audit-v1/** -text whitespace=-trailing-space
 
 # This owned wheel is verified as an exact byte tree at import time. Treat its
 # wrappers and metadata as opaque vendor payloads so checkout never rewrites

@@ -1,0 +1,22 @@
+{
+  "schema_version": "bcnlt-parser-bundle-v1",
+  "release": "1.22.1",
+  "provenance_url": "https://github.com/xberg-io/tree-sitter-language-pack/releases/download/v1.22.1/grammar-provenance-1.22.1.json",
+  "provenance_sha256": "412b404ac3355ededf2da71f93c2ab493f0ca165084c2b4baeedfd6866329f3f",
+  "grammars": [
+    {"id": "python"},
+    {"id": "javascript"},
+    {"id": "typescript"},
+    {"id": "c"},
+    {"id": "cpp"},
+    {"id": "c_sharp", "pack_name": "csharp", "provenance_id": "csharp", "cache_stem": "c_sharp"},
+    {"id": "java"},
+    {"id": "go"},
+    {"id": "rust"},
+    {"id": "php"},
+    {"id": "ruby"},
+    {"id": "kotlin"},
+    {"id": "swift"},
+    {"id": "bash"}
+  ]
+}
