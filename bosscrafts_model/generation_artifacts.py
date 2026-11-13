@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import TypedDict
 
+from .inference_protocol import (
+    build_inference_prompt,
+    response_payload_token_ids,
+    response_protocol_complete,
+)
+from .tokenizer import NativeTokenizerBinding
+
 MAX_GENERATION_JSONL_LINE_BYTES = 16 * 1024 * 1024
-HUMANEVAL_GENERATION_SCHEMA = "bosscrafts-openai-humaneval-generation-v2"
+HUMANEVAL_GENERATION_SCHEMA = "bosscrafts-openai-humaneval-generation-v3"
 GENERATION_GATE_SCHEMA = "bosscrafts-strict-generation-gate-v1"
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _HUMANEVAL_TASK_ID = re.compile(r"HumanEval/(0|[1-9][0-9]*)")
@@ -26,6 +34,8 @@ class HumanEvalGenerationRecord(TypedDict):
     prompt_token_count: int
     generated_token_count: int
     completion_token_count: int
+    generated_ids: list[int]
+    completion_ids: list[int]
     generation_seconds: float
     tokens_per_second: float
     response_protocol_complete: bool
@@ -56,6 +66,27 @@ class GenerationGateRecord(TypedDict):
 
 _HUMANEVAL_RECORD_FIELDS = frozenset(HumanEvalGenerationRecord.__annotations__)
 _GENERATION_GATE_RECORD_FIELDS = frozenset(GenerationGateRecord.__annotations__)
+_FENCE = re.compile(r"^\s*```(?:python)?\s*\n?|\n?```\s*$", re.IGNORECASE)
+
+
+def clean_python_completion(text: str) -> str:
+    """Apply the frozen, deliberately small HumanEval cleanup transform."""
+    cleaned = _FENCE.sub("", text.replace("\r\n", "\n"))
+    stop_markers = (
+        "\nclass ",
+        "\ndef ",
+        "\nif __name__",
+        "\nprint(",
+        "\nassert ",
+        "\n# Example",
+        "\n# Test",
+        "\n```",
+    )
+    positions = [cleaned.find(marker) for marker in stop_markers]
+    positions = [position for position in positions if position >= 0]
+    if positions:
+        cleaned = cleaned[: min(positions)]
+    return cleaned.rstrip() + "\n" if cleaned.strip() else cleaned
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -204,6 +235,12 @@ def load_humaneval_generation_records(
         prompt_count = _integer(row, "prompt_token_count", label, minimum=1)
         generated_count = _integer(row, "generated_token_count", label)
         completion_count = _integer(row, "completion_token_count", label)
+        generated_ids = _token_ids(row, "generated_ids", label, nonempty=False)
+        completion_ids = _token_ids(row, "completion_ids", label, nonempty=False)
+        if generated_count != len(generated_ids):
+            raise ValueError(f"{label} generated_token_count is inconsistent")
+        if completion_count != len(completion_ids):
+            raise ValueError(f"{label} completion_token_count is inconsistent")
         if completion_count > generated_count:
             raise ValueError(f"{label} completion_token_count exceeds generated_token_count")
         seconds = _number(
@@ -226,6 +263,8 @@ def load_humaneval_generation_records(
             prompt_token_count=prompt_count,
             generated_token_count=generated_count,
             completion_token_count=completion_count,
+            generated_ids=generated_ids,
+            completion_ids=completion_ids,
             generation_seconds=seconds,
             tokens_per_second=rate,
             response_protocol_complete=_boolean(
@@ -237,6 +276,90 @@ def load_humaneval_generation_records(
         )
         records[task_id] = record
     return records
+
+
+def validate_humaneval_generation_records(
+    binding: NativeTokenizerBinding,
+    tasks: Sequence[Mapping[str, object]],
+    records: Mapping[str, HumanEvalGenerationRecord],
+    *,
+    prompt_protocol: str,
+    maximum_new_tokens: int,
+    maximum_sequence: int,
+) -> None:
+    """Rebind HumanEval records to official prompts and exact token outputs."""
+    if type(binding) is not NativeTokenizerBinding:
+        raise TypeError("binding must be a verified NativeTokenizerBinding")
+    if prompt_protocol not in {"raw", "instruction_to_code"}:
+        raise ValueError("HumanEval prompt protocol is invalid")
+    if type(maximum_new_tokens) is not int or not 1 <= maximum_new_tokens <= 512:
+        raise ValueError("HumanEval generation bound is invalid")
+    selected: dict[str, tuple[int, Mapping[str, object]]] = {}
+    for index, task in enumerate(tasks):
+        task_id = task.get("task_id")
+        if type(task_id) is not str or task_id in selected:
+            raise ValueError("HumanEval selected task identity is invalid")
+        selected[task_id] = (index, task)
+    if not set(records).issubset(selected):
+        raise ValueError("HumanEval records contain a task outside this run")
+    for task_id, record in records.items():
+        index, task = selected[task_id]
+        prompt = task.get("prompt")
+        entry_point = task.get("entry_point")
+        if type(prompt) is not str or type(entry_point) is not str:
+            raise ValueError("HumanEval selected task fields are invalid")
+        prompt_ids = (
+            binding.encode_payload(prompt)
+            if prompt_protocol == "raw"
+            else build_inference_prompt(
+                binding,
+                task="instruction_to_code",
+                prompt=prompt,
+            )
+        )
+        available = maximum_sequence - len(prompt_ids)
+        if available < 1:
+            raise ValueError(f"{task_id} prompt exceeds the model context")
+        generated_ids = list(record["generated_ids"])
+        if (
+            record["task_id"] != task_id
+            or record["task_index"] != index
+            or record["entry_point"] != entry_point
+            or record["prompt_sha256"]
+            != hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+            or record["prompt_token_count"] != len(prompt_ids)
+        ):
+            raise ValueError("HumanEval record does not match its official task")
+        if len(generated_ids) > min(maximum_new_tokens, available):
+            raise ValueError("HumanEval record exceeds its generation bound")
+        if any(token_id >= binding.vocab_size for token_id in generated_ids):
+            raise ValueError("HumanEval record contains an out-of-vocabulary token")
+        if prompt_protocol == "raw":
+            completion_ids = list(generated_ids)
+            if completion_ids[-1:] == [2]:
+                completion_ids = completion_ids[:-1]
+            protocol_complete = True
+        else:
+            completion_ids = response_payload_token_ids(
+                binding,
+                "instruction_to_code",
+                generated_ids,
+            )
+            protocol_complete = response_protocol_complete(
+                binding,
+                task="instruction_to_code",
+                generated_ids=generated_ids,
+            )
+        raw_response = binding.decode(generated_ids)
+        raw_completion = binding.decode(completion_ids)
+        if (
+            record["completion_ids"] != completion_ids
+            or record["response_protocol_complete"] is not protocol_complete
+            or record["raw_model_response"] != raw_response
+            or record["raw_completion"] != raw_completion
+            or record["clean_completion"] != clean_python_completion(raw_completion)
+        ):
+            raise ValueError("HumanEval record token evidence is inconsistent")
 
 
 def load_generation_gate_records(

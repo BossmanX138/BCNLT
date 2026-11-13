@@ -7,8 +7,23 @@ import hashlib
 import json
 import math
 import re
+import sys
 from collections import Counter
 from pathlib import Path
+from typing import TypedDict
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from bosscrafts_model.generation_artifacts import (
+    HUMANEVAL_GENERATION_SCHEMA,
+    HumanEvalGenerationRecord,
+    load_humaneval_generation_records,
+    validate_humaneval_generation_records,
+)
+from bosscrafts_model.immutable_artifacts import publish_new_files
+from bosscrafts_model.tokenizer import NativeTokenizerBinding, bound_native_65k_config
 
 SCHEMA = "bosscrafts-openai-humaneval-report-v2"
 TASK_COUNT = 164
@@ -22,6 +37,41 @@ MINIMUM_PROTOCOL_COMPLETE_RATE = 0.95
 _PASS_AT_1 = re.compile(
     r"['\"]?pass@1['\"]?\s*:\s*(?:np\.float64\()?([0-9]+(?:\.[0-9]+)?)"
 )
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+_MANIFEST_FIELDS = frozenset(
+    {
+        "schema_version",
+        "checkpoint_sha256",
+        "dataset_sha256",
+        "database_identity_sha256",
+        "device",
+        "dtype",
+        "limit",
+        "max_new_tokens",
+        "model_fingerprint",
+        "tokenizer_sha256",
+        "binding_sha256",
+        "generation",
+        "prompt_protocol",
+        "run_identity_sha256",
+    }
+)
+_SUMMARY_FIELDS = _MANIFEST_FIELDS | {
+    "checkpoint_epoch_index",
+    "checkpoint_step",
+    "completed_tasks",
+    "planned_tasks",
+    "generation_complete",
+    "total_generated_tokens",
+    "total_generation_seconds",
+    "mean_tokens_per_second",
+}
+
+
+class _HumanEvalTask(TypedDict):
+    task_id: str
+    prompt: str
+    entry_point: str
 
 
 def _sha256(path: Path) -> str:
@@ -79,10 +129,10 @@ def _classify_failure(result: str) -> str:
     return "runtime_or_test_failure"
 
 
-def _read_prompts(path: Path) -> dict[str, str]:
+def _read_tasks(path: Path) -> list[_HumanEvalTask]:
     if not path.is_file() or _sha256(path) != OPENAI_HUMANEVAL_SHA256:
         raise ValueError("official HumanEval dataset is missing or has the wrong hash")
-    prompts: dict[str, str] = {}
+    tasks: list[_HumanEvalTask] = []
     with gzip.open(path, "rt", encoding="utf-8") as handle:
         for line in handle:
             if not line.strip():
@@ -90,22 +140,55 @@ def _read_prompts(path: Path) -> dict[str, str]:
             row = json.loads(line)
             task_id = row.get("task_id") if type(row) is dict else None
             prompt = row.get("prompt") if type(row) is dict else None
-            if type(task_id) is not str or type(prompt) is not str or task_id in prompts:
+            entry_point = row.get("entry_point") if type(row) is dict else None
+            if (
+                type(task_id) is not str
+                or type(prompt) is not str
+                or type(entry_point) is not str
+            ):
                 raise ValueError("official HumanEval dataset row is invalid")
-            prompts[task_id] = prompt
-    if list(prompts) != [f"HumanEval/{index}" for index in range(TASK_COUNT)]:
+            tasks.append(
+                _HumanEvalTask(
+                    task_id=task_id,
+                    prompt=prompt,
+                    entry_point=entry_point,
+                )
+            )
+    if [task["task_id"] for task in tasks] != [
+        f"HumanEval/{index}" for index in range(TASK_COUNT)
+    ]:
         raise ValueError("official HumanEval task order is invalid")
-    return prompts
+    return tasks
 
 
-def _atomic_json(path: Path, payload: dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(path)
+def _validate_sample_results(
+    expected_ids: list[str],
+    records: list[HumanEvalGenerationRecord],
+    samples: list[dict[str, object]],
+    results: list[dict[str, object]],
+) -> None:
+    if (
+        len(records) != len(expected_ids)
+        or len(samples) != len(expected_ids)
+        or len(results) != len(expected_ids)
+    ):
+        raise ValueError("HumanEval samples or results have the wrong row count")
+    for task_id, record, sample, result_row in zip(
+        expected_ids, records, samples, results, strict=True
+    ):
+        if (
+            set(sample) != {"task_id", "completion"}
+            or sample.get("task_id") != task_id
+            or sample.get("completion") != record["clean_completion"]
+        ):
+            raise ValueError("HumanEval samples do not match generation records")
+        if (
+            result_row.get("task_id") != task_id
+            or result_row.get("completion") != sample["completion"]
+            or type(result_row.get("passed")) is not bool
+            or type(result_row.get("result")) is not str
+        ):
+            raise ValueError("HumanEval results do not match submitted samples")
 
 
 def main() -> int:
@@ -152,28 +235,115 @@ def main() -> int:
 
     manifest = _read_json(manifest_path)
     summary = _read_json(summary_path)
-    records = _read_jsonl(records_path)
+    tasks = _read_tasks(dataset_path)
     results = _read_jsonl(results_path)
-    prompts = _read_prompts(dataset_path)
     expected_ids = [f"HumanEval/{index}" for index in range(TASK_COUNT)]
-    if [row.get("task_id") for row in records] != expected_ids:
-        raise ValueError("generation records do not cover official HumanEval order")
-    if [row.get("task_id") for row in results] != expected_ids:
-        raise ValueError("evaluation results do not cover official HumanEval order")
     run_identity = manifest.get("run_identity_sha256")
     if (
-        type(run_identity) is not str
-        or len(run_identity) != 64
-        or summary.get("run_identity_sha256") != run_identity
-        or any(row.get("run_identity_sha256") != run_identity for row in records)
+        set(manifest) != _MANIFEST_FIELDS
+        or manifest.get("schema_version") != HUMANEVAL_GENERATION_SCHEMA
+        or type(run_identity) is not str
+        or _SHA256.fullmatch(run_identity) is None
     ):
+        raise ValueError("HumanEval manifest contract is invalid")
+    identity_payload = dict(manifest)
+    identity_payload.pop("run_identity_sha256")
+    recomputed_identity = hashlib.sha256(
+        json.dumps(identity_payload, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    if recomputed_identity != run_identity:
         raise ValueError("HumanEval generation identity mismatch")
+    maximum_new_tokens_value = manifest.get("max_new_tokens")
+    if (
+        manifest.get("dataset_sha256") != OPENAI_HUMANEVAL_SHA256
+        or manifest.get("limit") != TASK_COUNT
+        or manifest.get("generation") != "greedy_argmax"
+        or manifest.get("prompt_protocol") != "instruction_to_code"
+        or type(maximum_new_tokens_value) is not int
+        or not 1 <= maximum_new_tokens_value <= 512
+        or manifest.get("device") not in {"cpu", "cuda"}
+        or manifest.get("dtype") not in {"float32", "bfloat16"}
+        or any(
+            _SHA256.fullmatch(str(manifest.get(field))) is None
+            for field in (
+                "checkpoint_sha256",
+                "database_identity_sha256",
+                "model_fingerprint",
+                "tokenizer_sha256",
+                "binding_sha256",
+            )
+        )
+    ):
+        raise ValueError("HumanEval manifest is not a release-gate run")
+    maximum_new_tokens = maximum_new_tokens_value
+    binding = NativeTokenizerBinding.load()
+    config = bound_native_65k_config(binding)
+    if (
+        manifest.get("binding_sha256") != binding.binding_sha256
+        or manifest.get("tokenizer_sha256") != binding.tokenizer_sha256
+        or manifest.get("model_fingerprint") != config.fingerprint()
+    ):
+        raise ValueError("HumanEval manifest tokenizer or model lineage mismatch")
+    records_by_id = load_humaneval_generation_records(records_path, run_identity)
+    if list(records_by_id) != expected_ids:
+        raise ValueError("generation records do not cover official HumanEval order")
+    records: list[HumanEvalGenerationRecord] = [
+        records_by_id[task_id] for task_id in expected_ids
+    ]
+    validate_humaneval_generation_records(
+        binding,
+        tasks,
+        records_by_id,
+        prompt_protocol="instruction_to_code",
+        maximum_new_tokens=maximum_new_tokens,
+        maximum_sequence=config.max_sequence,
+    )
+    if set(summary) != _SUMMARY_FIELDS or any(
+        summary.get(key) != value for key, value in manifest.items()
+    ):
+        raise ValueError("HumanEval summary lineage does not match the manifest")
     if (
         summary.get("generation_complete") is not True
         or summary.get("completed_tasks") != TASK_COUNT
         or summary.get("planned_tasks") != TASK_COUNT
     ):
         raise ValueError("HumanEval generation did not complete all tasks")
+    total_generated_tokens = sum(record["generated_token_count"] for record in records)
+    total_generation_seconds = sum(record["generation_seconds"] for record in records)
+    checkpoint_epoch_index = summary.get("checkpoint_epoch_index")
+    checkpoint_step = summary.get("checkpoint_step")
+    summary_seconds = summary.get("total_generation_seconds")
+    summary_rate = summary.get("mean_tokens_per_second")
+    if (
+        type(checkpoint_epoch_index) is not int
+        or checkpoint_epoch_index < 0
+        or type(checkpoint_step) is not int
+        or checkpoint_step < 1
+        or summary.get("total_generated_tokens") != total_generated_tokens
+        or isinstance(summary_seconds, bool)
+        or not isinstance(summary_seconds, (int, float))
+        or not math.isfinite(summary_seconds)
+        or not math.isclose(
+            summary_seconds,
+            total_generation_seconds,
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        )
+        or isinstance(summary_rate, bool)
+        or not isinstance(summary_rate, (int, float))
+        or not math.isfinite(summary_rate)
+        or not math.isclose(
+            summary_rate,
+            total_generated_tokens / total_generation_seconds,
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        )
+    ):
+        raise ValueError("HumanEval summary metrics are inconsistent")
+    samples = _read_jsonl(samples_path)
+    _validate_sample_results(expected_ids, records, samples, results)
 
     metrics_text = metrics_path.read_text(encoding="utf-8")
     matches = _PASS_AT_1.findall(metrics_text)
@@ -188,17 +358,22 @@ def main() -> int:
     for row in results:
         if row.get("passed") is True:
             continue
-        result = row.get("result")
-        task_id = row.get("task_id")
-        completion = row.get("completion")
-        if type(result) is not str or type(task_id) is not str or type(completion) is not str:
+        result_text = row.get("result")
+        task_id_value = row.get("task_id")
+        completion_value = row.get("completion")
+        if (
+            type(result_text) is not str
+            or type(task_id_value) is not str
+            or type(completion_value) is not str
+        ):
             raise ValueError("HumanEval result row has invalid failure text")
         try:
-            compile(prompts[task_id] + completion, f"<{task_id}>", "exec")
+            prompt = tasks[int(task_id_value.removeprefix("HumanEval/"))]["prompt"]
+            compile(prompt + completion_value, f"<{task_id_value}>", "exec")
         except SyntaxError:
             failures["syntax_error"] += 1
         else:
-            failures[_classify_failure(result)] += 1
+            failures[_classify_failure(result_text)] += 1
     prompt_protocol = manifest.get("prompt_protocol")
     raw_protocols = {"raw", "raw_openai_humaneval_prompt"}
     protocol_complete = sum(
@@ -272,7 +447,13 @@ def main() -> int:
             "utf-8"
         )
     ).hexdigest()
-    _atomic_json(arguments.output.resolve(), report)
+    rendered = (
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    publish_new_files(
+        ((arguments.output.resolve(), rendered),),
+        artifact_label="HumanEval report",
+    )
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0
 

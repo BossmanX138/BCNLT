@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
 import pytest
 
 from bosscrafts_model.generation_artifacts import (
+    HUMANEVAL_GENERATION_SCHEMA,
+    clean_python_completion,
     load_generation_gate_records,
     load_humaneval_generation_records,
+    validate_humaneval_generation_records,
 )
+from bosscrafts_model.tokenizer import NativeTokenizerBinding
 
 RUN_IDENTITY = "a" * 64
 
@@ -19,7 +24,7 @@ def _write_jsonl(path: Path, value: dict[str, object]) -> None:
 
 def _humaneval_record() -> dict[str, object]:
     return {
-        "schema_version": "bosscrafts-openai-humaneval-generation-v2",
+        "schema_version": "bosscrafts-openai-humaneval-generation-v3",
         "run_identity_sha256": RUN_IDENTITY,
         "task_index": 0,
         "task_id": "HumanEval/0",
@@ -28,6 +33,8 @@ def _humaneval_record() -> dict[str, object]:
         "prompt_token_count": 12,
         "generated_token_count": 3,
         "completion_token_count": 2,
+        "generated_ids": [1, 2, 3],
+        "completion_ids": [1, 2],
         "generation_seconds": 0.5,
         "tokens_per_second": 6.0,
         "response_protocol_complete": True,
@@ -154,4 +161,87 @@ def test_generation_gate_rebinds_resumed_records_to_selected_case() -> None:
             [case],  # type: ignore[list-item]
             {"example-1": record},  # type: ignore[dict-item]
             maximum_new_tokens=256,
+        )
+
+
+def test_humaneval_records_recompute_token_evidence() -> None:
+    binding = NativeTokenizerBinding.load()
+    prompt = "def candidate():\n"
+    generated_ids = binding.encode_payload("    return 1\n")
+    completion_ids = list(generated_ids)
+    raw_response = binding.decode(generated_ids)
+    task = {
+        "task_id": "HumanEval/0",
+        "prompt": prompt,
+        "entry_point": "candidate",
+    }
+    record = {
+        "schema_version": HUMANEVAL_GENERATION_SCHEMA,
+        "run_identity_sha256": RUN_IDENTITY,
+        "task_index": 0,
+        "task_id": "HumanEval/0",
+        "entry_point": "candidate",
+        "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        "prompt_token_count": len(binding.encode_payload(prompt)),
+        "generated_token_count": len(generated_ids),
+        "completion_token_count": len(completion_ids),
+        "generated_ids": generated_ids,
+        "completion_ids": completion_ids,
+        "generation_seconds": 0.5,
+        "tokens_per_second": len(generated_ids) / 0.5,
+        "response_protocol_complete": True,
+        "raw_model_response": raw_response,
+        "raw_completion": raw_response,
+        "clean_completion": clean_python_completion(raw_response),
+    }
+    validate_humaneval_generation_records(
+        binding,
+        [task],
+        {"HumanEval/0": record},  # type: ignore[dict-item]
+        prompt_protocol="raw",
+        maximum_new_tokens=256,
+        maximum_sequence=2048,
+    )
+
+    record["raw_completion"] = "forged completion"
+    with pytest.raises(ValueError, match="token evidence is inconsistent"):
+        validate_humaneval_generation_records(
+            binding,
+            [task],
+            {"HumanEval/0": record},  # type: ignore[dict-item]
+            prompt_protocol="raw",
+            maximum_new_tokens=256,
+            maximum_sequence=2048,
+        )
+
+
+def test_humaneval_report_binds_results_to_generated_samples() -> None:
+    from scripts.build_humaneval_report import _validate_sample_results
+
+    record = _humaneval_record()
+    record["task_id"] = "HumanEval/0"
+    record["clean_completion"] = "return 1\n"
+    samples = [{"task_id": "HumanEval/0", "completion": "return 1\n"}]
+    results = [
+        {
+            "task_id": "HumanEval/0",
+            "completion": "return 1\n",
+            "passed": True,
+            "result": "passed",
+        }
+    ]
+    _validate_sample_results(
+        ["HumanEval/0"],
+        [record],  # type: ignore[list-item]
+        samples,
+        results,
+    )
+
+    results[0]["completion"] = "forged passing completion\n"
+    with pytest.raises(ValueError, match="results do not match"):
+        _validate_sample_results(
+            ["HumanEval/0"],
+            [record],  # type: ignore[list-item]
+            samples,
+            results,
         )

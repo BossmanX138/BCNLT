@@ -10,7 +10,6 @@ import gzip
 import hashlib
 import json
 import os
-import re
 import sys
 import time
 from collections.abc import Mapping
@@ -37,7 +36,9 @@ if tokenizers.__version__ != "0.23.2":
 from bosscrafts_model.generation_artifacts import (
     HUMANEVAL_GENERATION_SCHEMA,
     HumanEvalGenerationRecord,
+    clean_python_completion,
     load_humaneval_generation_records,
+    validate_humaneval_generation_records,
 )
 from bosscrafts_model.inference_protocol import (
     build_inference_prompt,
@@ -146,34 +147,6 @@ def _read_dataset(path: Path) -> list[_HumanEvalTask]:
     return tasks
 
 
-_FENCE = re.compile(r"^\s*```(?:python)?\s*\n?|\n?```\s*$", re.IGNORECASE)
-
-
-def clean_python_completion(text: str) -> str:
-    """Apply a small, deterministic HumanEval completion cleanup.
-
-    The raw completion is always retained.  Cleanup removes only Markdown fences and
-    truncates obvious top-level content after the requested function body.  It does
-    not repair syntax, remove BCNLT tokens, or synthesize code.
-    """
-    cleaned = _FENCE.sub("", text.replace("\r\n", "\n"))
-    stop_markers = (
-        "\nclass ",
-        "\ndef ",
-        "\nif __name__",
-        "\nprint(",
-        "\nassert ",
-        "\n# Example",
-        "\n# Test",
-        "\n```",
-    )
-    positions = [cleaned.find(marker) for marker in stop_markers]
-    positions = [position for position in positions if position >= 0]
-    if positions:
-        cleaned = cleaned[: min(positions)]
-    return cleaned.rstrip() + "\n" if cleaned.strip() else cleaned
-
-
 def _write_samples(
     path: Path,
     records: list[HumanEvalGenerationRecord],
@@ -270,9 +243,14 @@ def main() -> int:
 
     records_path = output / "generation-records.jsonl"
     records = load_humaneval_generation_records(records_path, run_identity)
-    selected_ids = {task["task_id"] for task in tasks}
-    if not set(records).issubset(selected_ids):
-        raise ValueError("existing records contain a task outside this run")
+    validate_humaneval_generation_records(
+        binding,
+        tasks,
+        records,
+        prompt_protocol=arguments.prompt_protocol,
+        maximum_new_tokens=arguments.max_new_tokens,
+        maximum_sequence=config.max_sequence,
+    )
 
     device = torch.device(arguments.device)
     dtype = torch.float32 if arguments.dtype == "float32" else torch.bfloat16
@@ -348,6 +326,8 @@ def main() -> int:
             prompt_token_count=len(prompt_ids),
             generated_token_count=len(generated_ids),
             completion_token_count=len(completion_ids),
+            generated_ids=generated_ids,
+            completion_ids=completion_ids,
             generation_seconds=elapsed,
             tokens_per_second=len(generated_ids) / elapsed,
             response_protocol_complete=protocol_complete,
