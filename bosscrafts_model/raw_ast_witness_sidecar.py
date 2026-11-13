@@ -56,6 +56,9 @@ class _ScopeRule(Protocol):
     @property
     def name_field(self) -> str | None: ...
 
+    @property
+    def scope_kind(self) -> str: ...
+
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
     result: dict[str, object] = {}
@@ -175,11 +178,13 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
     exact: dict[tuple[int, int, int, int], set[str]] = {}
     starts: dict[tuple[int, int], set[str]] = {}
     ends: dict[tuple[int, int], set[str]] = {}
+    all_nodes: list[_Node] = []
     named_nodes: list[_Node] = []
     stack: list[_Node] = [cast(_Node, document.tree.root_node)]
     while stack:
         node = stack.pop()
         stack.extend(reversed(node.children))
+        all_nodes.append(node)
         if not bool(getattr(node, "is_named", False)):
             continue
         named_nodes.append(node)
@@ -203,7 +208,7 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
         if (
             field_path == "name"
             and language in {"javascript", "typescript"}
-            and str(node.type) == "arrow_function"
+            and str(node.type) in {"arrow_function", "function_expression"}
             and node.child_by_field_name("name") is None
         ):
             parent = getattr(node, "parent", None)
@@ -255,9 +260,102 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
 
     source_bytes = source.encode("utf-8")
 
+    def is_within(node: _Node, ancestor: _Node) -> bool:
+        ancestor_key = node_key(ancestor)
+        current: _Node | None = node
+        while current is not None:
+            if node_key(current) == ancestor_key:
+                return True
+            current = getattr(current, "parent", None)
+        return False
+
+    def synthetic_relation_matches(
+        owner: _Node,
+        target: _Node,
+        relation: str,
+    ) -> bool:
+        owner_type = str(owner.type)
+        target_type = str(target.type)
+        if relation == "import_clause.binding":
+            target_parent = getattr(target, "parent", None)
+            return (
+                target_type == "identifier"
+                and target_parent is not None
+                and node_key(target_parent) == node_key(owner)
+            )
+        if relation == "namespace_import.binding":
+            return target_type == "identifier" and is_within(target, owner)
+        if relation == "import_specifier.binding":
+            imported = owner.child_by_field_name("name")
+            alias = owner.child_by_field_name("alias")
+            selected = alias or imported
+            return selected is not None and node_key(selected) == node_key(target)
+        if relation == "short_var_declaration.binding":
+            left = owner.child_by_field_name("left")
+            return (
+                target_type == "identifier"
+                and left is not None
+                and is_within(target, left)
+            )
+        if relation in {
+            "variable_declarator.binding",
+            "required_parameter.binding",
+            "optional_parameter.binding",
+        }:
+            field_name = (
+                "name" if owner_type == "variable_declarator" else "pattern"
+            )
+            binding = owner.child_by_field_name(field_name)
+            return (
+                binding is not None
+                and target_type
+                in {"identifier", "shorthand_property_identifier_pattern"}
+                and is_within(target, binding)
+            )
+        if relation == "formal_parameters.binding":
+            return (
+                target_type
+                in {"identifier", "shorthand_property_identifier_pattern"}
+                and is_within(target, owner)
+            )
+        if relation == "catch_clause.parameter":
+            parameter = owner.child_by_field_name("parameter")
+            return parameter is not None and is_within(target, parameter)
+        if relation == "arrow_function.parameter":
+            parameter = owner.child_by_field_name("parameter")
+            return parameter is not None and node_key(parameter) == node_key(target)
+        if relation == "arrow_function.implicit_return":
+            body = owner.child_by_field_name("body")
+            return body is not None and node_key(body) == node_key(target)
+        if relation == "function_item.implicit_tail":
+            body = owner.child_by_field_name("body")
+            if body is None or not is_within(target, body):
+                return False
+            children = [
+                child
+                for child in body.children
+                if bool(getattr(child, "is_named", False))
+                and str(child.type) not in {"line_comment", "block_comment"}
+            ]
+            tail = children[-1] if children else None
+            if tail is not None and str(tail.type) == "expression_statement":
+                if any(str(child.type) == ";" for child in tail.children):
+                    tail = None
+                else:
+                    tail = next(
+                        (
+                            child
+                            for child in tail.children
+                            if bool(getattr(child, "is_named", False))
+                        ),
+                        None,
+                    )
+            return tail is not None and node_key(tail) == node_key(target)
+        return False
+
     def derived_scope(
         owner: _Node,
-        relation_kind: str,
+        relation: str,
         span: tuple[int, int, int, int],
     ) -> str:
         ancestry: list[_Node] = []
@@ -268,25 +366,44 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
         ancestry.reverse()
         components = ["module"]
         owner_key = node_key(owner)
-        point = (span[0], span[1])
+        relation_kind = relation.partition(".")[2]
+        include_owner_scope = relation in {
+            "arrow_function.parameter",
+            "arrow_function.implicit_return",
+            "catch_clause.parameter",
+            "function_item.implicit_tail",
+        }
+        parent = getattr(owner, "parent", None)
+        javascript_var_hoist = (
+            language in {"javascript", "typescript"}
+            and str(owner.type) == "variable_declarator"
+            and parent is not None
+            and str(parent.type) == "variable_declaration"
+            and source_bytes[parent.start_byte : parent.end_byte]
+            .decode("utf-8", errors="replace")
+            .lstrip()
+            .startswith("var ")
+        )
         for node in ancestry:
             rule = scope_rules_by_type.get(str(node.type))
             if rule is None:
                 continue
-            parent = getattr(node, "parent", None)
+            node_parent = getattr(node, "parent", None)
             if (
                 language == "go"
                 and str(node.type) == "block"
-                and parent is not None
-                and str(parent.type)
+                and node_parent is not None
+                and str(node_parent.type)
                 in {"function_declaration", "method_declaration", "func_literal"}
             ):
                 continue
+            if javascript_var_hoist and rule.scope_kind == "block":
+                continue
             if node_key(node) == owner_key:
-                if relation_kind != "scope":
-                    continue
-                node_end = node_span(node)[2:4]
-                if point != node_end:
+                if relation_kind == "scope":
+                    if span[0:2] != node_span(node)[2:4]:
+                        continue
+                elif not include_owner_scope:
                     continue
             name_field = rule.name_field
             name_node = (
@@ -323,6 +440,7 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
         boundary_start_types = sorted(starts.get((span[0], span[1]), set()))
         boundary_end_types = sorted(ends.get((span[2], span[3]), set()))
         matching_owners: list[_Node] = []
+        exact_targets = [node for node in all_nodes if node_span(node) == span]
         if not separator:
             pass
         elif relation_kind == "self":
@@ -339,28 +457,33 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
                 and (node_span(node)[0:2] == span[0:2] or node_span(node)[2:4] == span[0:2])
             ]
         else:
-            matching_owners = [
-                node
-                for node in named_nodes
-                if str(node.type) == owner_type
-                for resolved in (resolve_field(node, relation_kind),)
+            for node in named_nodes:
+                if str(node.type) != owner_type:
+                    continue
+                if any(
+                    synthetic_relation_matches(node, target, relation)
+                    for target in exact_targets
+                ):
+                    matching_owners.append(node)
+                    continue
+                resolved = resolve_field(node, relation_kind)
+                if resolved is not None and node_span(resolved) == span:
+                    matching_owners.append(node)
+                    continue
                 if (
-                    (resolved is not None and node_span(resolved) == span)
-                    or (
-                        resolved is None
-                        and (
-                            relation in declared_node_relations
-                            or declared_role_fallback(node, relation)
-                        )
-                        and node_span(node) == span
+                    resolved is None
+                    and (
+                        relation in declared_node_relations
+                        or declared_role_fallback(node, relation)
                     )
-                )
-            ]
+                    and node_span(node) == span
+                ):
+                    matching_owners.append(node)
         relation_match = bool(matching_owners)
         claimed_scope = query.get("scope")
         derived_scopes = sorted(
             {
-                derived_scope(owner, relation_kind, span)
+                derived_scope(owner, relation, span)
                 for owner in matching_owners
             }
         )

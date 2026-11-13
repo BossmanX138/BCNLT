@@ -7,6 +7,7 @@ import json
 import os
 import re
 import tempfile
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypedDict
@@ -559,7 +560,7 @@ class DualLocalSemanticReviewer:
         ):
             raise ValueError("semantic review span evidence input is invalid")
         source_lines: dict[int, str] = {}
-        for rendered in excerpt.splitlines()[1:]:
+        for rendered in excerpt.split("\n")[1:]:
             match = re.fullmatch(r"[ >](\d{6})\| (.*)", rendered)
             if match is not None:
                 source_lines[int(match.group(1))] = match.group(2)
@@ -579,7 +580,12 @@ class DualLocalSemanticReviewer:
                     segments.append(source_lines[line_number].encode("utf-8"))
                 segments.append(source_lines[end_line].encode("utf-8")[:end_column])
                 extracted_bytes = b"\n".join(segments)
-            extracted = extracted_bytes.decode("utf-8")
+            extracted = unicodedata.normalize(
+                "NFC",
+                extracted_bytes.decode("utf-8")
+                .replace("\r\n", "\n")
+                .replace("\r", "\n"),
+            )
         except (KeyError, UnicodeDecodeError) as exc:
             raise ValueError("semantic review span cannot be decoded exactly") from exc
         return {

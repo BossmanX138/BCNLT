@@ -380,7 +380,10 @@ class HeldoutSemanticReviewQueue:
             or span[2] < span[0]
         ):
             raise ValueError("semantic review record span is invalid")
-        source_lines = source.splitlines()
+        # Tree-sitter advances rows only on literal LF bytes.  Preserve CR
+        # bytes inside each logical row so span evidence can canonicalize the
+        # exact byte slice after extraction instead of silently deleting it.
+        source_lines = source.split("\n")
         if not source_lines or span[2] > len(source_lines):
             raise ValueError("semantic review record span is outside the source")
         first = max(1, span[0] - radius)

@@ -87,8 +87,8 @@ _NODES = {
         kotlin=("parameter",), swift=("parameter",), bash=("special_variable_name",),
     ),
     "function": _per_language(
-        python=("function_definition", "lambda"), javascript=("function_declaration", "method_definition", "arrow_function"),
-        typescript=("function_declaration", "method_definition", "arrow_function"), c=("function_definition",),
+        python=("function_definition", "lambda"), javascript=("function_declaration", "method_definition", "arrow_function", "function_expression"),
+        typescript=("function_declaration", "method_definition", "arrow_function", "function_expression"), c=("function_definition",),
         cpp=("function_definition", "lambda_expression"), c_sharp=("method_declaration", "constructor_declaration", "lambda_expression"),
         java=("method_declaration", "constructor_declaration", "lambda_expression"), go=("function_declaration", "method_declaration", "func_literal"),
         rust=("function_item", "closure_expression"), php=("function_definition", "method_declaration", "anonymous_function"),

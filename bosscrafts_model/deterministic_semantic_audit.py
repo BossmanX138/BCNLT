@@ -16,6 +16,7 @@ _SOURCE_MANIFEST_SCHEMA = "bosscrafts-heldout-semantic-review-manifest-v2"
 _SOURCE_ITEM_SCHEMA = "bosscrafts-heldout-semantic-review-item-v2"
 _FINDING_SCHEMA = "bosscrafts-deterministic-semantic-finding-v1"
 _REPORT_SCHEMA = "bosscrafts-deterministic-semantic-audit-manifest-v1"
+_MAX_SEMANTIC_SURFACE_CHARS = 4096
 
 
 def _canonical(value: object) -> str:
@@ -129,7 +130,8 @@ class DeterministicSemanticAuditor:
             target_source = "\n".join(
                 line.split("| ", 1)[1]
                 for line in str(source_excerpt).splitlines()
-                if line.startswith(">") and "| " in line
+                if (line.startswith(">") or line.startswith(" "))
+                and "| " in line
             )
             node_kind = (
                 ast_relation[: -len(".scope")]
@@ -150,7 +152,14 @@ class DeterministicSemanticAuditor:
                         "scope boundary surface must name the target source, scope, or structural node",
                     )
                 )
-        elif surface != extracted:
+        elif not (
+            surface == extracted
+            or (
+                metadata.get("surface_truncated") is True
+                and len(surface) == _MAX_SEMANTIC_SURFACE_CHARS
+                and extracted.startswith(surface)
+            )
+        ):
             findings.append(
                 DeterministicSemanticFinding(
                     "surface_span_mismatch",
@@ -169,10 +178,18 @@ class DeterministicSemanticAuditor:
                 )
             )
         ir_name = ir.get("name")
+        truncated_ir_prefix = (
+            metadata.get("surface_truncated") is True
+            and len(surface) == _MAX_SEMANTIC_SURFACE_CHARS
+            and isinstance(ir_name, str)
+            and extracted.startswith(ir_name)
+            and ir_name.startswith(surface)
+        )
         if (
             ir.get("kind") != "extension"
             and ir_name is not None
             and ir_name != surface
+            and not truncated_ir_prefix
         ):
             findings.append(
                 DeterministicSemanticFinding(
