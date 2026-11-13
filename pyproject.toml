@@ -1,0 +1,33 @@
+[project]
+name = "bosscrafts-model-v10-candidate"
+version = "0.0.0"
+description = "Isolated, evidence-gated BossCrafts model and BCNLT runtime candidate"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "pyarrow==23.0.1",
+    "torch==2.11.0",
+]
+
+[dependency-groups]
+dev = [
+    "coverage==7.17.3",
+    "mypy==2.4.1",
+    "pytest==9.1.1",
+    "ruff==0.16.9",
+]
+
+[tool.uv]
+package = false
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+ignore_missing_imports = true
+files = ["bosscrafts_model"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E9", "F", "I"]
