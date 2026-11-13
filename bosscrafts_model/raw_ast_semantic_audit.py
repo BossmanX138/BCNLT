@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from typing import TypeGuard, cast
 
 from .bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
 from .current_task_packing import CurrentCorpusTaskPacker
@@ -33,6 +34,14 @@ def _canonical(value: object) -> str:
 
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _is_sha256(value: object) -> TypeGuard[str]:
+    return (
+        type(value) is str
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 def _sha256_file(path: Path) -> str:
@@ -182,14 +191,31 @@ class RawAstSemanticAuditReport:
             str(row["document_id"]) for row in selected
         ):
             admitted = admission_by_id[document_id]
+            source = admitted.get("source")
+            language = admitted.get("language")
+            relative_path = admitted.get("relative_path")
+            dialect = admitted.get("dialect")
+            if (
+                type(source) is not str
+                or type(language) is not str
+                or type(relative_path) is not str
+                or (dialect is not None and type(dialect) is not str)
+            ):
+                raise ValueError("raw AST audit admitted source metadata is invalid")
             response = client.inspect(
-                str(admitted["source"]),
-                language=str(admitted["language"]),
-                path=str(admitted["relative_path"]),
-                dialect=admitted["dialect"],
+                source,
+                language=language,
+                path=relative_path,
+                dialect=dialect,
                 queries=tuple(grouped[document_id]),
             )
-            for witness in response["witnesses"]:
+            witnesses = response.get("witnesses")
+            if type(witnesses) is not list:
+                raise ValueError("raw AST witness response is invalid")
+            for witness_value in witnesses:
+                if type(witness_value) is not dict:
+                    raise ValueError("raw AST witness row is invalid")
+                witness = cast(dict[str, object], witness_value)
                 review_id = witness.get("query_id")
                 if type(review_id) is not str or review_id in observed:
                     raise ValueError("raw AST witness identities are invalid")
@@ -277,12 +303,29 @@ class RawAstSemanticAuditReport:
     def _result(
         output: Path, manifest: dict[str, object]
     ) -> RawAstSemanticAuditResult:
+        item_count = manifest.get("witness_item_count")
+        failed_item_count = manifest.get("failed_item_count")
+        complete_source_queue = manifest.get("complete_source_queue")
+        training_ready = manifest.get("training_ready")
+        witnesses_sha256 = manifest.get("witnesses_sha256")
+        manifest_sha256 = manifest.get("manifest_sha256")
+        if (
+            type(item_count) is not int
+            or item_count < 0
+            or type(failed_item_count) is not int
+            or not 0 <= failed_item_count <= item_count
+            or type(complete_source_queue) is not bool
+            or type(training_ready) is not bool
+            or not _is_sha256(witnesses_sha256)
+            or not _is_sha256(manifest_sha256)
+        ):
+            raise ValueError("raw AST semantic audit result is invalid")
         return RawAstSemanticAuditResult(
             output_root=output,
-            item_count=int(manifest["witness_item_count"]),
-            failed_item_count=int(manifest["failed_item_count"]),
-            complete_source_queue=bool(manifest["complete_source_queue"]),
-            training_ready=bool(manifest["training_ready"]),
-            witnesses_sha256=str(manifest["witnesses_sha256"]),
-            manifest_sha256=str(manifest["manifest_sha256"]),
+            item_count=item_count,
+            failed_item_count=failed_item_count,
+            complete_source_queue=complete_source_queue,
+            training_ready=training_ready,
+            witnesses_sha256=witnesses_sha256,
+            manifest_sha256=manifest_sha256,
         )

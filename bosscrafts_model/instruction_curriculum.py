@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import sqlite3
 import textwrap
+from typing import cast
 import zlib
 
 from .bcnlt_source_pipeline import (
@@ -86,7 +87,11 @@ class HumanEvalExclusion:
                 task_id = row.get("task_id")
                 prompt = row.get("prompt")
                 solution = row.get("canonical_solution")
-                if any(type(value) is not str for value in (task_id, prompt, solution)):
+                if (
+                    type(task_id) is not str
+                    or type(prompt) is not str
+                    or type(solution) is not str
+                ):
                     raise ValueError("HumanEval exclusion fields are invalid")
                 words = _normalize_words(prompt)
                 prompt_words.append(frozenset(words))
@@ -468,10 +473,14 @@ def build_instruction_curriculum(
         )
         for split in SPLITS:
             for item in rows_by_split[split]:
-                candidate = item["candidate"]
-                assert isinstance(candidate, PythonInstructionCandidate)
-                input_ids = item["input_ids"]
-                assert isinstance(input_ids, list)
+                raw_candidate = item["candidate"]
+                raw_input_ids = item["input_ids"]
+                if not isinstance(raw_candidate, PythonInstructionCandidate):
+                    raise ValueError("instruction task candidate type is invalid")
+                if type(raw_input_ids) is not list:
+                    raise ValueError("instruction task input IDs are invalid")
+                candidate = raw_candidate
+                input_ids = cast(list[int], raw_input_ids)
                 license_counts[candidate.license_spdx] += 1
                 connection.execute(
                     "INSERT INTO tasks VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",

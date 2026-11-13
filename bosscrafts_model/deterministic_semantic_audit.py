@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from typing import TypeGuard
 
 from .local_semantic_review import DualLocalSemanticReviewer, _SEMANTIC_CONTRACT
 
@@ -29,6 +30,14 @@ def _canonical(value: object) -> str:
 
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _is_sha256(value: object) -> TypeGuard[str]:
+    return (
+        type(value) is str
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 def _atomic_write(path: Path, content: bytes) -> None:
@@ -351,13 +360,31 @@ class DeterministicSemanticAuditReport:
     def _result(
         output: Path, manifest: dict[str, object]
     ) -> DeterministicSemanticAuditReportResult:
+        item_count = manifest.get("item_count")
+        failed_item_count = manifest.get("failed_item_count")
+        finding_count = manifest.get("finding_count")
+        training_ready = manifest.get("training_ready")
+        findings_sha256 = manifest.get("findings_sha256")
+        manifest_sha256 = manifest.get("manifest_sha256")
+        if (
+            type(item_count) is not int
+            or item_count < 0
+            or type(failed_item_count) is not int
+            or not 0 <= failed_item_count <= item_count
+            or type(finding_count) is not int
+            or finding_count < 0
+            or type(training_ready) is not bool
+            or not _is_sha256(findings_sha256)
+            or not _is_sha256(manifest_sha256)
+        ):
+            raise ValueError("deterministic semantic audit result is invalid")
         return DeterministicSemanticAuditReportResult(
             output_root=output,
-            item_count=int(manifest["item_count"]),
-            failed_item_count=int(manifest["failed_item_count"]),
-            finding_count=int(manifest["finding_count"]),
-            training_ready=bool(manifest["training_ready"]),
-            findings_sha256=str(manifest["findings_sha256"]),
-            manifest_sha256=str(manifest["manifest_sha256"]),
+            item_count=item_count,
+            failed_item_count=failed_item_count,
+            finding_count=finding_count,
+            training_ready=training_ready,
+            findings_sha256=findings_sha256,
+            manifest_sha256=manifest_sha256,
         )
 

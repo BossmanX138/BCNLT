@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import sqlite3
 import subprocess
-from typing import Any
+from typing import Any, Protocol, cast
 import zlib
 
 from .bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
@@ -63,6 +63,18 @@ class ResumableTrainingSemanticAuditStatus:
     training_ready: bool
 
 
+class _WitnessClient(Protocol):
+    def inspect(
+        self,
+        source: str,
+        *,
+        language: str,
+        path: str,
+        dialect: str | None,
+        queries: tuple[dict[str, object], ...],
+    ) -> dict[str, object]: ...
+
+
 class ResumableTrainingSemanticAudit:
     """Audit every admitted record while committing one document at a time."""
 
@@ -114,7 +126,14 @@ class ResumableTrainingSemanticAudit:
             expected_catalog_sha256=expected_source_catalog_sha256,
             source_split=source_split,
         )
-        self._witness_client = witness_client or RawAstWitnessClient()
+        if witness_client is not None and not callable(
+            getattr(witness_client, "inspect", None)
+        ):
+            raise TypeError("witness_client must provide an inspect method")
+        self._witness_client: _WitnessClient = cast(
+            _WitnessClient,
+            witness_client if witness_client is not None else RawAstWitnessClient(),
+        )
         self._deterministic = DeterministicSemanticAuditor()
 
         admission = self._ro_connect(self.admission_database)
@@ -592,15 +611,17 @@ class ResumableTrainingSemanticAudit:
                     if type(witness) is not dict:
                         raise ValueError("raw AST witness row is invalid")
                     raw_lines.append(f"{_canonical(witness)}\n")
-                    codes: list[str] = []
+                    witness_codes: list[str] = []
                     if witness.get("relation_span_match") is not True:
-                        codes.append("ast_relation_span_mismatch")
+                        witness_codes.append("ast_relation_span_mismatch")
                     if witness.get("scope_match") is False:
-                        codes.append("raw_scope_mismatch")
-                    if codes:
+                        witness_codes.append("raw_scope_mismatch")
+                    if witness_codes:
                         review_id = str(witness["query_id"])
                         failed_ids.add(review_id)
-                        findings.append((index, review_id, "raw_ast", codes, witness))
+                        findings.append(
+                            (index, review_id, "raw_ast", witness_codes, witness)
+                        )
 
         deterministic_sha = _sha256_bytes("".join(deterministic_lines).encode("utf-8"))
         raw_sha = _sha256_bytes("".join(raw_lines).encode("utf-8"))

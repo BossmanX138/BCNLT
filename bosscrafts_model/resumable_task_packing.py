@@ -10,7 +10,7 @@ import math
 from pathlib import Path
 import sqlite3
 import sys
-from typing import Iterator, cast
+from typing import Iterator, TypedDict, cast
 import zlib
 
 from .bcnlt_source_pipeline import (
@@ -35,6 +35,21 @@ TASK_DATABASE_SCHEMA = "bosscrafts-current-task-resumable-v3"
 FULL_SEMANTIC_WIRE_SCHEMA = "bosscrafts-full-semantic-wire-v3"
 CELL_WEIGHT_MULTIPLIERS_METADATA_KEY = "training_cell_weight_multipliers_v1_json"
 SALTED_SOURCE_EXAMPLE_ID_POLICY = "bosscrafts-v11-salted-source-example-id-v1"
+
+
+class TaskExample(TypedDict):
+    example_id: str
+    document_id: str
+    language: str
+    family: str
+    record_index: int
+    split: str
+    input_ids: list[int]
+    loss_start_index: int
+    sampling_weight: float
+    semantic_spec_sha256: str
+    parser_runtime_identity_sha256: str
+    source_sha256: str
 
 
 def _canonical_json(value: object) -> str:
@@ -213,7 +228,7 @@ class ResumableTaskDataset:
         *,
         split: str | None = None,
         after_example_id: str | None = None,
-    ) -> Iterator[dict[str, object]]:
+    ) -> Iterator[TaskExample]:
         if split is not None and split not in {"train", "validation", "test"}:
             raise ValueError("split must be train, validation, test or None")
         if after_example_id is not None and (

@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import sqlite3
 import sys
+from typing import TypedDict, cast
 import zlib
 
 from .bcnlt_source_pipeline import (
@@ -44,6 +45,20 @@ def _encode_u16(values: list[int]) -> bytes:
     if sys.byteorder != "little":
         encoded.byteswap()
     return encoded.tobytes()
+
+
+class _SelectedGateExample(TypedDict):
+    example_id: str
+    document_id: str
+    language: str
+    family: str
+    record_index: int
+    split: str
+    input_ids: list[int]
+    loss_start_index: int
+    semantic_spec_sha256: str
+    parser_runtime_identity_sha256: str
+    source_sha256: str
 
 
 @dataclass(frozen=True)
@@ -103,7 +118,7 @@ def build_training_gate_database(
     if type(maximum_sequence_tokens) is not int or maximum_sequence_tokens < 2:
         raise ValueError("source task maximum sequence is invalid")
 
-    selected: list[dict[str, object]] = []
+    selected: list[_SelectedGateExample] = []
     selected_cells: set[tuple[str, str]] = set()
     stale_spec_skipped_count = 0
     with examples_path.open("r", encoding="utf-8") as stream:
@@ -160,7 +175,7 @@ def build_training_gate_database(
             ).hexdigest()
             if row.get("example_id") != expected_example_id:
                 raise ValueError("source task example identity mismatch")
-            selected.append(row)
+            selected.append(cast(_SelectedGateExample, row))
             selected_cells.add(cell)
             if len(selected) == max_examples:
                 break

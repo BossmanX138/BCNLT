@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from typing import cast
 
 from .heldout_semantic_review import REVIEW_ITEM_SCHEMA, REVIEW_MANIFEST_SCHEMA
 
@@ -106,7 +107,9 @@ class SemanticChallengeReviewBuilder:
             for pair_index, (source_item, defect_type) in enumerate(
                 zip(selected, self._defect_schedule(), strict=True)
             ):
-                source_record = deepcopy(source_item["canonical_record"])
+                source_record = deepcopy(
+                    cast(dict[str, object], source_item["canonical_record"])
+                )
                 negative_record = self._mutate_record(
                     source_record,
                     defect_type,
@@ -311,8 +314,12 @@ class SemanticChallengeReviewBuilder:
         uncertain_bases = [
             item
             for item in candidates
-            if item["canonical_record"].get("event") == "UNKNOWN_SEMANTIC"
-            and item["canonical_record"].get("uncertainty_band") in {"medium", "high"}
+            if cast(dict[str, object], item["canonical_record"]).get("event")
+            == "UNKNOWN_SEMANTIC"
+            and cast(dict[str, object], item["canonical_record"]).get(
+                "uncertainty_band"
+            )
+            in {"medium", "high"}
         ][:required_unknown]
         if len(uncertain_bases) != required_unknown:
             raise ValueError(
@@ -360,7 +367,7 @@ class SemanticChallengeReviewBuilder:
     ) -> dict[str, object]:
         record = deepcopy(source_record)
         alternate_records = [
-            item["canonical_record"]
+            cast(dict[str, object], item["canonical_record"])
             for item in candidates
             if item["canonical_record"] != source_record
         ]
@@ -380,9 +387,14 @@ class SemanticChallengeReviewBuilder:
                 else (surface[::-1] if len(surface) > 1 else f"{surface} ")
             )
         elif defect_type == "span_mismatch":
-            span = list(record.get("span", ()))
-            if len(span) != 4 or any(type(value) is not int for value in span):
+            span_value = record.get("span")
+            if (
+                type(span_value) is not list
+                or len(span_value) != 4
+                or any(type(value) is not int for value in span_value)
+            ):
                 raise ValueError("source record span is invalid")
+            span = list(span_value)
             if span[0] == span[2] and span[3] - span[1] >= 2:
                 span[1] += 1
             elif span[1] > 0:
@@ -429,7 +441,10 @@ class SemanticChallengeReviewBuilder:
                 raise ValueError("uncertainty control base must be UNKNOWN_SEMANTIC")
             record["confidence_band"] = "high"
             record["uncertainty_band"] = "low"
-            metadata = deepcopy(record.get("metadata", {}))
+            metadata_value = record.get("metadata")
+            if type(metadata_value) is not dict:
+                raise ValueError("source record metadata is invalid")
+            metadata = deepcopy(metadata_value)
             metadata["knowledge_state"] = "known"
             metadata["uncertainty_signals"] = []
             metadata["uyr_rounds"] = 0
@@ -467,12 +482,31 @@ class SemanticChallengeReviewBuilder:
             "source queue",
         )
         rows = cls._load_canonical_rows(queue_text, "source queue")
-        ids = [row.get("review_id") for row in rows]
-        if (
-            len(rows) != manifest.get("item_count")
-            or len(ids) != len(set(ids))
-            or any(row.get("schema_version") != REVIEW_ITEM_SCHEMA for row in rows)
-        ):
+        ids: set[str] = set()
+        for row in rows:
+            review_id = row.get("review_id")
+            language = row.get("language")
+            record = row.get("canonical_record")
+            if (
+                row.get("schema_version") != REVIEW_ITEM_SCHEMA
+                or type(review_id) is not str
+                or not review_id
+                or review_id in ids
+                or type(language) is not str
+                or not language
+                or type(record) is not dict
+                or type(record.get("event")) is not str
+                or type(record.get("surface")) is not str
+                or type(record.get("span")) is not list
+                or len(record["span"]) != 4
+                or any(type(value) is not int for value in record["span"])
+                or type(record.get("scope")) is not str
+                or type(record.get("ir")) is not dict
+                or type(record.get("metadata")) is not dict
+            ):
+                raise ValueError("source queue item is invalid")
+            ids.add(review_id)
+        if len(rows) != manifest.get("item_count"):
             raise ValueError("source queue inventory mismatch")
         return manifest, rows
 

@@ -137,7 +137,11 @@ def main() -> None:
             decoded = binding.decode(binding.encode(text))
             if decoded != text:
                 mismatch = next(
-                    (index for index, pair in enumerate(zip(text, decoded)) if pair[0] != pair[1]),
+                    (
+                        index
+                        for index, pair in enumerate(zip(text, decoded, strict=False))
+                        if pair[0] != pair[1]
+                    ),
                     min(len(text), len(decoded)),
                 )
                 unicode_failures.append(

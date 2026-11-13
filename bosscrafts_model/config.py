@@ -1,8 +1,23 @@
 from dataclasses import dataclass, asdict
 import hashlib
 import json
+from typing import TypedDict, Unpack
 
 STAGES = ("hypothesis", "prediction", "planning", "construction", "evidence", "revision")
+
+
+class _ModelConfigOverrides(TypedDict, total=False):
+    vocab_size: int
+    width: int
+    layers: int
+    heads: int
+    ff_width: int
+    module_width: int
+    module_rounds: int
+    max_sequence: int
+    modular: bool
+    tokenizer_manifest: str
+
 
 @dataclass(frozen=True)
 class ModelConfig:
@@ -44,9 +59,17 @@ class ModelConfig:
             raise ValueError("No compatible pinned tokenizer manifest; training data rejected")
 
     @classmethod
-    def tiny(cls, **overrides):
-        values = dict(vocab_size=64,width=32,layers=2,heads=4,ff_width=64,
-                      module_width=16,module_rounds=2,max_sequence=32)
+    def tiny(cls, **overrides: Unpack[_ModelConfigOverrides]):
+        values: _ModelConfigOverrides = dict(
+            vocab_size=64,
+            width=32,
+            layers=2,
+            heads=4,
+            ff_width=64,
+            module_width=16,
+            module_rounds=2,
+            max_sequence=32,
+        )
         values.update(overrides)
         return cls(**values)
 

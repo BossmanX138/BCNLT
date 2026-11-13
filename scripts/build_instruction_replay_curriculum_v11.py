@@ -393,28 +393,34 @@ def main() -> int:
                    UNIQUE(source_kind,source_example_id)
                )"""
         )
-        source_kind_sql = (
-            "CASE WHEN family='instruction_to_code' "
-            "THEN 'instruction' ELSE 'replay' END"
-        )
         output.execute(
-            f"""INSERT INTO tasks(
+            """INSERT INTO tasks(
                        example_id,document_id,language,family,record_index,split,
                        input_ids_zlib,token_count,loss_start_index,
                        semantic_spec_sha256,source_sha256
                    )
-                   SELECT v11_example_id({source_kind_sql},example_id),
+                   SELECT v11_example_id(
+                              CASE WHEN family='instruction_to_code'
+                                   THEN 'instruction' ELSE 'replay' END,
+                              example_id
+                          ),
                           document_id,language,family,record_index,split,
                           input_ids_zlib,token_count,loss_start_index,
                           semantic_spec_sha256,source_sha256
                    FROM tasks_source_ids"""
         )
         output.execute(
-            f"""INSERT INTO source_example_identity(
+            """INSERT INTO source_example_identity(
                        example_id,source_example_id,source_kind
                    )
-                   SELECT v11_example_id({source_kind_sql},example_id),
-                          example_id,{source_kind_sql}
+                   SELECT v11_example_id(
+                              CASE WHEN family='instruction_to_code'
+                                   THEN 'instruction' ELSE 'replay' END,
+                              example_id
+                          ),
+                          example_id,
+                          CASE WHEN family='instruction_to_code'
+                               THEN 'instruction' ELSE 'replay' END
                    FROM tasks_source_ids"""
         )
         output.execute("DROP TABLE tasks_source_ids")

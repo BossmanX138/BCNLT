@@ -55,7 +55,8 @@ def main() -> int:
     finally:
         connection.close()
 
-    assert aggregate is not None
+    if aggregate is None:
+        raise RuntimeError("admission aggregate query returned no row")
     admitted_count = int(aggregate[0])
     semantic_record_count = int(aggregate[1])
     payload = {

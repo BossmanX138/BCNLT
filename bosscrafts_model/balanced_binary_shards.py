@@ -7,7 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 import struct
-from typing import Iterator
+from typing import cast, Iterator, TypedDict
 
 from .current_task_packing import EXAMPLE_SCHEMA, PACKED_MANIFEST_SCHEMA
 from .tokenizer import NativeTokenizerBinding
@@ -15,6 +15,18 @@ from .tokenizer import NativeTokenizerBinding
 
 BINARY_MANIFEST_SCHEMA = "bosscrafts-balanced-binary-task-manifest-v1"
 INDEX_STRUCT = struct.Struct("<QHHfBBBB32s32s32s32s")
+
+
+class _PackedExample(TypedDict):
+    example_id: str
+    document_id: str
+    language: str
+    family: str
+    split: str
+    input_ids: list[int]
+    loss_start_index: int
+    semantic_spec_sha256: str
+    source_sha256: str
 
 
 def _canonical_json(value: object) -> str:
@@ -82,7 +94,7 @@ def _load_manifest(root: Path, binding: NativeTokenizerBinding) -> dict[str, obj
     return {**manifest, "manifest_sha256": claimed_hash}
 
 
-def _parse_example(line: str, binding: NativeTokenizerBinding) -> dict[str, object]:
+def _parse_example(line: str, binding: NativeTokenizerBinding) -> _PackedExample:
     try:
         row = json.loads(line)
     except json.JSONDecodeError as error:
@@ -123,7 +135,7 @@ def _parse_example(line: str, binding: NativeTokenizerBinding) -> dict[str, obje
         raise ValueError("packed family is invalid")
     if type(row.get("language")) is not str or not row["language"]:
         raise ValueError("packed language is invalid")
-    return row
+    return cast(_PackedExample, row)
 
 
 class BalancedBinaryShardWriter:
@@ -177,7 +189,7 @@ class BalancedBinaryShardWriter:
             cells_by_split[cell[0]].append(cell)
         weights: dict[tuple[str, str, str], float] = {}
         weighted_mass: dict[str, float] = {}
-        for split, cells in sorted(cells_by_split.items()):
+        for _split, cells in sorted(cells_by_split.items()):
             mean_count = sum(cell_counts[cell] for cell in cells) / len(cells)
             for cell in cells:
                 weight32 = struct.unpack("<f", struct.pack("<f", mean_count / cell_counts[cell]))[0]
@@ -246,7 +258,8 @@ class BalancedBinaryShardWriter:
                 elif shard_tokens + sequence_length > self.max_tokens_per_shard:
                     finish_shard()
                     start_shard()
-                assert token_handle is not None and index_handle is not None
+                if token_handle is None or index_handle is None:
+                    raise RuntimeError("shard output handles were not initialized")
                 cell = (str(row["split"]), str(row["language"]), str(row["family"]))
                 token_handle.write(encode_u16_tokens(input_ids))
                 index_handle.write(

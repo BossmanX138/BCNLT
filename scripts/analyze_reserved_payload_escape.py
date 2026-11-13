@@ -67,8 +67,9 @@ def main() -> int:
     catalog_sha256 = hashlib.sha256(arguments.catalog.read_bytes()).hexdigest()
     connection = sqlite3.connect(arguments.catalog)
     try:
+        # Only the number of parameter placeholders is generated; all values remain bound.
         collision_rows = connection.execute(
-            "SELECT COUNT(*) FROM documents WHERE "
+            "SELECT COUNT(*) FROM documents WHERE "  # nosec B608
             + " OR ".join("instr(content, ?) > 0" for _ in reserved_literals),
             reserved_literals,
         ).fetchone()[0]

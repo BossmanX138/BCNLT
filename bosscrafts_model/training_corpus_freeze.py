@@ -11,7 +11,7 @@ import sqlite3
 import tempfile
 from typing import Any
 
-from .current_corpus import APPROVED_LICENSES, SQLiteSourceCatalog, SourceCandidate
+from .current_corpus import APPROVED_LICENSES, SQLiteSourceCatalog
 
 
 FREEZE_MANIFEST_SCHEMA = "bosscrafts-training-source-freeze-v1"
@@ -431,7 +431,12 @@ class TrainingCorpusFreezer:
             metadata = dict(connection.execute("SELECT key,value FROM metadata"))
             if metadata.get("schema_version") != CATALOG_SCHEMA:
                 raise ValueError("source catalog schema mismatch")
-            query = f"SELECT {','.join(self._CATALOG_COLUMNS)} FROM documents ORDER BY document_id"
+            query = (
+                "SELECT document_id,source_provider,source_name,source_revision,"
+                "canonical_language,repository_identity,relative_path,content_sha256,"
+                "content,license_spdx,ownership,attribution,upstream_url,dialect "
+                "FROM documents ORDER BY document_id"
+            )
             raw_rows = connection.execute(query).fetchall()
         except sqlite3.Error as exc:
             raise ValueError("source catalog database is invalid") from exc

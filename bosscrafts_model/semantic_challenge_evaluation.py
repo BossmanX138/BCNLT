@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from typing import TypeGuard
 
 from .local_semantic_review import DualLocalSemanticReviewer, LocalReviewerSpec
 from .semantic_challenge_review import SemanticChallengeReviewBuilder
@@ -39,6 +40,14 @@ def _sha256_bytes(value: bytes) -> str:
 
 def _sha256_text(value: str) -> str:
     return _sha256_bytes(value.encode("utf-8"))
+
+
+def _is_sha256(value: object) -> TypeGuard[str]:
+    return (
+        type(value) is str
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 def _atomic_write(path: Path, content: bytes) -> None:
@@ -142,12 +151,7 @@ class SemanticChallengeEvaluator:
             output / "qualification.json",
             f"{_canonical(report)}\n".encode("utf-8"),
         )
-        return SemanticChallengeQualificationResult(
-            output_root=output,
-            qualification_passed=bool(report["qualification_passed"]),
-            reviewer_count=len(report["reviewer_metrics"]),
-            report_sha256=str(report["report_sha256"]),
-        )
+        return self._result(output, report)
 
     def verify(
         self,
@@ -165,11 +169,29 @@ class SemanticChallengeEvaluator:
         expected = self._evaluate(Path(challenge_root).resolve(), Path(review_root).resolve())
         if existing != expected:
             raise ValueError("semantic challenge qualification report is stale or tampered")
+        if type(existing) is not dict:
+            raise ValueError("semantic challenge qualification report is invalid")
+        return self._result(output, existing)
+
+    @staticmethod
+    def _result(
+        output: Path, report: dict[str, object]
+    ) -> SemanticChallengeQualificationResult:
+        passed = report.get("qualification_passed")
+        reviewer_metrics = report.get("reviewer_metrics")
+        report_sha256 = report.get("report_sha256")
+        if (
+            type(passed) is not bool
+            or type(reviewer_metrics) is not list
+            or any(type(row) is not dict for row in reviewer_metrics)
+            or not _is_sha256(report_sha256)
+        ):
+            raise ValueError("semantic challenge qualification result is invalid")
         return SemanticChallengeQualificationResult(
             output_root=output,
-            qualification_passed=bool(existing["qualification_passed"]),
-            reviewer_count=len(existing["reviewer_metrics"]),
-            report_sha256=str(existing["report_sha256"]),
+            qualification_passed=passed,
+            reviewer_count=len(reviewer_metrics),
+            report_sha256=report_sha256,
         )
 
     def _evaluate(self, challenge_root: Path, review_root: Path) -> dict[str, object]:
@@ -364,7 +386,7 @@ class SemanticChallengeEvaluator:
         if len(negatives) < self.policy.minimum_negative_controls:
             blockers.append("insufficient negative controls")
         missing_defects = [
-            row["group"] for row in defect_metrics if row["items"] == 0
+            str(row["group"]) for row in defect_metrics if row["items"] == 0
         ]
         if missing_defects:
             blockers.append(

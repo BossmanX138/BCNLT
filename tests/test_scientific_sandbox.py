@@ -33,7 +33,7 @@ class ScientificSandboxIntegrationTests(unittest.TestCase):
         self.assertTrue(result.attestation.no_new_privileges)
         self.assertEqual(
             result.attestation.image_id,
-            "sha256:153a93c2ca76aacacdbdb7d84d4e1e63767c46ddd7e42f9957e9fe7f7c782f32",
+            "sha256:eb71cb313a0ff8c86e79279efeb041e8d9aba13ede6165db997f611b0d4c6925",
         )
         inspected = subprocess.run(
             ["docker", "inspect", result.container_name],

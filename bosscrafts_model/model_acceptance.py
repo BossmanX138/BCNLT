@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 import math
-from typing import Sequence
+from typing import Sequence, TypeGuard
 
 from .bcnlt_source_pipeline import CURRENT_RUNTIME_SPEC_SHA256
 
@@ -50,7 +50,7 @@ def _canonical_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
-def _is_sha256(value: object) -> bool:
+def _is_sha256(value: object) -> TypeGuard[str]:
     return (
         type(value) is str
         and len(value) == 64
@@ -62,8 +62,12 @@ def _payload_sha256(payload: dict[str, object]) -> str:
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
 
-def _finite_number(value: object) -> bool:
-    return type(value) in {int, float} and math.isfinite(float(value))
+def _finite_number(value: object) -> TypeGuard[int | float]:
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and math.isfinite(float(value))
+    )
 
 
 @dataclass(frozen=True)
@@ -102,7 +106,11 @@ def verify_model_acceptance(
         if type(payload) is not dict:
             raise TypeError("evaluation payloads must be dictionaries")
         split = payload.get("split")
-        if split not in {"validation", "test"} or split in evaluation_by_split:
+        if (
+            type(split) is not str
+            or split not in {"validation", "test"}
+            or split in evaluation_by_split
+        ):
             raise ValueError("acceptance requires one validation and one test evaluation")
         if not (
             payload.get("checkpoint_lineage_verified") is True
@@ -170,17 +178,18 @@ def verify_model_acceptance(
             raise ValueError(f"{split} held-out loss promotion gate failed")
         accuracy = payload.get("target_token_accuracy")
         baseline_accuracy = payload.get("baseline_target_token_accuracy")
+        target_token_count = payload.get("target_token_count")
         if (
             payload.get("target_token_accuracy_improved") is not True
             or not _finite_number(accuracy)
             or not 0 <= float(accuracy) <= 1
             or not _finite_number(baseline_accuracy)
             or float(accuracy) <= float(baseline_accuracy)
-            or type(payload.get("target_token_count")) is not int
-            or int(payload["target_token_count"]) < 1
+            or type(target_token_count) is not int
+            or target_token_count < 1
         ):
             raise ValueError(f"{split} target-token accuracy did not improve")
-        evaluation_by_split[str(split)] = payload
+        evaluation_by_split[split] = payload
     if set(evaluation_by_split) != {"validation", "test"}:
         raise ValueError("acceptance requires validation and test evaluations")
 
@@ -189,7 +198,11 @@ def verify_model_acceptance(
         if type(payload) is not dict:
             raise TypeError("inference payloads must be dictionaries")
         task = payload.get("task")
-        if task not in STRUCTURED_TASKS or task in inference_by_task:
+        if (
+            type(task) is not str
+            or task not in STRUCTURED_TASKS
+            or task in inference_by_task
+        ):
             raise ValueError("acceptance requires one result for every structured task")
         if not (
             payload.get("checkpoint_lineage_verified") is True
@@ -201,14 +214,15 @@ def verify_model_acceptance(
         expected_ids = payload.get("heldout_expected_token_ids")
         generated_ids = payload.get("new_token_ids")
         expected_count = payload.get("heldout_expected_target_token_count")
+        if type(expected_count) is not int:
+            raise ValueError(f"{task} expected target count is invalid")
         if (
             payload.get("prompt_source") != "heldout_database"
             or payload.get("heldout_split") != "test"
             or not _is_sha256(payload.get("heldout_example_id"))
-            or type(expected_count) is not int
-            or int(expected_count) < 1
+            or expected_count < 1
             or type(expected_ids) is not list
-            or len(expected_ids) != int(expected_count)
+            or len(expected_ids) != expected_count
             or any(
                 type(token_id) is not int or not 0 <= token_id <= 65_535
                 for token_id in expected_ids
@@ -224,13 +238,14 @@ def verify_model_acceptance(
             or float(heldout_accuracy) != 1.0
         ):
             raise ValueError(f"{task} inference is not valid held-out evidence")
+        new_token_count = payload.get("new_token_count")
         if (
             payload.get("response_protocol_complete") is not True
-            or type(payload.get("new_token_count")) is not int
-            or int(payload["new_token_count"]) != len(generated_ids)
+            or type(new_token_count) is not int
+            or new_token_count != len(generated_ids)
         ):
             raise ValueError(f"{task} response protocol is incomplete")
-        inference_by_task[str(task)] = payload
+        inference_by_task[task] = payload
     if set(inference_by_task) != set(STRUCTURED_TASKS):
         raise ValueError("acceptance requires all structured response protocols")
 
@@ -239,7 +254,12 @@ def verify_model_acceptance(
         if type(payload) is not dict:
             raise TypeError("category evidence payloads must be dictionaries")
         category = payload.get("category")
-        if category not in ACCEPTANCE_CATEGORIES or category in category_by_name:
+        example_count = payload.get("example_count")
+        if (
+            type(category) is not str
+            or category not in ACCEPTANCE_CATEGORIES
+            or category in category_by_name
+        ):
             raise ValueError("acceptance requires every independent category exactly once")
         required_fields = {
             "artifact_sha256",
@@ -271,12 +291,12 @@ def verify_model_acceptance(
             or not _is_sha256(payload.get("heldout_manifest_sha256"))
             or not _is_sha256(payload.get("parser_runtime_identity_sha256"))
             or not _is_sha256(payload.get("tokenizer_sha256"))
-            or type(payload.get("example_count")) is not int
-            or int(payload["example_count"]) < MINIMUM_CATEGORY_EXAMPLES[str(category)]
+            or type(example_count) is not int
+            or example_count < MINIMUM_CATEGORY_EXAMPLES[category]
         ):
             raise ValueError(f"{category} acceptance evidence is incomplete")
-        _verify_category_metrics(str(category), payload.get("metrics"))
-        category_by_name[str(category)] = payload
+        _verify_category_metrics(category, payload.get("metrics"))
+        category_by_name[category] = payload
     if set(category_by_name) != set(ACCEPTANCE_CATEGORIES):
         raise ValueError("acceptance requires every independent category")
 
@@ -288,14 +308,16 @@ def verify_model_acceptance(
     database_ids = {payload.get("task_database_identity_sha256") for payload in all_payloads}
     model_ids = {payload.get("model_fingerprint") for payload in all_payloads}
     checkpoint_steps = {payload.get("checkpoint_step") for payload in all_payloads}
+    if len(database_ids) != 1 or len(model_ids) != 1 or len(checkpoint_steps) != 1:
+        raise ValueError("acceptance evidence lineage mismatch")
+    database_identity_value = next(iter(database_ids))
+    model_fingerprint_value = next(iter(model_ids))
+    checkpoint_step_value = next(iter(checkpoint_steps))
     if (
-        len(database_ids) != 1
-        or not _is_sha256(next(iter(database_ids)))
-        or len(model_ids) != 1
-        or not _is_sha256(next(iter(model_ids)))
-        or len(checkpoint_steps) != 1
-        or type(next(iter(checkpoint_steps))) is not int
-        or int(next(iter(checkpoint_steps))) < 1
+        not _is_sha256(database_identity_value)
+        or not _is_sha256(model_fingerprint_value)
+        or type(checkpoint_step_value) is not int
+        or checkpoint_step_value < 1
     ):
         raise ValueError("acceptance evidence lineage mismatch")
 
@@ -319,15 +341,12 @@ def verify_model_acceptance(
     ):
         raise ValueError("acceptance category lineage mismatch")
 
-    database_identity = str(next(iter(database_ids)))
-    model_fingerprint = str(next(iter(model_ids)))
-    checkpoint_step = int(next(iter(checkpoint_steps)))
     return ModelAcceptanceResult(
         schema_version=ACCEPTANCE_SCHEMA,
         acceptance_passed=True,
-        checkpoint_step=checkpoint_step,
-        task_database_identity_sha256=database_identity,
-        model_fingerprint=model_fingerprint,
+        checkpoint_step=checkpoint_step_value,
+        task_database_identity_sha256=database_identity_value,
+        model_fingerprint=model_fingerprint_value,
         evaluation_sha256={
             split: _payload_sha256(payload)
             for split, payload in sorted(evaluation_by_split.items())
@@ -337,11 +356,11 @@ def verify_model_acceptance(
             for task, payload in sorted(inference_by_task.items())
         },
         relative_loss_improvement={
-            split: float(payload["relative_loss_improvement"])
+            split: _metric_number(payload, "relative_loss_improvement")
             for split, payload in sorted(evaluation_by_split.items())
         },
         target_token_accuracy={
-            split: float(payload["target_token_accuracy"])
+            split: _metric_number(payload, "target_token_accuracy")
             for split, payload in sorted(evaluation_by_split.items())
         },
         category_evidence_sha256={

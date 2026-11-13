@@ -1,7 +1,7 @@
 """Promote reviewed semantic labels through contained and strict calibration gates."""
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 import hashlib
 import importlib
 import importlib.util
@@ -11,6 +11,7 @@ from pathlib import Path
 import sys
 import tempfile
 from types import ModuleType
+from typing import Protocol
 
 from .strict_uncertainty_acceptance import (
     StrictUncertaintyPolicy,
@@ -108,6 +109,19 @@ fit_uncertainty_calibrator = _CALIBRATION_RUNTIME.fit_uncertainty_calibrator
 write_calibration_artifact = _CALIBRATION_RUNTIME.write_calibration_artifact
 
 
+class _CalibrationThresholdsContract(Protocol):
+    minimum_heldout_samples: int
+    minimum_languages: int
+    minimum_samples_per_language: int
+    maximum_calibrated_ece: float
+    maximum_calibrated_brier: float
+    maximum_brier_degradation: float
+
+
+class _UncertaintyObservationContract(Protocol):
+    sample_id: str
+
+
 def _canonical(value: object) -> bytes:
     return (
         json.dumps(
@@ -149,7 +163,7 @@ def _atomic_write(path: Path, content: bytes) -> None:
 
 @dataclass(frozen=True, slots=True)
 class SemanticCalibrationPromotionPolicy:
-    contained_thresholds: CalibrationThresholds
+    contained_thresholds: _CalibrationThresholdsContract
     strict_policy: StrictUncertaintyPolicy
 
     def __post_init__(self) -> None:
@@ -201,7 +215,24 @@ class SemanticCalibrationPromotionPolicy:
 
     def to_dict(self) -> dict[str, object]:
         return {
-            "contained_thresholds": asdict(self.contained_thresholds),
+            "contained_thresholds": {
+                "minimum_heldout_samples": (
+                    self.contained_thresholds.minimum_heldout_samples
+                ),
+                "minimum_languages": self.contained_thresholds.minimum_languages,
+                "minimum_samples_per_language": (
+                    self.contained_thresholds.minimum_samples_per_language
+                ),
+                "maximum_calibrated_ece": (
+                    self.contained_thresholds.maximum_calibrated_ece
+                ),
+                "maximum_calibrated_brier": (
+                    self.contained_thresholds.maximum_calibrated_brier
+                ),
+                "maximum_brier_degradation": (
+                    self.contained_thresholds.maximum_brier_degradation
+                ),
+            },
             "strict_policy": self.strict_policy.to_dict(),
         }
 
@@ -343,7 +374,7 @@ def _load_observations(
     expected_count: object,
     parser_identity: object,
     name: str,
-) -> tuple[UncertaintyObservation, ...]:
+) -> tuple[_UncertaintyObservationContract, ...]:
     try:
         raw = path.read_bytes()
     except OSError as exc:
@@ -367,15 +398,27 @@ def _load_observations(
         ):
             raise ValueError(f"{name} row lineage or label is invalid")
         sample_id = payload.get("sample_id")
-        if type(sample_id) is not str or not sample_id or sample_id in seen:
+        language = payload.get("language")
+        raw_uncertainty = payload.get("raw_uncertainty")
+        incorrect = payload.get("incorrect")
+        if (
+            type(sample_id) is not str
+            or not sample_id
+            or sample_id in seen
+            or type(language) is not str
+            or not language.strip()
+            or isinstance(raw_uncertainty, bool)
+            or not isinstance(raw_uncertainty, (int, float))
+            or type(incorrect) is not bool
+        ):
             raise ValueError(f"{name} contains an invalid or duplicate sample ID")
         seen.add(sample_id)
         rows.append(
             UncertaintyObservation(
                 sample_id=sample_id,
-                language=str(payload.get("language")),
-                raw_uncertainty=payload.get("raw_uncertainty"),
-                incorrect=payload.get("incorrect"),
+                language=language,
+                raw_uncertainty=float(raw_uncertainty),
+                incorrect=incorrect,
             )
         )
     if type(expected_count) is not int or len(rows) != expected_count:

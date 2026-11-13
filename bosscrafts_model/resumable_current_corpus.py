@@ -77,24 +77,29 @@ class _CompressedPreparedCandidate:
     rejection_detail: str | None
 
 
-_PROCESS_PIPELINE: BCNLTSourcePipeline | None = None
+@dataclass
+class _ProcessWorkerState:
+    pipeline: BCNLTSourcePipeline | None = None
+
+
+_PROCESS_WORKER_STATE = _ProcessWorkerState()
 
 
 def _initialize_process_worker(timeout_seconds: float) -> None:
-    global _PROCESS_PIPELINE
     binding = NativeTokenizerBinding.load()
-    _PROCESS_PIPELINE = BCNLTSourcePipeline(
+    pipeline = BCNLTSourcePipeline(
         binding,
         persistent_sidecars=True,
         timeout_seconds=timeout_seconds,
     )
-    atexit.register(_PROCESS_PIPELINE.close)
+    _PROCESS_WORKER_STATE.pipeline = pipeline
+    atexit.register(pipeline.close)
 
 
 def _prepare_candidate_in_process(
     candidate: SourceCandidate,
 ) -> _CompressedPreparedCandidate:
-    pipeline = _PROCESS_PIPELINE
+    pipeline = _PROCESS_WORKER_STATE.pipeline
     if pipeline is None:
         raise RuntimeError("BCNLT admission process worker is not initialized")
     try:
@@ -202,6 +207,11 @@ class ResumableCurrentCorpusAdmission:
             ),
         }
         if source_freeze_manifest_sha256 is not None:
+            if (
+                semantic_audit_qualification_sha256 is None
+                or expected_source_document_count is None
+            ):
+                raise RuntimeError("validated frozen source lineage became incomplete")
             self._expected_metadata.update(
                 {
                     "source_freeze_manifest_sha256": source_freeze_manifest_sha256,

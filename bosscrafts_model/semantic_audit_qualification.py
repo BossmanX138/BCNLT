@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from typing import TypeGuard
 
 from .semantic_challenge_review import SemanticChallengeReviewBuilder
 
@@ -39,6 +40,14 @@ def _canonical(value: object) -> str:
 
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _is_sha256(value: object) -> TypeGuard[str]:
+    return (
+        type(value) is str
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 def _sha256_file(path: Path) -> str:
@@ -333,13 +342,34 @@ class SemanticAuditQualificationEvaluator:
     def _result(
         output: Path, report: dict[str, object]
     ) -> SemanticAuditQualificationResult:
+        passed = report.get("audit_qualification_passed")
+        positive_count = report.get("positive_control_count")
+        positive_false = report.get("positive_false_flag_count")
+        negative_count = report.get("negative_control_count")
+        negative_detected = report.get("negative_detected_count")
+        training_ready = report.get("training_ready")
+        report_sha256 = report.get("report_sha256")
+        if (
+            type(passed) is not bool
+            or type(positive_count) is not int
+            or positive_count < 0
+            or type(positive_false) is not int
+            or not 0 <= positive_false <= positive_count
+            or type(negative_count) is not int
+            or negative_count < 0
+            or type(negative_detected) is not int
+            or not 0 <= negative_detected <= negative_count
+            or type(training_ready) is not bool
+            or not _is_sha256(report_sha256)
+        ):
+            raise ValueError("semantic audit qualification result is invalid")
         return SemanticAuditQualificationResult(
             output_root=output,
-            audit_qualification_passed=bool(report["audit_qualification_passed"]),
-            positive_control_count=int(report["positive_control_count"]),
-            positive_false_flag_count=int(report["positive_false_flag_count"]),
-            negative_control_count=int(report["negative_control_count"]),
-            negative_detected_count=int(report["negative_detected_count"]),
-            training_ready=bool(report["training_ready"]),
-            report_sha256=str(report["report_sha256"]),
+            audit_qualification_passed=passed,
+            positive_control_count=positive_count,
+            positive_false_flag_count=positive_false,
+            negative_control_count=negative_count,
+            negative_detected_count=negative_detected,
+            training_ready=training_ready,
+            report_sha256=report_sha256,
         )

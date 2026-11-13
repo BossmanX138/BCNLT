@@ -188,9 +188,9 @@ def _run_bounded(
         stderr=subprocess.PIPE,
         start_new_session=True,
     )
-    assert process.stdin is not None
-    assert process.stdout is not None
-    assert process.stderr is not None
+    if process.stdin is None or process.stdout is None or process.stderr is None:
+        _terminate(process)
+        raise RuntimeError("sandbox process pipes were not initialized")
     try:
         process.stdin.write(stdin_bytes)
         process.stdin.close()

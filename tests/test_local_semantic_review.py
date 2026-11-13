@@ -175,12 +175,56 @@ def _reviewers(feature, base_url: str):
     )
 
 
+@contextmanager
+def _redirect_server():
+    state = {"paths": []}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            state["paths"].append(self.path)
+            length = int(self.headers["Content-Length"])
+            self.rfile.read(length)
+            self.send_response(307)
+            self.send_header(
+                "Location",
+                f"http://127.0.0.1:{self.server.server_port}/redirect-target",
+            )
+            self.end_headers()
+
+        def log_message(self, format, *args):  # noqa: A003
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", state
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_reviewer_configuration_rejects_non_loopback_endpoint():
     feature = _feature()
     with pytest.raises(ValueError, match="loopback"):
         feature.LocalReviewerSpec(
             "external-reviewer", "https://api.example.com", "remote-model"
         )
+
+
+def test_reviewer_transport_refuses_http_redirects():
+    feature = _feature()
+    with tempfile.TemporaryDirectory() as queue_dir, tempfile.TemporaryDirectory() as output_dir:
+        _queue(Path(queue_dir))
+        with _redirect_server() as (base_url, state):
+            result = feature.DualLocalSemanticReviewer(
+                queue_dir, output_dir, _reviewers(feature, base_url)
+            ).run(limit=1, continue_on_failure=True)
+
+    assert state["paths"] == ["/v1/chat/completions"]
+    assert result.failed_attempts == 1
+    assert result.completed_reviews == 0
 
 
 def test_dual_review_is_resumable_and_never_auto_promotes():

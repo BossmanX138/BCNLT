@@ -80,6 +80,100 @@ class AuditedBalancedCurriculumResult:
     training_ready: bool
 
 
+class _PromptClaimIndex:
+    """Disk-backed global prompt/target index used before bounded selection."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._connection: sqlite3.Connection | None = None
+        self._pending = 0
+
+    def __enter__(self) -> "_PromptClaimIndex":
+        if self.path.exists():
+            raise ValueError("prompt-claim scratch database already exists")
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(self.path)
+        try:
+            connection.execute("PRAGMA journal_mode=DELETE")
+            connection.execute("PRAGMA synchronous=OFF")
+            connection.execute("PRAGMA temp_store=FILE")
+            connection.execute(
+                """CREATE TABLE prompt_claims(
+                       family TEXT NOT NULL,prompt_sha256 TEXT NOT NULL,
+                       loss_start_index INTEGER NOT NULL,split TEXT NOT NULL,
+                       target_sha256 TEXT NOT NULL,target_tokens INTEGER NOT NULL,
+                       PRIMARY KEY(family,prompt_sha256,loss_start_index,split,
+                                   target_sha256,target_tokens)) WITHOUT ROWID"""
+            )
+        except BaseException:
+            connection.close()
+            self._remove_files()
+            raise
+        self._connection = connection
+        return self
+
+    def add(self, candidate: _Candidate) -> None:
+        if self._connection is None:
+            raise RuntimeError("prompt-claim index is not open")
+        self._connection.execute(
+            "INSERT OR IGNORE INTO prompt_claims VALUES(?,?,?,?,?,?)",
+            (
+                candidate.prompt_key[0],
+                candidate.prompt_key[1],
+                candidate.prompt_key[2],
+                candidate.split,
+                candidate.target_key[0],
+                candidate.target_key[1],
+            ),
+        )
+        self._pending += 1
+        if self._pending >= 10_000:
+            self._connection.commit()
+            self._pending = 0
+
+    def exclusions(
+        self,
+    ) -> tuple[set[tuple[str, str, int]], set[tuple[str, str, int]]]:
+        if self._connection is None:
+            raise RuntimeError("prompt-claim index is not open")
+        self._connection.commit()
+        self._pending = 0
+        conflicting: set[tuple[str, str, int]] = set()
+        cross_split: set[tuple[str, str, int]] = set()
+        rows = self._connection.execute(
+            """SELECT family,prompt_sha256,loss_start_index,
+                      COUNT(DISTINCT target_sha256 || ':' || target_tokens),
+                      COUNT(DISTINCT split)
+                 FROM prompt_claims
+                GROUP BY family,prompt_sha256,loss_start_index
+               HAVING COUNT(DISTINCT target_sha256 || ':' || target_tokens) > 1
+                   OR COUNT(DISTINCT split) > 1"""
+        )
+        for family, prompt_sha256, loss_start, target_count, split_count in rows:
+            key = (str(family), str(prompt_sha256), int(loss_start))
+            if int(target_count) > 1:
+                conflicting.add(key)
+            elif int(split_count) > 1:
+                cross_split.add(key)
+        return conflicting, cross_split
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        if self._connection is not None:
+            self._connection.close()
+            self._connection = None
+        self._remove_files()
+
+    def _remove_files(self) -> None:
+        for path in (
+            self.path,
+            self.path.with_name(f"{self.path.name}-journal"),
+            self.path.with_name(f"{self.path.name}-wal"),
+            self.path.with_name(f"{self.path.name}-shm"),
+        ):
+            if path.exists():
+                path.unlink()
+
+
 def _is_sha256(value: object) -> bool:
     return (
         type(value) is str
@@ -254,6 +348,7 @@ def build_audited_balanced_curriculum(
         raise ValueError("source catalog does not exist")
     if destination.exists():
         raise ValueError("destination curriculum already exists")
+    destination.parent.mkdir(parents=True, exist_ok=True)
     catalog_sha256 = _sha256_file(catalog_path)
 
     eligible_by_split: dict[str, set[str]] = {}
@@ -313,15 +408,17 @@ def build_audited_balanced_curriculum(
         tuple[list[list[tuple[int, str, _Candidate]]], list[tuple[int, str, _Candidate]]],
     ] = {}
     processed_documents = 0
-    catalog = _ro_connect(catalog_path)
-    try:
-        for split in SPLITS:
-            admission_path = Path(admission_databases[split]).resolve()
-            admission = _ro_connect(admission_path)
-            seen_eligible: set[str] = set()
-            try:
-                for language in languages:
-                    rows = admission.execute(
+    prompt_scratch = destination.with_name(f".{destination.name}.prompt-claims.tmp")
+    with _PromptClaimIndex(prompt_scratch) as prompt_claims:
+        catalog = _ro_connect(catalog_path)
+        try:
+            for split in SPLITS:
+                admission_path = Path(admission_databases[split]).resolve()
+                admission = _ro_connect(admission_path)
+                seen_eligible: set[str] = set()
+                try:
+                    for language in languages:
+                        rows = admission.execute(
                         """SELECT document_id,content_sha256,relative_path,
                                   semantic_spec_sha256,parser_runtime_identity_sha256,
                                   canonical_sha256,canonical_jsonl_zlib,semantic_ids_zlib,
@@ -330,43 +427,43 @@ def build_audited_balanced_curriculum(
                            ORDER BY document_id""",
                         (language,),
                     )
-                    for admission_row in rows:
-                        document_id = str(admission_row[0])
-                        if document_id not in eligible_by_split[split]:
-                            continue
-                        seen_eligible.add(document_id)
-                        source_row = catalog.execute(
+                        for admission_row in rows:
+                            document_id = str(admission_row[0])
+                            if document_id not in eligible_by_split[split]:
+                                continue
+                            seen_eligible.add(document_id)
+                            source_row = catalog.execute(
                             """SELECT canonical_language,content,relative_path,content_sha256
                                FROM documents WHERE document_id=?""",
                             (document_id,),
                         ).fetchone()
-                        if source_row is None:
-                            raise ValueError("eligible document is absent from source catalog")
-                        source_language, source, relative_path, source_sha = map(str, source_row)
-                        if (
+                            if source_row is None:
+                                raise ValueError("eligible document is absent from source catalog")
+                            source_language, source, relative_path, source_sha = map(str, source_row)
+                            if (
                             source_language != language
                             or relative_path != admission_row[2]
                             or source_sha != admission_row[1]
                             or hashlib.sha256(source.encode("utf-8")).hexdigest() != source_sha
                             or admission_row[3] != CURRENT_RUNTIME_SPEC_SHA256[language]
                             or admission_row[4] != PARSER_RUNTIME_IDENTITY_SHA256
-                        ):
-                            raise ValueError("eligible source lineage mismatch")
-                        canonical_jsonl = decompress_bounded(
+                            ):
+                                raise ValueError("eligible source lineage mismatch")
+                            canonical_jsonl = decompress_bounded(
                             admission_row[6], maximum_output_bytes=MAX_CANONICAL_OUTPUT_BYTES
                         ).decode("utf-8")
-                        if hashlib.sha256(canonical_jsonl.encode("utf-8")).hexdigest() != admission_row[5]:
-                            raise ValueError("eligible canonical payload SHA-256 mismatch")
-                        expected_semantic_bytes = int(admission_row[9]) * 2
-                        semantic_ids = _decode_u16(
+                            if hashlib.sha256(canonical_jsonl.encode("utf-8")).hexdigest() != admission_row[5]:
+                                raise ValueError("eligible canonical payload SHA-256 mismatch")
+                            expected_semantic_bytes = int(admission_row[9]) * 2
+                            semantic_ids = _decode_u16(
                             decompress_bounded(
                                 admission_row[7],
                                 maximum_output_bytes=expected_semantic_bytes,
                             )
                         )
-                        if len(semantic_ids) != int(admission_row[9]):
-                            raise ValueError("eligible semantic token count mismatch")
-                        examples, _ = packer.pack_row(
+                            if len(semantic_ids) != int(admission_row[9]):
+                                raise ValueError("eligible semantic token count mismatch")
+                            examples, _ = packer.pack_row(
                             {
                                 "document_id": document_id,
                                 "language": language,
@@ -383,23 +480,36 @@ def build_audited_balanced_curriculum(
                                 "semantic_token_ids": semantic_ids,
                             }
                         )
-                        processed_documents += 1
-                        for item in examples:
-                            family = str(item["family"])
-                            cell = (split, language, family)
-                            raw_ids_value = item["input_ids"]
-                            if type(raw_ids_value) is not list:
-                                raise ValueError("packed task input IDs are invalid")
-                            input_ids = cast(list[int], raw_ids_value)
-                            raw_ids = _encode_u16(input_ids)
-                            loss_start = int(item["loss_start_index"])
-                            target_tokens = len(input_ids) - loss_start
-                            candidate = _Candidate(
-                                example_id=str(item["example_id"]),
+                            processed_documents += 1
+                            for item in examples:
+                                family = item.get("family")
+                                raw_ids_value = item.get("input_ids")
+                                loss_start_value = item.get("loss_start_index")
+                                record_index_value = item.get("record_index")
+                                example_id_value = item.get("example_id")
+                                if family not in FAMILIES:
+                                    raise ValueError("packed task family is invalid")
+                                if type(raw_ids_value) is not list:
+                                    raise ValueError("packed task input IDs are invalid")
+                                input_ids = cast(list[int], raw_ids_value)
+                                if (
+                                    type(loss_start_value) is not int
+                                    or not 0 <= loss_start_value < len(input_ids)
+                                    or type(record_index_value) is not int
+                                    or record_index_value < 0
+                                    or not _is_sha256(example_id_value)
+                                ):
+                                    raise ValueError("packed task identity or loss boundary is invalid")
+                                cell = (split, language, family)
+                                raw_ids = _encode_u16(input_ids)
+                                loss_start = loss_start_value
+                                target_tokens = len(input_ids) - loss_start
+                                candidate = _Candidate(
+                                example_id=cast(str, example_id_value),
                                 document_id=document_id,
                                 language=language,
                                 family=family,
-                                record_index=int(item["record_index"]),
+                                record_index=record_index_value,
                                 split=split,
                                 input_ids_zlib=zlib.compress(raw_ids, 6),
                                 token_count=len(input_ids),
@@ -419,29 +529,31 @@ def build_audited_balanced_curriculum(
                                     target_tokens,
                                 ),
                                 target_tokens=target_tokens,
-                            )
-                            bucket_heaps, fallback_heap = pool_heaps.setdefault(
+                                )
+                                prompt_claims.add(candidate)
+                                bucket_heaps, fallback_heap = pool_heaps.setdefault(
                                 cell, ([[] for _ in range(8)], [])
                             )
-                            bucket_limit = math.ceil(
+                                bucket_limit = math.ceil(
                                 quotas[split] * oversample_factor / 8
                             )
-                            _push_candidate(
+                                _push_candidate(
                                 bucket_heaps[_bucket(target_tokens)],
                                 candidate,
                                 bucket_limit,
                             )
-                            _push_candidate(
+                                _push_candidate(
                                 fallback_heap,
                                 candidate,
                                 quotas[split] * oversample_factor,
                             )
-                if seen_eligible != eligible_by_split[split]:
-                    raise ValueError(f"{split} eligibility inventory was not fully processed")
-            finally:
-                admission.close()
-    finally:
-        catalog.close()
+                    if seen_eligible != eligible_by_split[split]:
+                        raise ValueError(f"{split} eligibility inventory was not fully processed")
+                finally:
+                    admission.close()
+        finally:
+            catalog.close()
+        conflicting_prompt_keys, cross_split_prompt_keys = prompt_claims.exclusions()
 
     expected_cells = {
         (split, language, family): quotas[split]
@@ -462,21 +574,20 @@ def build_audited_balanced_curriculum(
     for candidate in candidate_by_id.values():
         prompt_groups[candidate.prompt_key].append(candidate)
     clean_by_cell: dict[tuple[str, str, str], list[_Candidate]] = defaultdict(list)
-    conflicting_groups = 0
-    cross_split_groups = 0
+    conflicting_groups = len(conflicting_prompt_keys)
+    cross_split_groups = len(cross_split_prompt_keys)
     duplicate_rows = 0
     for candidates in prompt_groups.values():
-        targets = {candidate.target_key for candidate in candidates}
-        splits = {candidate.split for candidate in candidates}
-        if len(targets) > 1:
-            conflicting_groups += 1
+        prompt_key = candidates[0].prompt_key
+        if prompt_key in conflicting_prompt_keys:
             continue
-        if len(splits) > 1:
-            cross_split_groups += 1
+        if prompt_key in cross_split_prompt_keys:
             continue
-        chosen = min(candidates, key=lambda candidate: candidate.example_id)
+        chosen_candidate = min(candidates, key=lambda candidate: candidate.example_id)
         duplicate_rows += len(candidates) - 1
-        clean_by_cell[(chosen.split, chosen.language, chosen.family)].append(chosen)
+        clean_by_cell[
+            (chosen_candidate.split, chosen_candidate.language, chosen_candidate.family)
+        ].append(chosen_candidate)
 
     selected: list[_Candidate] = []
     cell_counts: Counter[tuple[str, str, str]] = Counter()
@@ -504,12 +615,12 @@ def build_audited_balanced_curriculum(
                 "audited balanced curriculum quota could not be filled: "
                 f"{'|'.join(cell)} needs {target}, has {len(selected_ids)}"
             )
-        chosen = sorted(
+        chosen_candidates = sorted(
             (candidate for candidate in candidates if candidate.example_id in selected_ids),
             key=lambda item: item.example_id,
         )
-        selected.extend(chosen)
-        cell_counts[cell] = len(chosen)
+        selected.extend(chosen_candidates)
+        cell_counts[cell] = len(chosen_candidates)
 
     semantic_wire_schema = (
         COMPACT_SEMANTIC_WIRE_SCHEMA
@@ -545,7 +656,6 @@ def build_audited_balanced_curriculum(
         },
     }
     policy_sha = hashlib.sha256(_canonical_json(policy).encode("utf-8")).hexdigest()
-    destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(f".{destination.name}.tmp")
     if temporary.exists():
         temporary.unlink()

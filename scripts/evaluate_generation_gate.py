@@ -304,7 +304,7 @@ def main() -> int:
         generated_ids = generated[0, len(prompt_ids) :].tolist()
         correct = sum(
             actual == expected
-            for actual, expected in zip(generated_ids, expected_ids)
+            for actual, expected in zip(generated_ids, expected_ids, strict=False)
         )
         payload_ids = response_payload_token_ids(binding, family, generated_ids)
         record: dict[str, object] = {

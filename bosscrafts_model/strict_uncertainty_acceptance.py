@@ -149,9 +149,11 @@ def verify_strict_uncertainty_acceptance(
     if not upstream_promoted:
         failures.append("upstream_calibration_not_promoted")
 
-    global_coverage = float(global_metrics["selective_coverage_at_025"])
+    global_coverage = global_metrics["selective_coverage_at_025"]
     global_error = global_metrics["selective_error_rate_at_025"]
-    if global_coverage < policy.minimum_global_selective_coverage_at_025:
+    if global_coverage is None:
+        failures.append("global_selective_coverage_unavailable")
+    elif float(global_coverage) < policy.minimum_global_selective_coverage_at_025:
         failures.append("global_selective_coverage_below_threshold")
     if global_error is None:
         if policy.minimum_global_selective_coverage_at_025 > 0:
@@ -160,9 +162,11 @@ def verify_strict_uncertainty_acceptance(
         failures.append("global_selective_error_rate_above_threshold")
 
     for language, metrics in per_language_metrics.items():
-        coverage = float(metrics["selective_coverage_at_025"])
+        coverage = metrics["selective_coverage_at_025"]
         error = metrics["selective_error_rate_at_025"]
-        if coverage < policy.minimum_per_language_selective_coverage_at_025:
+        if coverage is None:
+            failures.append(f"{language}_selective_coverage_unavailable")
+        elif float(coverage) < policy.minimum_per_language_selective_coverage_at_025:
             failures.append(f"{language}_selective_coverage_below_threshold")
         if error is None:
             if policy.minimum_per_language_selective_coverage_at_025 > 0:

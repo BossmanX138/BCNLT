@@ -1,4 +1,6 @@
 """Real neural blocks; stage names are hypotheses, not learned capabilities."""
+from typing import cast
+
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -93,8 +95,11 @@ class EngineeringModule(nn.Module):
         return self.up(F.gelu(self.down(self.norm(x))))
 
 class EngineeringModel(nn.Module):
-    def __init__(self,c=ModelConfig()):
+    def __init__(self, c: ModelConfig | None = None):
         super().__init__()
+        c = ModelConfig() if c is None else c
+        if type(c) is not ModelConfig:
+            raise TypeError("c must be a ModelConfig")
         self.config = c
         self.embedding = nn.Embedding(c.vocab_size,c.width)
         self.blocks = nn.ModuleList([Block(c) for _ in range(c.layers)])
@@ -112,11 +117,13 @@ class EngineeringModel(nn.Module):
         self.gradient_checkpointing = False
 
     @staticmethod
-    def _initialize(module):
-        if isinstance(module,(nn.Linear,nn.Embedding)):
-            nn.init.normal_(module.weight,mean=0.0,std=0.02)
-            if getattr(module,"bias",None) is not None:
+    def _initialize(module: nn.Module) -> None:
+        if isinstance(module, nn.Linear):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
                 nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def _forward_hidden(self,ids,disabled_stage=None):
         if ids.ndim != 2 or ids.dtype != torch.long:
@@ -190,7 +197,8 @@ class EngineeringModel(nn.Module):
             raise ValueError("generation cache layer count mismatch")
         x = self.embedding(ids)
         next_key_values = []
-        for index, block in enumerate(self.blocks):
+        for index, block_module in enumerate(self.blocks):
+            block = cast(Block, block_module)
             past = None if past_key_values is None else past_key_values[index]
             x, present = block.forward_with_cache(x, past)
             next_key_values.append(present)

@@ -131,7 +131,8 @@ def main() -> int:
         )
         prompt_ids = list(heldout_case.prompt_ids)
     else:
-        assert arguments.prompt is not None
+        if arguments.prompt is None:
+            raise RuntimeError("validated manual inference prompt is missing")
         prompt_ids = build_inference_prompt(
             binding,
             task=task,
@@ -150,7 +151,10 @@ def main() -> int:
     response_ids = response_payload_token_ids(binding, task, new_ids)
     expected_ids = list(heldout_case.expected_ids) if heldout_case is not None else None
     heldout_correct = (
-        sum(actual == expected for actual, expected in zip(new_ids, expected_ids))
+        sum(
+            actual == expected
+            for actual, expected in zip(new_ids, expected_ids, strict=False)
+        )
         if expected_ids is not None
         else None
     )

@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from typing import TypeGuard, TypedDict
 
 from .bcnlt_source_pipeline import (
     BCNLTPreprocessingError,
@@ -34,6 +35,36 @@ def _canonical(value: object) -> str:
 
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _is_sha256(value: object) -> TypeGuard[str]:
+    return (
+        type(value) is str
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _parse_canonical_records(
+    canonical_jsonl: str, *, name: str
+) -> tuple[dict[str, object], ...]:
+    records: list[dict[str, object]] = []
+    for line in canonical_jsonl.splitlines():
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{name} contains invalid JSON") from exc
+        if type(record) is not dict or line != _canonical(record):
+            raise ValueError(f"{name} contains a non-canonical semantic record")
+        records.append(record)
+    return tuple(records)
+
+
+class _ReplayDocument(TypedDict):
+    canonical_jsonl: str | None
+    canonical_sha256: str | None
+    records: tuple[dict[str, object], ...]
+    error: str | None
 
 
 def _atomic_write(path: Path, content: bytes) -> None:
@@ -150,7 +181,7 @@ class SourceSemanticReplayAuditor:
         if missing:
             raise ValueError(f"review documents are absent from admission: {missing}")
 
-        replayed: dict[str, dict[str, object]] = {}
+        replayed: dict[str, _ReplayDocument] = {}
         with BCNLTSourcePipeline(
             self._binding,
             persistent_sidecars=True,
@@ -193,8 +224,9 @@ class SourceSemanticReplayAuditor:
                 replayed[document_id] = {
                     "canonical_jsonl": canonical_jsonl,
                     "canonical_sha256": prepared.canonical_sha256,
-                    "records": tuple(
-                        json.loads(line) for line in canonical_jsonl.splitlines()
+                    "records": _parse_canonical_records(
+                        canonical_jsonl,
+                        name="replayed semantic stream",
                     ),
                     "error": None,
                 }
@@ -209,8 +241,9 @@ class SourceSemanticReplayAuditor:
             admitted = admission_by_id[document_id]
             replay = replayed[document_id]
             admitted_jsonl = str(admitted["canonical_jsonl"])
-            admitted_records = tuple(
-                json.loads(line) for line in admitted_jsonl.splitlines()
+            admitted_records = _parse_canonical_records(
+                admitted_jsonl,
+                name="admitted semantic stream",
             )
             record_index = review.get("record_index")
             if type(record_index) is not int or not 0 <= record_index < len(admitted_records):
@@ -376,14 +409,38 @@ class SourceSemanticReplayAuditor:
     def _result(
         output: Path, manifest: dict[str, object]
     ) -> SourceSemanticReplayResult:
+        item_count = manifest.get("replayed_item_count")
+        document_count = manifest.get("replayed_document_count")
+        matched_item_count = manifest.get("record_match_count")
+        mismatched_item_count = manifest.get("record_mismatch_count")
+        complete_source_queue = manifest.get("complete_source_queue")
+        training_ready = manifest.get("training_ready")
+        results_sha256 = manifest.get("results_sha256")
+        manifest_sha256 = manifest.get("manifest_sha256")
+        if (
+            type(item_count) is not int
+            or item_count < 0
+            or type(document_count) is not int
+            or document_count < 0
+            or type(matched_item_count) is not int
+            or matched_item_count < 0
+            or type(mismatched_item_count) is not int
+            or mismatched_item_count < 0
+            or matched_item_count + mismatched_item_count != item_count
+            or type(complete_source_queue) is not bool
+            or type(training_ready) is not bool
+            or not _is_sha256(results_sha256)
+            or not _is_sha256(manifest_sha256)
+        ):
+            raise ValueError("source semantic replay result is invalid")
         return SourceSemanticReplayResult(
             output_root=output,
-            item_count=int(manifest["replayed_item_count"]),
-            document_count=int(manifest["replayed_document_count"]),
-            matched_item_count=int(manifest["record_match_count"]),
-            mismatched_item_count=int(manifest["record_mismatch_count"]),
-            complete_source_queue=bool(manifest["complete_source_queue"]),
-            training_ready=bool(manifest["training_ready"]),
-            results_sha256=str(manifest["results_sha256"]),
-            manifest_sha256=str(manifest["manifest_sha256"]),
+            item_count=item_count,
+            document_count=document_count,
+            matched_item_count=matched_item_count,
+            mismatched_item_count=mismatched_item_count,
+            complete_source_queue=complete_source_queue,
+            training_ready=training_ready,
+            results_sha256=results_sha256,
+            manifest_sha256=manifest_sha256,
         )

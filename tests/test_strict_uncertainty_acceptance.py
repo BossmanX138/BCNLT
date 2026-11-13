@@ -4,6 +4,7 @@ import importlib
 import importlib.util
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -140,3 +141,33 @@ def test_strict_gate_rejects_an_upstream_failed_artifact():
     )
     assert result.passed is False
     assert "upstream_calibration_not_promoted" in result.failure_codes
+
+
+def test_strict_gate_fails_closed_when_selective_coverage_is_missing():
+    feature = _feature()
+    metrics = SimpleNamespace(
+        sample_count=40,
+        brier=0.1,
+        ece=0.1,
+        selective_coverage_at_025=None,
+        selective_error_rate_at_025=None,
+    )
+
+    class Artifact:
+        artifact_sha256 = "e" * 64
+        parser_runtime_identity_sha256 = "f" * 64
+        calibrated_metrics = metrics
+        per_language = {"python": metrics}
+        promoted = True
+
+        @staticmethod
+        def validate():
+            return None
+
+    result = feature.verify_strict_uncertainty_acceptance(
+        Artifact(), _policy(feature)
+    )
+
+    assert result.passed is False
+    assert "global_selective_coverage_unavailable" in result.failure_codes
+    assert "python_selective_coverage_unavailable" in result.failure_codes

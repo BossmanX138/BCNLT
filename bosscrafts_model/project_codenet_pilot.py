@@ -235,7 +235,7 @@ def build_pilot(
         seen_code.add(code_sha256)
         split = _split(candidate.problem_id)
         relative_source = candidate.source_path.relative_to(dataset_root).as_posix()
-        record = {
+        record: dict[str, object] = {
             "schema_version": PILOT_SCHEMA,
             "dataset": "IBM/Project_CodeNet",
             "dataset_license": DATASET_LICENSE,

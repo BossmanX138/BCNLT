@@ -328,13 +328,10 @@ class AuditedTrainingEligibilityBuilder:
     ) -> str:
         digest = hashlib.sha256()
         digest.update(f"{_canonical(metadata)}\n".encode("utf-8"))
-        for table, columns in (
-            ("documents", "*"),
-            ("findings", "*"),
+        for rows in (
+            connection.execute("SELECT * FROM documents ORDER BY rowid"),
+            connection.execute("SELECT * FROM findings ORDER BY rowid"),
         ):
-            rows = connection.execute(
-                f"SELECT {columns} FROM {table} ORDER BY rowid"
-            )
             for row in rows:
                 digest.update(f"{_canonical(list(row))}\n".encode("utf-8"))
         return digest.hexdigest()

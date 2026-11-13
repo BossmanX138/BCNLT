@@ -10,7 +10,7 @@ import subprocess
 import threading
 import time
 import uuid
-from typing import Any
+from typing import Any, TypedDict
 
 
 PROTOCOL = "bosscrafts-bcnlt-sandbox-v1"
@@ -29,6 +29,14 @@ _TMPFS = "rw,exec,nosuid,nodev,size=134217728,mode=1777"
 
 class SandboxExecutionError(RuntimeError):
     """The host could not establish or complete an isolated execution."""
+
+
+class _BoundedProcessResult(TypedDict):
+    returncode: int | None
+    stdout: bytes
+    stderr: bytes
+    timed_out: bool
+    output_limited: bool
 
 
 @dataclass(frozen=True)
@@ -523,7 +531,7 @@ def _run_bounded_process(
     timeout_seconds: float,
     max_stdout_bytes: int,
     max_stderr_bytes: int,
-) -> dict[str, object]:
+) -> _BoundedProcessResult:
     process = subprocess.Popen(
         command,
         stdin=subprocess.PIPE,

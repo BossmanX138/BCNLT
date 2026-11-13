@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import sys
+from typing import Protocol, Sequence, cast
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +22,39 @@ PARSER_RUNTIME_IDENTITY_SHA256 = (
 MAX_SOURCE_BYTES = 200 * 1024
 MAX_QUERIES = 16_384
 MAX_REQUEST_BYTES = MAX_SOURCE_BYTES * 6 + 4 * 1024 * 1024
+
+
+class _Node(Protocol):
+    @property
+    def children(self) -> Sequence["_Node"]: ...
+
+    @property
+    def start_point(self) -> tuple[int, int]: ...
+
+    @property
+    def end_point(self) -> tuple[int, int]: ...
+
+    @property
+    def start_byte(self) -> int: ...
+
+    @property
+    def end_byte(self) -> int: ...
+
+    @property
+    def type(self) -> str: ...
+
+    @property
+    def is_named(self) -> bool: ...
+
+    @property
+    def parent(self) -> "_Node | None": ...
+
+    def child_by_field_name(self, name: str) -> "_Node | None": ...
+
+
+class _ScopeRule(Protocol):
+    @property
+    def name_field(self) -> str | None: ...
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -85,6 +119,7 @@ def _load_request(raw: bytes | None = None) -> dict[str, object]:
             or any(type(value) is not int or value < 0 for value in span)
             or span[0] < 1
             or span[2] < span[0]
+            or (span[2] == span[0] and span[3] < span[1])
             or type(relation) is not str
             or not relation
             or (
@@ -98,8 +133,13 @@ def _load_request(raw: bytes | None = None) -> dict[str, object]:
 
 
 def _run(payload: dict[str, object]) -> dict[str, object]:
-    from bcnlt.adapters import BCNLTMultilingualAdapter, LanguageCarousel
-    from bcnlt.adapters.tree_sitter import TreeSitterSemanticEngine
+    from bcnlt.adapters import (  # type: ignore[import-not-found]
+        BCNLTMultilingualAdapter,
+        LanguageCarousel,
+    )
+    from bcnlt.adapters.tree_sitter import (  # type: ignore[import-not-found]
+        TreeSitterSemanticEngine,
+    )
 
     source = str(payload["source"])
     language = str(payload["language"])
@@ -122,9 +162,9 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
         declared_role_fallbacks.setdefault(
             f"{rule.node_type}.{relation_role}", set()
         ).add(rule.parent_type)
-    scope_rules_by_type: dict[str, object] = {}
+    scope_rules_by_type: dict[str, _ScopeRule] = {}
     for rule in cartridge.spec.resolved_scope_rules:
-        scope_rules_by_type.setdefault(rule.node_type, rule)
+        scope_rules_by_type.setdefault(rule.node_type, cast(_ScopeRule, rule))
     adapter = BCNLTMultilingualAdapter(
         engine=TreeSitterSemanticEngine(), carousel=carousel
     )
@@ -135,8 +175,8 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
     exact: dict[tuple[int, int, int, int], set[str]] = {}
     starts: dict[tuple[int, int], set[str]] = {}
     ends: dict[tuple[int, int], set[str]] = {}
-    named_nodes: list[object] = []
-    stack = [document.tree.root_node]
+    named_nodes: list[_Node] = []
+    stack: list[_Node] = [cast(_Node, document.tree.root_node)]
     while stack:
         node = stack.pop()
         stack.extend(reversed(node.children))
@@ -151,15 +191,15 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
         starts.setdefault((span[0], span[1]), set()).add(node_type)
         ends.setdefault((span[2], span[3]), set()).add(node_type)
 
-    def node_span(node: object) -> tuple[int, int, int, int]:
+    def node_span(node: _Node) -> tuple[int, int, int, int]:
         start_row, start_col = node.start_point
         end_row, end_col = node.end_point
         return (start_row + 1, start_col, end_row + 1, end_col)
 
-    def node_key(node: object) -> tuple[int, int, str]:
+    def node_key(node: _Node) -> tuple[int, int, str]:
         return (int(node.start_byte), int(node.end_byte), str(node.type))
 
-    def resolve_field(node: object, field_path: str) -> object | None:
+    def resolve_field(node: _Node, field_path: str) -> _Node | None:
         if (
             field_path == "name"
             and language in {"javascript", "typescript"}
@@ -178,8 +218,10 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
                 ):
                     return binding
         for alternative in field_path.split("|"):
-            current = node
+            current: _Node | None = node
             for segment in alternative.split("."):
+                if current is None:
+                    break
                 if segment.startswith("#"):
                     try:
                         index = int(segment[1:])
@@ -214,12 +256,12 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
     source_bytes = source.encode("utf-8")
 
     def derived_scope(
-        owner: object,
+        owner: _Node,
         relation_kind: str,
         span: tuple[int, int, int, int],
     ) -> str:
-        ancestry: list[object] = []
-        current = owner
+        ancestry: list[_Node] = []
+        current: _Node | None = owner
         while current is not None:
             ancestry.append(current)
             current = getattr(current, "parent", None)
@@ -262,7 +304,7 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
             components.append(name)
         return ".".join(components)
 
-    def declared_role_fallback(node: object, relation: str) -> bool:
+    def declared_role_fallback(node: _Node, relation: str) -> bool:
         requirements = declared_role_fallbacks.get(relation)
         if not requirements:
             return False
@@ -271,14 +313,16 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
         return None in requirements or parent_type in requirements
 
     witnesses: list[dict[str, object]] = []
-    for query in payload["queries"]:
-        span = tuple(query["span"])
+    queries = cast(list[dict[str, object]], payload["queries"])
+    for query in queries:
+        span_values = cast(list[int], query["span"])
+        span = (span_values[0], span_values[1], span_values[2], span_values[3])
         relation = str(query["ast_relation"])
         owner_type, separator, relation_kind = relation.partition(".")
         exact_types = sorted(exact.get(span, set()))
         boundary_start_types = sorted(starts.get((span[0], span[1]), set()))
         boundary_end_types = sorted(ends.get((span[2], span[3]), set()))
-        matching_owners: list[object] = []
+        matching_owners: list[_Node] = []
         if not separator:
             pass
         elif relation_kind == "self":

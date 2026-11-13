@@ -16,7 +16,6 @@ if str(PROJECT_ROOT) not in sys.path:
 from scripts.run_bosscrafts_v6_repair_training_chunk import (
     DEFAULT_DATABASE,
     EXPECTED_DATABASE_IDENTITY,
-    EXPECTED_MODEL_FINGERPRINT,
     GRADIENT_ACCUMULATION,
     PLANNED_OPTIMIZER_STEPS,
     TRAIN_EXAMPLES,

@@ -1,13 +1,13 @@
 """Build a provenance-preserving CodeX plus BCNLT replay curriculum."""
 from __future__ import annotations
 
-from collections import Counter
 from dataclasses import asdict
 import hashlib
 import json
 import math
 from pathlib import Path
 import sqlite3
+from typing import TypedDict
 
 from .bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
 from .codex_code_curriculum import INSTRUCTION_FAMILY
@@ -27,6 +27,13 @@ from .tokenizer import NativeTokenizerBinding
 CURRICULUM_SCHEMA = "bosscrafts-codex-bcnlt-replay-curriculum-v1"
 ORDER_AUDIT_SCHEMA = "bosscrafts-codex-bcnlt-order-audit-v1"
 EXAMPLE_ID_POLICY = SALTED_SOURCE_EXAMPLE_ID_POLICY
+
+
+class _OrderWindow(TypedDict):
+    window_index: int
+    example_count: int
+    replay_count: int
+    replay_fraction: float
 
 
 def _ro_connect(path: Path) -> sqlite3.Connection:
@@ -395,17 +402,17 @@ def build_codex_replay_curriculum(
     try:
         result = audit_task_database(binding, temporary)
         dataset = ResumableTaskDataset(binding, temporary)
-        weighted: Counter[str] = Counter()
+        weighted = {"instruction": 0.0, "replay": 0.0}
         order_kinds: list[str] = []
         for row in dataset.iter_examples(split="train"):
             kind = "instruction" if row["family"] == INSTRUCTION_FAMILY else "replay"
-            weighted[kind] += float(row["sampling_weight"])
+            weighted[kind] += row["sampling_weight"]
             order_kinds.append(kind)
         total_weight = weighted["instruction"] + weighted["replay"]
         observed_codex_weight_fraction = weighted["instruction"] / total_weight
         if not math.isclose(observed_codex_weight_fraction, codex_weight_fraction, abs_tol=1e-12):
             raise ValueError("observed CodeX training weight fraction is invalid")
-        windows: list[dict[str, object]] = []
+        windows: list[_OrderWindow] = []
         for offset in range(0, len(order_kinds), order_window_size):
             kinds = order_kinds[offset : offset + order_window_size]
             replay_count = kinds.count("replay")
@@ -420,7 +427,7 @@ def build_codex_replay_curriculum(
         full_windows = [window for window in windows if window["example_count"] == order_window_size]
         if any(
             not minimum_replay_order_fraction
-            <= float(window["replay_fraction"])
+            <= window["replay_fraction"]
             <= maximum_replay_order_fraction
             for window in full_windows
         ):

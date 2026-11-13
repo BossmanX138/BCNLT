@@ -12,6 +12,7 @@ import tempfile
 from urllib import error as urlerror
 from urllib import request as urlrequest
 from urllib.parse import urlparse
+from typing import TypedDict
 
 from .heldout_semantic_review import REVIEW_ITEM_SCHEMA, REVIEW_MANIFEST_SCHEMA
 
@@ -28,7 +29,22 @@ _RUBRIC_FIELDS = frozenset(
     }
 )
 _MAX_RESPONSE_BYTES = 1024 * 1024
-_SEMANTIC_CONTRACT = {
+
+
+class _NoRedirectHandler(urlrequest.HTTPRedirectHandler):
+    """Never forward source-bearing reviewer requests to another endpoint."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+class _SemanticContract(TypedDict):
+    event_ir_kinds: dict[str, list[str]]
+    scope_root: str
+    zero_width_boundary_events: list[str]
+
+
+_SEMANTIC_CONTRACT: _SemanticContract = {
     "event_ir_kinds": {
         "ASSIGN": ["assignment", "state"],
         "BRANCH": ["branch"],
@@ -603,7 +619,8 @@ class DualLocalSemanticReviewer:
             method="POST",
         )
         try:
-            with urlrequest.urlopen(request, timeout=reviewer.timeout_seconds) as response:
+            opener = urlrequest.build_opener(_NoRedirectHandler())
+            with opener.open(request, timeout=reviewer.timeout_seconds) as response:
                 raw = response.read(_MAX_RESPONSE_BYTES + 1)
         except (urlerror.URLError, TimeoutError, OSError) as exc:
             message = f"local reviewer request failed: {exc}"
@@ -947,7 +964,7 @@ class DualLocalSemanticReviewer:
             else:
                 status = "agree_reject"
             counts[status] += 1
-            row = {
+            row: dict[str, object] = {
                 "review_id": review_id,
                 "status": status,
                 "reviewer_entry_sha256": [

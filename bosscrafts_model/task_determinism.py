@@ -143,7 +143,8 @@ def audit_task_prompt_determinism(
                     group.conflict_representatives = [group.first_representative]
                     group.prompt_token_ids = input_ids[:loss_start]
                 group.additional_targets.add(target_key)
-                assert group.conflict_representatives is not None
+                if group.conflict_representatives is None:
+                    raise RuntimeError("conflicting prompt representatives were not initialized")
                 if all(item[4] != target_sha256 for item in group.conflict_representatives):
                     group.conflict_representatives.append(representative)
     finally:
@@ -198,9 +199,12 @@ def audit_task_prompt_determinism(
     for group in sorted(
         sample_groups, key=lambda item: (item.family, item.prompt_sha256)
     )[:sample_limit]:
-        assert group.additional_targets is not None
-        assert group.conflict_representatives is not None
-        assert group.prompt_token_ids is not None
+        if (
+            group.additional_targets is None
+            or group.conflict_representatives is None
+            or group.prompt_token_ids is None
+        ):
+            raise RuntimeError("conflicting prompt evidence is incomplete")
         samples.append(
             {
                 "family": group.family,

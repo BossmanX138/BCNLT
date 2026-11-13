@@ -12,6 +12,7 @@ from .bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
 
 
 PROTOCOL = "bosscrafts-raw-ast-witness-v1"
+MAX_RESPONSE_BYTES = 32 * 1024 * 1024
 _SIDECAR = Path(__file__).with_name("raw_ast_witness_sidecar.py")
 _PYTHON_313 = Path(r"C:\ProgramData\anaconda3\python.exe")
 _RESPONSE_KEYS = {
@@ -139,8 +140,9 @@ class RawAstWitnessClient:
         ).encode("utf-8")
         with self._lock:
             process = self._start()
-            assert process.stdin is not None
-            assert process.stdout is not None
+            if process.stdin is None or process.stdout is None:
+                self._stop_process()
+                raise RuntimeError("raw AST witness sidecar pipes were not initialized")
             try:
                 process.stdin.write(encoded)
                 process.stdin.flush()
@@ -151,7 +153,9 @@ class RawAstWitnessClient:
                 raise ValueError(
                     f"raw AST witness sidecar failed: {detail or type(exc).__name__}"
                 ) from exc
-            pending = self._reader.submit(process.stdout.readline)
+            pending = self._reader.submit(
+                process.stdout.readline, MAX_RESPONSE_BYTES + 1
+            )
             try:
                 raw_response = pending.result(timeout=self._timeout_seconds)
             except FutureTimeoutError as exc:
@@ -172,6 +176,9 @@ class RawAstWitnessClient:
                     "raw AST witness sidecar failed: "
                     f"{detail or f'exit {return_code}'}"
                 )
+            if len(raw_response) > MAX_RESPONSE_BYTES:
+                self._stop_process()
+                raise ValueError("raw AST witness response exceeds bounded transport")
         try:
             response = json.loads(raw_response.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:

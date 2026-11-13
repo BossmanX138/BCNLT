@@ -202,7 +202,8 @@ def main() -> int:
         initial_checkpoint_path = arguments.initial_model_checkpoint.resolve()
         if not initial_checkpoint_path.is_file():
             parser.error("initial model checkpoint does not exist")
-        assert arguments.initial_checkpoint_database is not None
+        if arguments.initial_checkpoint_database is None:
+            raise RuntimeError("validated initial checkpoint database is missing")
         initial_task_audit = audit_task_database(
             binding, arguments.initial_checkpoint_database.resolve()
         )
@@ -306,7 +307,8 @@ def main() -> int:
         cursor = state.cursor_after_example_id
         last_example_id = state.last_example_id
     elif initial_checkpoint_path is not None:
-        assert initial_task_audit is not None
+        if initial_task_audit is None:
+            raise RuntimeError("initial checkpoint audit was not prepared")
         initial_state = load_model_checkpoint_for_inference(
             initial_checkpoint_path,
             model,

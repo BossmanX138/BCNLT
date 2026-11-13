@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from typing import TypeGuard
 
 from .semantic_challenge_review import SemanticChallengeReviewBuilder
 
@@ -33,6 +34,14 @@ def _canonical(value: object) -> str:
 
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _is_sha256(value: object) -> TypeGuard[str]:
+    return (
+        type(value) is str
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 def _atomic_write(path: Path, content: bytes) -> None:
@@ -240,10 +249,22 @@ class SemanticChallengeCanarySelector:
     def _result(
         output: Path, selection: dict[str, object]
     ) -> SemanticChallengeCanarySelectionResult:
+        item_count = selection.get("item_count")
+        pair_count = selection.get("pair_count")
+        selection_sha256 = selection.get("selection_sha256")
+        if (
+            type(item_count) is not int
+            or item_count < 0
+            or type(pair_count) is not int
+            or pair_count < 0
+            or item_count != pair_count * 2
+            or not _is_sha256(selection_sha256)
+        ):
+            raise ValueError("semantic challenge canary result is invalid")
         return SemanticChallengeCanarySelectionResult(
             output_root=output,
-            item_count=int(selection["item_count"]),
-            pair_count=int(selection["pair_count"]),
-            selection_sha256=str(selection["selection_sha256"]),
+            item_count=item_count,
+            pair_count=pair_count,
+            selection_sha256=selection_sha256,
         )
 

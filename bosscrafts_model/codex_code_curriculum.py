@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+from typing import Mapping
 import zlib
 
 from .bcnlt_source_pipeline import CURRENT_RUNTIME_SPEC_SHA256
@@ -26,7 +27,7 @@ from .resumable_task_packing import (
     _sha256_file,
     audit_task_database,
 )
-from .tokenizer import NativeTokenizerBinding
+from .tokenizer import NativeTokenizerBinding, _load_owned_tokenizers
 
 
 CURRICULUM_SCHEMA = "bosscrafts-codex-final-code-curriculum-v1"
@@ -304,7 +305,8 @@ def _load_completed_shard(path: Path, expected: dict[str, str]) -> ShardBuildSta
         ).fetchone()
     finally:
         connection.close()
-    assert counts is not None
+    if counts is None:
+        raise ValueError("CodeXGLUE shard database aggregate query returned no row")
     return ShardBuildStatus(
         database_path=str(path),
         source_path=metadata["source_path"],
@@ -324,15 +326,15 @@ def _build_shard_worker(
     source_path_text: str,
     destination_text: str,
     tokenizer_path_text: str,
-    structural_ids: dict[str, int],
+    structural_ids: Mapping[str, int],
     binding_sha256: str,
     tokenizer_sha256: str,
     humaneval_path_text: str,
     max_sequence: int,
     batch_size: int,
 ) -> ShardBuildStatus:
-    import pyarrow.parquet as parquet
-    import tokenizers
+    import pyarrow.parquet as parquet  # type: ignore[import-untyped]
+    tokenizers = _load_owned_tokenizers()
 
     if tokenizers.__version__ != "0.23.2":
         raise RuntimeError("CodeX curriculum requires tokenizers 0.23.2")
@@ -393,7 +395,11 @@ def _build_shard_worker(
             for start in range(0, len(prompts), batch_size):
                 raw_batch: list[tuple[int, str, str, ExtractedCode, str]] = []
                 for local_index, (prompt, output) in enumerate(
-                    zip(prompts[start : start + batch_size], outputs[start : start + batch_size])
+                    zip(
+                        prompts[start : start + batch_size],
+                        outputs[start : start + batch_size],
+                        strict=True,
+                    )
                 ):
                     source_row_index = row_offset + start + local_index
                     if type(prompt) is not str or type(output) is not str or not prompt or not output:
@@ -435,7 +441,7 @@ def _build_shard_worker(
                 code_encodings = tokenizer.encode_batch([item[3].code for item in raw_batch])
                 admitted_before_batch = admitted
                 for item, prompt_encoding, code_encoding in zip(
-                    raw_batch, prompt_encodings, code_encodings
+                    raw_batch, prompt_encodings, code_encodings, strict=True
                 ):
                     source_row_index, prompt, output, extracted, content_sha256 = item
                     if any(
