@@ -58,6 +58,13 @@ def _case_body(category: str, index: int) -> dict[str, object]:
             "language": language,
             "family": family,
         }
+        if category == "execution_correctness":
+            case.update(
+                {
+                    "stdin": f"{index}\n",
+                    "expected_stdout": f"{index + 1}\n",
+                }
+            )
     elif category == "ordinary_instruction":
         case_kind = "ifeval_instruction"
         case = {
@@ -220,6 +227,38 @@ def test_rejects_mixed_test_database_lineage_and_repeated_packed_tasks(
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="repeats a packed task"):
+        build_category_case_inventory(case_files)
+
+
+def test_execution_correctness_requires_bounded_frozen_oracle(
+    tmp_path: Path,
+) -> None:
+    case_files = _write_case_files(tmp_path)
+    execution_path = case_files["execution_correctness"]
+    records = [json.loads(line) for line in execution_path.read_text().splitlines()]
+    records[0]["case"].pop("expected_stdout")
+    body = {key: value for key, value in records[0].items() if key != "example_id"}
+    records[0]["example_id"] = hashlib.sha256(_canonical(body)).hexdigest()
+    records.sort(key=lambda record: record["example_id"])
+    execution_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="fields"):
+        build_category_case_inventory(case_files)
+
+    case_files = _write_case_files(tmp_path)
+    execution_path = case_files["execution_correctness"]
+    records = [json.loads(line) for line in execution_path.read_text().splitlines()]
+    records[0]["case"]["stdin"] = "x" * (16 * 1024 + 1)
+    body = {key: value for key, value in records[0].items() if key != "example_id"}
+    records[0]["example_id"] = hashlib.sha256(_canonical(body)).hexdigest()
+    records.sort(key=lambda record: record["example_id"])
+    execution_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="oracle"):
         build_category_case_inventory(case_files)
 
 

@@ -24,10 +24,12 @@ from .model_acceptance import (
     MINIMUM_CATEGORY_EXAMPLES,
 )
 
-CATEGORY_CASE_SCHEMA = "bosscrafts-model-category-case-v2"
+CATEGORY_CASE_SCHEMA = "bosscrafts-model-category-case-v3"
 CATEGORY_CASE_BUNDLE_SCHEMA = "bosscrafts-model-category-case-bundle-v1"
 MAX_CATEGORY_CASE_FILE_BYTES = 128 * 1024 * 1024
 MAX_CATEGORY_CASE_BUNDLE_MANIFEST_BYTES = 16 * 1024 * 1024
+MAX_EXECUTION_STDIN_BYTES = 16 * 1024
+MAX_EXECUTION_STDOUT_BYTES = 64 * 1024
 _BUNDLE_INVENTORY_FILE = "inventory.json"
 _BUNDLE_MANIFEST_FILE = "manifest.json"
 _PACKED_CATEGORIES = {
@@ -178,6 +180,8 @@ def _validate_packed_case(category: str, case: dict[str, object]) -> str:
     }
     if category != "tokenizer_fidelity":
         required.add("family")
+    if category == "execution_correctness":
+        required.update({"stdin", "expected_stdout"})
     if set(case) != required:
         raise ValueError(f"{category} packed case fields are invalid")
     if (
@@ -194,6 +198,16 @@ def _validate_packed_case(category: str, case: dict[str, object]) -> str:
     }.get(category)
     if expected_family is not None and case.get("family") != expected_family:
         raise ValueError(f"{category} packed case family is invalid")
+    if category == "execution_correctness":
+        stdin = case.get("stdin")
+        expected_stdout = case.get("expected_stdout")
+        if (
+            type(stdin) is not str
+            or len(stdin.encode("utf-8")) > MAX_EXECUTION_STDIN_BYTES
+            or type(expected_stdout) is not str
+            or len(expected_stdout.encode("utf-8")) > MAX_EXECUTION_STDOUT_BYTES
+        ):
+            raise ValueError("execution_correctness oracle is invalid")
     return str(case["language"])
 
 

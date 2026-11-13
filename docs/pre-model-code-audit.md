@@ -204,6 +204,15 @@ actionable defect after the repairs and gates below.
     that receipt, and final acceptance independently revalidates its complete
     lineage. The runner and receipt contract are regression-tested; a real
     production receipt still requires the final frozen category-case bundle.
+23. Execution-correctness cases froze only a packed task reference while the
+    acceptance metric claimed exact expected output. No stdin or output oracle
+    existed in the content-addressed case, so a later caller could author the
+    result without an executable ground truth. Category Case V3 now requires
+    every execution case to preserve bounded UTF-8 stdin and exact expected
+    stdout inside the hashed case payload. Missing, extra or oversized oracle
+    fields fail before inventory publication. The complete regression passes
+    with the stricter contract; the execution runner and its checkpoint-bound
+    receipt remain the next implementation step.
 
 ## Boundaries
 
@@ -227,7 +236,7 @@ actionable defect after the repairs and gates below.
 The latest repair batch has no regression in the executed source and integration
 gates, but the exhaustive review remains active and CodeRabbit review remains
 pending authentication. The ordinary-instruction runner is executable and
-audited. The exact current tree passes 608 tests and 195 subtests, along with
+audited. The exact current tree passes 609 tests and 195 subtests, along with
 Ruff and strict mypy across 76 source files. The regression receipt path is now
 implemented and mandatory, but its fixed worker must still be exercised from a
 clean committed tree. Tokenizer fidelity is also executable and receipt-bound,
@@ -242,5 +251,11 @@ evidence. That smoke has now executed against the preserved incomplete V8
 checkpoint: the current runtime loaded its verified real weights on the RTX
 3070, generated a correctly framed native BCNLT response, and used about 1.10
 GB of allocated VRAM, but its decoded instruction response was invalid. The
-result is recorded in `docs/mk10-v8-readonly-smoke-20261113.md`. This record is
-not evidence that a model has been trained, promoted, or improved.
+result is recorded in `docs/mk10-v8-readonly-smoke-20261113.md`. The recovered
+V12 checkpoint was also hash-preserved and executed with its exact historical
+schema-v2 runtime: it remained incomplete, produced 0/4 exact instruction
+matches and 0/12 exact clean-core matches, and failed promotion-quality
+protocol rates. Its evidence and non-promotion decision are recorded in
+`docs/v12-recovery-diagnostic-20261113.md`. Neither diagnostic is evidence that
+a model has been trained, promoted, or improved. The exact current tree passes
+609 tests and 195 subtests.
