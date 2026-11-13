@@ -7,6 +7,7 @@ import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
+from contextlib import suppress
 from pathlib import Path
 
 from .bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
@@ -25,6 +26,13 @@ _RESPONSE_KEYS = {
     "root_node_type",
     "witnesses",
 }
+
+
+def _close_process_streams(process: subprocess.Popen[bytes]) -> None:
+    for stream in (process.stdin, process.stdout, process.stderr):
+        if stream is not None:
+            with suppress(OSError):
+                stream.close()
 
 
 class RawAstWitnessClient:
@@ -48,6 +56,7 @@ class RawAstWitnessClient:
         if process is not None and process.poll() is None:
             return process
         if process is not None:
+            _close_process_streams(process)
             self._process = None
         process = subprocess.Popen(
             [str(_PYTHON_313), "-I", str(_SIDECAR), "--serve"],
@@ -59,6 +68,7 @@ class RawAstWitnessClient:
         if process.stdin is None or process.stdout is None or process.stderr is None:
             process.kill()
             process.wait()
+            _close_process_streams(process)
             raise RuntimeError("raw AST witness sidecar pipes are unavailable")
         self._process = process
         return process
@@ -68,12 +78,13 @@ class RawAstWitnessClient:
         self._process = None
         if process is None:
             return b""
-        if process.poll() is None:
-            process.kill()
-        process.wait(timeout=5)
-        if process.stderr is None:
-            return b""
-        return process.stderr.read()
+        try:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=5)
+            return process.stderr.read() if process.stderr is not None else b""
+        finally:
+            _close_process_streams(process)
 
     def close(self) -> None:
         with self._lock:
@@ -83,16 +94,17 @@ class RawAstWitnessClient:
             process = self._process
             self._process = None
             if process is not None:
-                if process.stdin is not None:
-                    try:
-                        process.stdin.close()
-                    except OSError:
-                        pass
                 try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=5)
+                    if process.stdin is not None:
+                        with suppress(OSError):
+                            process.stdin.close()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=5)
+                finally:
+                    _close_process_streams(process)
             self._reader.shutdown(wait=True, cancel_futures=True)
 
     def __enter__(self) -> "RawAstWitnessClient":
@@ -102,10 +114,8 @@ class RawAstWitnessClient:
         self.close()
 
     def __del__(self) -> None:
-        try:
+        with suppress(Exception):
             self.close()
-        except Exception:
-            pass
 
     def inspect(
         self,
@@ -160,10 +170,8 @@ class RawAstWitnessClient:
                 raw_response = pending.result(timeout=self._timeout_seconds)
             except FutureTimeoutError as exc:
                 self._stop_process()
-                try:
+                with suppress(Exception):
                     pending.result(timeout=5)
-                except Exception:
-                    pass
                 raise subprocess.TimeoutExpired(
                     str(_SIDECAR), self._timeout_seconds
                 ) from exc

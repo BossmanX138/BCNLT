@@ -188,9 +188,9 @@ def _load_verified_payload(
         type(key) is not str for key in optimizer_state
     ):
         raise ValueError("training checkpoint optimizer state is invalid")
-    if not isinstance(cpu_rng_state, torch.Tensor) or (
-        cpu_rng_state.dtype != torch.uint8 or cpu_rng_state.device.type != "cpu"
-    ):
+    if not isinstance(cpu_rng_state, torch.Tensor):
+        raise ValueError("training checkpoint CPU RNG state is invalid")
+    if cpu_rng_state.dtype != torch.uint8 or cpu_rng_state.device.type != "cpu":
         raise ValueError("training checkpoint CPU RNG state is invalid")
     if cuda_rng_states is not None and (
         type(cuda_rng_states) is not list

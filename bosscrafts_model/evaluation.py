@@ -4,17 +4,19 @@ from __future__ import annotations
 import json
 import math
 from collections import Counter, defaultdict
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterable, TypeGuard
+from typing import Protocol, TypeGuard, cast
 
 import torch
 from torch import nn
 
 from .model import masked_next_token_loss
 
-if TYPE_CHECKING:
-    from .resumable_task_packing import TaskExample
+
+class _TargetProjection(Protocol):
+    def __call__(self, ids: torch.Tensor, loss_start: int) -> torch.Tensor: ...
 
 
 @dataclass(frozen=True)
@@ -171,7 +173,7 @@ def _device_matches(actual: torch.device, requested: torch.device) -> bool:
 
 def evaluate_model(
     model: nn.Module,
-    examples: Iterable[TaskExample],
+    examples: Iterable[Mapping[str, object]],
     *,
     device: torch.device,
     max_examples: int | None = None,
@@ -206,8 +208,6 @@ def evaluate_model(
             for example in examples:
                 if max_examples is not None and example_count >= max_examples:
                     break
-                if type(example) is not dict:
-                    raise TypeError("evaluation examples must be dictionaries")
                 input_ids = example.get("input_ids")
                 loss_start = example.get("loss_start_index")
                 sampling_weight = example.get("sampling_weight")
@@ -230,7 +230,11 @@ def evaluate_model(
                 ids = torch.tensor([input_ids], dtype=torch.long, device=device)
                 target_projection = getattr(model, "forward_target_logits", None)
                 if callable(target_projection):
-                    target_logits = target_projection(ids, loss_start)
+                    target_logits = cast(_TargetProjection, target_projection)(
+                        ids, loss_start
+                    )
+                    if not isinstance(target_logits, torch.Tensor):
+                        raise TypeError("forward_target_logits must return a tensor")
                     expected_ids = ids[0, loss_start:]
                     loss = nn.functional.cross_entropy(
                         target_logits.reshape(-1, target_logits.shape[-1]),

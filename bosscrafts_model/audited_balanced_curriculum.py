@@ -159,7 +159,7 @@ class _PromptClaimIndex:
                 cross_split.add(key)
         return conflicting, cross_split
 
-    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+    def __exit__(self, _exc_type: object, _exc: object, _traceback: object) -> None:
         if self._connection is not None:
             self._connection.close()
             self._connection = None

@@ -578,7 +578,12 @@ class BCNLTSourcePipeline:
     def __enter__(self) -> "BCNLTSourcePipeline":
         return self
 
-    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
+    def __exit__(
+        self,
+        _exc_type: object,
+        _exc_value: object,
+        _traceback: object,
+    ) -> None:
         self.close()
 
     def _persistent_worker(self) -> _PersistentSidecarWorker:

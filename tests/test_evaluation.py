@@ -205,6 +205,38 @@ class EvaluationTests(unittest.TestCase):
         self.assertTrue(model.training)
         self.assertTrue(all(parameter.grad is None for parameter in model.parameters()))
 
+    def test_rejects_non_tensor_target_projection(self):
+        module = importlib.import_module("bosscrafts_model.evaluation")
+
+        class InvalidProjection(torch.nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.anchor = torch.nn.Parameter(torch.zeros(()))
+
+            def forward_target_logits(
+                self, ids: torch.Tensor, loss_start: int
+            ) -> object:
+                del ids, loss_start
+                return object()
+
+        example = {
+            "example_id": "a" * 64,
+            "language": "python",
+            "family": "code_to_semantic",
+            "input_ids": [1, 2, 3],
+            "loss_start_index": 1,
+            "sampling_weight": 1.0,
+        }
+
+        with self.assertRaisesRegex(
+            TypeError, "forward_target_logits must return a tensor"
+        ):
+            module.evaluate_model(
+                InvalidProjection(),
+                [example],
+                device=torch.device("cpu"),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

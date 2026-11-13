@@ -72,10 +72,15 @@ def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]
 
 def _load_request(raw: bytes | None = None) -> dict[str, object]:
     if raw is None:
-        raw = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
-    if len(raw) > MAX_REQUEST_BYTES:
+        request_bytes = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
+    else:
+        request_bytes = raw
+    if len(request_bytes) > MAX_REQUEST_BYTES:
         raise ValueError("request exceeds bounded transport")
-    payload = json.loads(raw.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys)
+    payload = json.loads(
+        request_bytes.decode("utf-8"),
+        object_pairs_hook=_reject_duplicate_keys,
+    )
     if type(payload) is not dict or set(payload) != {
         "protocol",
         "source",

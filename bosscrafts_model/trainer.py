@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Iterable
+from typing import Callable
 
 import torch
 from torch import nn
 
 from .model import masked_next_token_loss
-
-if TYPE_CHECKING:
-    from .resumable_task_packing import TaskExample
 
 
 @dataclass(frozen=True)
@@ -44,7 +42,7 @@ def _device_matches(actual: torch.device, requested: torch.device) -> bool:
 def run_training_steps(
     model: nn.Module,
     optimizer: torch.optim.Optimizer,
-    examples: Iterable[TaskExample],
+    examples: Iterable[Mapping[str, object]],
     *,
     device: torch.device,
     max_steps: int,
@@ -110,8 +108,6 @@ def run_training_steps(
         pending = 0
 
     for example in examples:
-        if type(example) is not dict:
-            raise TypeError("training examples must be dictionaries")
         example_id = example.get("example_id")
         input_ids = example.get("input_ids")
         loss_start = example.get("loss_start_index")

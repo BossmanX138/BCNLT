@@ -8,6 +8,7 @@ import subprocess
 import threading
 import time
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypedDict
@@ -548,6 +549,11 @@ def _run_bounded_process(
     )
     if process.stdin is None or process.stdout is None or process.stderr is None:
         process.kill()
+        process.wait(timeout=2)
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream is not None:
+                with suppress(OSError):
+                    stream.close()
         raise SandboxExecutionError("docker transport pipes are unavailable")
     stdout = bytearray()
     stderr = bytearray()
@@ -568,38 +574,53 @@ def _run_bounded_process(
         threading.Thread(target=drain, args=(process.stdout, stdout, max_stdout_bytes), daemon=True),
         threading.Thread(target=drain, args=(process.stderr, stderr, max_stderr_bytes), daemon=True),
     )
-    for reader in readers:
-        reader.start()
     try:
-        process.stdin.write(input_bytes)
-        process.stdin.close()
-    except (BrokenPipeError, OSError):
-        pass
-    deadline = time.monotonic() + timeout_seconds
-    timed_out = False
-    while process.poll() is None:
-        if limited.is_set():
+        for reader in readers:
+            reader.start()
+        try:
+            process.stdin.write(input_bytes)
+            process.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
+        deadline = time.monotonic() + timeout_seconds
+        timed_out = False
+        while process.poll() is None:
+            if limited.is_set():
+                process.kill()
+                break
+            if time.monotonic() >= deadline:
+                timed_out = True
+                process.kill()
+                break
+            time.sleep(0.01)
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
             process.kill()
-            break
-        if time.monotonic() >= deadline:
-            timed_out = True
-            process.kill()
-            break
-        time.sleep(0.01)
-    try:
-        process.wait(timeout=2)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=2)
-    for reader in readers:
-        reader.join(timeout=2)
-    return {
-        "returncode": process.returncode,
-        "stdout": bytes(stdout),
-        "stderr": bytes(stderr),
-        "timed_out": timed_out,
-        "output_limited": limited.is_set(),
-    }
+            process.wait(timeout=2)
+        for reader in readers:
+            reader.join(timeout=2)
+        if any(reader.is_alive() for reader in readers):
+            raise SandboxExecutionError("docker transport readers did not terminate")
+        return {
+            "returncode": process.returncode,
+            "stdout": bytes(stdout),
+            "stderr": bytes(stderr),
+            "timed_out": timed_out,
+            "output_limited": limited.is_set(),
+        }
+    finally:
+        if process.poll() is None:
+            with suppress(OSError):
+                process.kill()
+            with suppress(OSError, subprocess.TimeoutExpired):
+                process.wait(timeout=2)
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream is not None:
+                with suppress(OSError):
+                    stream.close()
+        for reader in readers:
+            reader.join(timeout=2)
 
 
 def _canonical_json(value: object) -> bytes:

@@ -54,6 +54,7 @@ class _TextExtractor(HTMLParser):
         self._ignored_depth = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        del attrs
         if tag.lower() in {"script", "style"}:
             self._ignored_depth += 1
         elif not self._ignored_depth and tag.lower() in {

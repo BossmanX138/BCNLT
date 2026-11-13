@@ -37,12 +37,23 @@ OBSERVED_SPEC_SHA256 = {
 
 
 class _SemanticSpec(Protocol):
-    semantic_spec_version: str
-    resolved_node_rules: tuple[Any, ...]
-    resolved_identifier_roles: tuple[Any, ...]
-    resolved_scope_rules: tuple[Any, ...]
-    resolved_uncertainty_rules: tuple[Any, ...]
-    resolved_excluded_node_types: tuple[str, ...]
+    @property
+    def semantic_spec_version(self) -> str: ...
+
+    @property
+    def resolved_node_rules(self) -> tuple[Any, ...]: ...
+
+    @property
+    def resolved_identifier_roles(self) -> tuple[Any, ...]: ...
+
+    @property
+    def resolved_scope_rules(self) -> tuple[Any, ...]: ...
+
+    @property
+    def resolved_uncertainty_rules(self) -> tuple[Any, ...]: ...
+
+    @property
+    def resolved_excluded_node_types(self) -> tuple[str, ...]: ...
 
 
 def sha256(path: Path) -> str:

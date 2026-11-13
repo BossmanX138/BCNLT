@@ -461,7 +461,9 @@ class TrainingCorpusFreezer:
         document_ids: set[str] = set()
         content_hashes: set[str] = set()
         for raw in raw_rows:
-            row = dict(zip(self._CATALOG_COLUMNS, raw, strict=True))
+            row: dict[str, Any] = dict(
+                zip(self._CATALOG_COLUMNS, raw, strict=True)
+            )
             required = [
                 row[column]
                 for column in self._CATALOG_COLUMNS

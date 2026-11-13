@@ -126,6 +126,9 @@ def main() -> int:
     after = model.embedding.weight[probe_token].detach().float()
     parameter_changed = not torch.equal(before, after)
     loss_value = float(loss.detach().float().item())
+    tokenizers_runtime_file = tokenizers.__file__
+    if tokenizers_runtime_file is None:
+        raise RuntimeError("tokenizers runtime does not expose its module path")
     payload = {
         "binding_sha256": binding.binding_sha256,
         "checkpoint_written": False,
@@ -147,7 +150,7 @@ def main() -> int:
         "route_rounds": len(routes),
         "sequence_length": ids.shape[1],
         "tokenizer_sha256": binding.tokenizer_sha256,
-        "tokenizers_runtime_path": str(Path(tokenizers.__file__).resolve()),
+        "tokenizers_runtime_path": str(Path(tokenizers_runtime_file).resolve()),
         "tokenizers_version": tokenizers.__version__,
         "trained_steps": 1,
         "training_ready": False,
