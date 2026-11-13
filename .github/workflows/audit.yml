@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: audit-${{ github.workflow }}-${{ github.ref }}
+  group: audit-${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -49,4 +49,4 @@ jobs:
         run: uv run --frozen python -m compileall -q bosscrafts_model scripts tests
 
       - name: Run the complete warning-strict regression
-        run: uv run --frozen pytest -W error -q
+        run: uv run --frozen python -m pytest -W error -q
