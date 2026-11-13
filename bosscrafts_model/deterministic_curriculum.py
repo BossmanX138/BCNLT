@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import sqlite3
+import tempfile
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -193,9 +195,15 @@ def derive_deterministic_curriculum(
         }
 
         destination.parent.mkdir(parents=True, exist_ok=True)
-        temporary = destination.with_name(f".{destination.name}.tmp")
-        if temporary.exists():
-            temporary.unlink()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary_handle = tempfile.NamedTemporaryFile(
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        )
+        temporary = Path(temporary_handle.name)
+        temporary_handle.close()
         output = sqlite3.connect(temporary)
         output.execute("PRAGMA journal_mode=DELETE")
         output.execute("PRAGMA synchronous=FULL")
@@ -302,11 +310,24 @@ def derive_deterministic_curriculum(
             raise
         else:
             output.close()
-            temporary.replace(destination)
     finally:
         source.close()
 
-    output_audit = audit_task_database(binding, destination)
+    try:
+        output_audit = audit_task_database(binding, temporary)
+        with temporary.open("r+b") as stream:
+            os.fsync(stream.fileno())
+        if destination.exists():
+            raise ValueError("destination task database already exists")
+        try:
+            os.link(temporary, destination)
+        except FileExistsError as error:
+            raise ValueError("destination task database already exists") from error
+    except BaseException:
+        if temporary.exists():
+            temporary.unlink()
+        raise
+    temporary.unlink()
     rendered_cells = {
         "|".join(cell): count for cell, count in sorted(cell_counts.items())
     }
