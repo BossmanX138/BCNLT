@@ -4,9 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import sys
-import tempfile
 from dataclasses import asdict
 from pathlib import Path
 
@@ -14,6 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from bosscrafts_model.immutable_artifacts import publish_new_files  # noqa: E402
 from bosscrafts_model.resumable_training_semantic_audit import (  # noqa: E402
     ResumableTrainingSemanticAudit,
 )
@@ -56,6 +55,7 @@ AUDIT_HOST_CODE_FILES = (
     "bosscrafts_model/runtime_identity.py",
     "bosscrafts_model/raw_ast_witness.py",
     "bosscrafts_model/raw_ast_witness_sidecar.py",
+    "bosscrafts_model/immutable_artifacts.py",
 )
 
 
@@ -103,21 +103,23 @@ def _freeze_code_manifest(
         if path.read_bytes() != encoded:
             raise ValueError("audit host code manifest changed across resume")
         return digest
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    temporary = Path(temporary_name)
     try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(encoded)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
+        publish_new_files(
+            ((path, encoded),),
+            artifact_label="audit host code manifest",
+        )
+    except ValueError:
+        if not path.is_file() or path.read_bytes() != encoded:
+            raise
     return digest
+
+
+def _verify_host_code_inventory_unchanged(
+    expected: list[dict[str, object]],
+    actual: list[dict[str, object]],
+) -> None:
+    if actual != expected:
+        raise RuntimeError("audit host code changed during invocation")
 
 
 def main() -> int:
@@ -150,6 +152,7 @@ def main() -> int:
         if arguments.status_only
         else audit.process(max_documents=arguments.max_documents)
     )
+    _verify_host_code_inventory_unchanged(inventory, audit_host_code_inventory())
     print(
         json.dumps(
             {

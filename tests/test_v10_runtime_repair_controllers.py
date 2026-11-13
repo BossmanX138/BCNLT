@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from scripts import audit_v10_task_loss_masks_v3_runtime_repair as loss_masks
 from scripts import (
     materialize_v10_evaluation_eligibility_v3_runtime_repair as eval_eligibility,
@@ -144,3 +146,26 @@ def test_loss_mask_inputs_are_exact_evaluation_packing_defaults() -> None:
     assert loss_masks.DEFAULT_TEST == (
         root / "bcnlt-v10-frozen-test-tasks-v3-runtime-repair" / "tasks.sqlite"
     )
+
+
+def test_v3_audit_code_manifest_is_immutable_and_idempotent(tmp_path: Path) -> None:
+    manifest = tmp_path / "host-code-manifest.json"
+    inventory = [{"path": "example.py", "bytes": 3, "sha256": "a" * 64}]
+    identity = train_audit.audit_host_code_identity(inventory)
+
+    first = train_audit._freeze_code_manifest(manifest, inventory, identity)
+    assert train_audit._freeze_code_manifest(manifest, inventory, identity) == first
+
+    manifest.write_text("different\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="changed across resume"):
+        train_audit._freeze_code_manifest(manifest, inventory, identity)
+    assert manifest.read_text(encoding="utf-8") == "different\n"
+
+
+def test_v3_audit_rejects_host_code_change_during_invocation() -> None:
+    before = [{"path": "example.py", "bytes": 3, "sha256": "a" * 64}]
+    after = [{"path": "example.py", "bytes": 4, "sha256": "b" * 64}]
+
+    train_audit._verify_host_code_inventory_unchanged(before, list(before))
+    with pytest.raises(RuntimeError, match="changed during invocation"):
+        train_audit._verify_host_code_inventory_unchanged(before, after)

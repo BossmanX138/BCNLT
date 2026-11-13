@@ -30,6 +30,7 @@ from scripts.run_v10_training_semantic_audit_v3_runtime_repair import (  # noqa:
     _canonical,
     _freeze_code_manifest,
     _sha256_file,
+    _verify_host_code_inventory_unchanged,
 )
 
 AUDIT_HOST_CODE_FILES = (
@@ -46,6 +47,7 @@ AUDIT_HOST_CODE_FILES = (
     "bosscrafts_model/runtime_identity.py",
     "bosscrafts_model/raw_ast_witness.py",
     "bosscrafts_model/raw_ast_witness_sidecar.py",
+    "bosscrafts_model/immutable_artifacts.py",
 )
 
 
@@ -120,6 +122,7 @@ def main() -> int:
         if arguments.status_only
         else audit.process(max_documents=arguments.max_documents)
     )
+    _verify_host_code_inventory_unchanged(inventory, audit_host_code_inventory())
     print(
         json.dumps(
             {
