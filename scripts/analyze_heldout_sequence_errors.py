@@ -203,7 +203,7 @@ def main() -> int:
                 )
 
     payload = {
-        "schema_version": "bosscrafts-heldout-sequence-error-analysis-v1",
+        "schema_version": "bosscrafts-heldout-sequence-error-analysis-v2",
         "analysis_complete": processed == len(examples),
         "split": arguments.split,
         "example_count": processed,
@@ -211,6 +211,7 @@ def main() -> int:
         "device": device.type,
         "dtype": str(dtype).removeprefix("torch."),
         "checkpoint_lineage_verified": True,
+        "checkpoint_sha256": state.checkpoint_sha256,
         "checkpoint_training_complete": (
             state.epoch_index >= state.target_epochs
             and state.cursor_after_example_id is None

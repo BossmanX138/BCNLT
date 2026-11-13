@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from bosscrafts_model.generation_artifacts import (
+    GENERATION_GATE_SCHEMA,
     HUMANEVAL_GENERATION_SCHEMA,
     clean_python_completion,
     load_generation_gate_records,
@@ -24,7 +25,7 @@ def _write_jsonl(path: Path, value: dict[str, object]) -> None:
 
 def _humaneval_record() -> dict[str, object]:
     return {
-        "schema_version": "bosscrafts-openai-humaneval-generation-v3",
+        "schema_version": HUMANEVAL_GENERATION_SCHEMA,
         "run_identity_sha256": RUN_IDENTITY,
         "task_index": 0,
         "task_id": "HumanEval/0",
@@ -46,7 +47,7 @@ def _humaneval_record() -> dict[str, object]:
 
 def _generation_gate_record() -> dict[str, object]:
     return {
-        "schema_version": "bosscrafts-strict-generation-gate-v1",
+        "schema_version": GENERATION_GATE_SCHEMA,
         "run_identity_sha256": RUN_IDENTITY,
         "example_id": "example-1",
         "family": "instruction_to_code",

@@ -210,10 +210,19 @@ def main() -> int:
     binding = NativeTokenizerBinding.load()
     database_audit = audit_task_database(binding, database)
     config = bound_native_65k_config(binding)
-    checkpoint_sha256 = _sha256(checkpoint)
+    device = torch.device(arguments.device)
+    dtype = torch.float32 if arguments.dtype == "float32" else torch.bfloat16
+    model = EngineeringModel(config).to(device=device, dtype=dtype).eval()
+    state = load_model_checkpoint_for_inference(
+        checkpoint,
+        model,
+        expected_task_database_identity_sha256=database_audit.database_identity_sha256,
+        expected_binding_sha256=binding.binding_sha256,
+        expected_model_fingerprint=config.fingerprint(),
+    )
     run_spec = {
         "schema_version": SCHEMA,
-        "checkpoint_sha256": checkpoint_sha256,
+        "checkpoint_sha256": state.checkpoint_sha256,
         "dataset_sha256": dataset_sha256,
         "database_identity_sha256": database_audit.database_identity_sha256,
         "device": arguments.device,
@@ -250,17 +259,6 @@ def main() -> int:
         prompt_protocol=arguments.prompt_protocol,
         maximum_new_tokens=arguments.max_new_tokens,
         maximum_sequence=config.max_sequence,
-    )
-
-    device = torch.device(arguments.device)
-    dtype = torch.float32 if arguments.dtype == "float32" else torch.bfloat16
-    model = EngineeringModel(config).to(device=device, dtype=dtype).eval()
-    state = load_model_checkpoint_for_inference(
-        checkpoint,
-        model,
-        expected_task_database_identity_sha256=database_audit.database_identity_sha256,
-        expected_binding_sha256=binding.binding_sha256,
-        expected_model_fingerprint=config.fingerprint(),
     )
 
     for index, task in enumerate(tasks):

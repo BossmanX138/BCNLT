@@ -99,6 +99,7 @@ def main() -> int:
     payload = {
         "bundle_lineage_verified": True,
         "bundle_sha256": state.bundle_sha256,
+        "source_checkpoint_sha256": state.source_checkpoint_sha256,
         "checkpoint_step": state.checkpoint_step,
         "device": device.type,
         "dtype": arguments.dtype,

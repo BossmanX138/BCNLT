@@ -61,10 +61,12 @@ class InferenceBundleTests(unittest.TestCase):
                 expected_task_database_identity_sha256="b" * 64,
                 expected_model_fingerprint=config.fingerprint(),
             )
+            checkpoint_sha256 = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
             self.assertTrue((bundle / "manifest.json").is_file())
             self.assertTrue((bundle / "model.pt").is_file())
             self.assertTrue((bundle / "tokenizer" / "binding.json").is_file())
             self.assertEqual(status.checkpoint_step, 4)
+            self.assertEqual(status.source_checkpoint_sha256, checkpoint_sha256)
             self.assertRegex(status.bundle_sha256, r"^[0-9a-f]{64}$")
 
             restored = EngineeringModel(config)
@@ -77,6 +79,7 @@ class InferenceBundleTests(unittest.TestCase):
                 expected_bundle_sha256=status.bundle_sha256,
             )
             self.assertEqual(state.checkpoint_step, 4)
+            self.assertEqual(state.source_checkpoint_sha256, checkpoint_sha256)
             self.assertEqual(state.training_plan_sha256, "c" * 64)
             self.assertTrue(
                 torch.equal(model.embedding.weight, restored.embedding.weight)

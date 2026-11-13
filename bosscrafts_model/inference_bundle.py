@@ -15,7 +15,7 @@ from .model import EngineeringModel
 from .tokenizer import NativeTokenizerBinding
 from .training_checkpoint import load_model_checkpoint_for_inference
 
-INFERENCE_BUNDLE_SCHEMA = "bosscrafts-inference-bundle-v1"
+INFERENCE_BUNDLE_SCHEMA = "bosscrafts-inference-bundle-v2"
 MODEL_FILE = "model.pt"
 MANIFEST_FILE = "manifest.json"
 TOKENIZER_DIRECTORY = "tokenizer"
@@ -114,6 +114,7 @@ class InferenceBundleStatus:
     bundle_sha256: str
     model_file_sha256: str
     model_file_bytes: int
+    source_checkpoint_sha256: str
     checkpoint_step: int
     task_database_identity_sha256: str
     model_fingerprint: str
@@ -123,6 +124,7 @@ class InferenceBundleStatus:
 class InferenceBundleState:
     bundle_path: Path
     bundle_sha256: str
+    source_checkpoint_sha256: str
     checkpoint_step: int
     epoch_index: int
     target_epochs: int
@@ -173,7 +175,7 @@ def export_inference_bundle(
     if len(parameter_dtypes) != 1:
         raise ValueError("model parameters do not have one export dtype")
     parameter_dtype = str(next(iter(parameter_dtypes))).removeprefix("torch.")
-    checkpoint_sha256 = _sha256_file(checkpoint)
+    checkpoint_sha256 = state.checkpoint_sha256
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(
@@ -257,6 +259,7 @@ def export_inference_bundle(
         bundle_sha256=bundle_sha256,
         model_file_sha256=model_file_sha256,
         model_file_bytes=model_file_bytes,
+        source_checkpoint_sha256=checkpoint_sha256,
         checkpoint_step=state.step,
         task_database_identity_sha256=state.task_database_identity_sha256,
         model_fingerprint=state.model_fingerprint,
@@ -425,6 +428,7 @@ def load_inference_bundle(
     return InferenceBundleState(
         bundle_path=root,
         bundle_sha256=actual_bundle_sha256,
+        source_checkpoint_sha256=str(payload["source_checkpoint_sha256"]),
         checkpoint_step=checkpoint_step,
         epoch_index=epoch_index,
         target_epochs=target_epochs,

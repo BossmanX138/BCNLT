@@ -18,8 +18,8 @@ from .inference_protocol import (
 from .tokenizer import NativeTokenizerBinding
 
 MAX_GENERATION_JSONL_LINE_BYTES = 16 * 1024 * 1024
-HUMANEVAL_GENERATION_SCHEMA = "bosscrafts-openai-humaneval-generation-v3"
-GENERATION_GATE_SCHEMA = "bosscrafts-strict-generation-gate-v1"
+HUMANEVAL_GENERATION_SCHEMA = "bosscrafts-openai-humaneval-generation-v4"
+GENERATION_GATE_SCHEMA = "bosscrafts-strict-generation-gate-v2"
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _HUMANEVAL_TASK_ID = re.compile(r"HumanEval/(0|[1-9][0-9]*)")
 

@@ -489,6 +489,10 @@ class TrainerTests(unittest.TestCase):
             self.assertEqual(inference_payload["new_token_count"], 2)
             self.assertEqual(inference_payload["device"], "cpu")
             self.assertTrue(inference_payload["checkpoint_lineage_verified"])
+            self.assertEqual(
+                inference_payload["checkpoint_sha256"],
+                hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
+            )
             self.assertTrue(inference_payload["checkpoint_training_complete"])
             self.assertEqual(json.loads(inference_output.read_text()), inference_payload)
             original_inference = inference_output.read_bytes()
@@ -569,6 +573,10 @@ class TrainerTests(unittest.TestCase):
             self.assertEqual(evaluation_payload["example_count"], 2)
             self.assertTrue(math.isfinite(evaluation_payload["mean_loss"]))
             self.assertTrue(evaluation_payload["checkpoint_lineage_verified"])
+            self.assertEqual(
+                evaluation_payload["checkpoint_sha256"],
+                hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
+            )
             self.assertTrue(evaluation_payload["checkpoint_training_complete"])
             self.assertTrue(evaluation_payload["evaluation_complete"])
             self.assertIn("target_token_accuracy", evaluation_payload)

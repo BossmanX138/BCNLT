@@ -45,7 +45,6 @@ from bosscrafts_model.model import EngineeringModel
 from bosscrafts_model.resumable_task_packing import (
     ResumableTaskDataset,
     _canonical_json,
-    _sha256_file,
     audit_task_database,
 )
 from bosscrafts_model.tokenizer import NativeTokenizerBinding, bound_native_65k_config
@@ -273,12 +272,30 @@ def main() -> int:
         maximum_new_tokens=arguments.max_new_tokens,
         maximum_sequence=config.max_sequence,
     )
+    device = torch.device(arguments.device)
+    dtype = torch.float32 if arguments.dtype == "float32" else torch.bfloat16
+    model = EngineeringModel(config).to(device=device, dtype=dtype).eval()
+    state = load_model_checkpoint_for_inference(
+        checkpoint,
+        model,
+        expected_task_database_identity_sha256=(
+            checkpoint_audit.database_identity_sha256
+        ),
+        expected_binding_sha256=binding.binding_sha256,
+        expected_model_fingerprint=config.fingerprint(),
+    )
+    checkpoint_training_complete = (
+        state.epoch_index >= state.target_epochs
+        and state.cursor_after_example_id is None
+    )
+    if not checkpoint_training_complete and not arguments.allow_incomplete_probe:
+        raise ValueError("strict generation requires a completed checkpoint")
     run_spec: dict[str, object] = {
         "schema_version": SCHEMA,
         "binding_sha256": binding.binding_sha256,
         "tokenizer_sha256": binding.tokenizer_sha256,
         "model_fingerprint": config.fingerprint(),
-        "checkpoint_sha256": _sha256_file(checkpoint),
+        "checkpoint_sha256": state.checkpoint_sha256,
         "checkpoint_task_database_identity_sha256": (
             checkpoint_audit.database_identity_sha256
         ),
@@ -321,25 +338,6 @@ def main() -> int:
         records,
         maximum_new_tokens=arguments.max_new_tokens,
     )
-
-    device = torch.device(arguments.device)
-    dtype = torch.float32 if arguments.dtype == "float32" else torch.bfloat16
-    model = EngineeringModel(config).to(device=device, dtype=dtype).eval()
-    state = load_model_checkpoint_for_inference(
-        checkpoint,
-        model,
-        expected_task_database_identity_sha256=(
-            checkpoint_audit.database_identity_sha256
-        ),
-        expected_binding_sha256=binding.binding_sha256,
-        expected_model_fingerprint=config.fingerprint(),
-    )
-    checkpoint_training_complete = (
-        state.epoch_index >= state.target_epochs
-        and state.cursor_after_example_id is None
-    )
-    if not checkpoint_training_complete and not arguments.allow_incomplete_probe:
-        raise ValueError("strict generation requires a completed checkpoint")
 
     for case in cases:
         example_id = str(case["example_id"])
