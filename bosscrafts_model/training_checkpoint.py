@@ -81,6 +81,83 @@ def _state_values_are_finite(value: object) -> bool:
     return True
 
 
+def _validated_model_state(
+    model: nn.Module,
+    payload: dict[str, object],
+    *,
+    require_dtype: bool,
+) -> dict[str, Any]:
+    model_state = cast(dict[str, Any], payload["model_state_dict"])
+    current_state = model.state_dict()
+    if set(model_state) != set(current_state):
+        raise ValueError("training checkpoint model state is incompatible")
+    for name, current in current_state.items():
+        incoming = model_state[name]
+        if (
+            not isinstance(incoming, torch.Tensor)
+            or not isinstance(current, torch.Tensor)
+            or incoming.shape != current.shape
+            or (require_dtype and incoming.dtype != current.dtype)
+            or incoming.layout != current.layout
+        ):
+            raise ValueError("training checkpoint model state is incompatible")
+    return model_state
+
+
+def _validated_optimizer_state(
+    optimizer: torch.optim.Optimizer, payload: dict[str, object]
+) -> dict[str, Any]:
+    optimizer_state = cast(dict[str, Any], payload["optimizer_state_dict"])
+    saved_groups = optimizer_state["param_groups"]
+    saved_states = optimizer_state["state"]
+    current_groups = optimizer.state_dict()["param_groups"]
+    actual_groups = optimizer.param_groups
+    if (
+        len(saved_groups) != len(current_groups)
+        or len(saved_groups) != len(actual_groups)
+    ):
+        raise ValueError("training checkpoint optimizer state is incompatible")
+    parameter_by_saved_id: dict[int, torch.Tensor] = {}
+    for saved_group, current_group, actual_group in zip(
+        saved_groups, current_groups, actual_groups, strict=True
+    ):
+        if (
+            type(saved_group) is not dict
+            or set(saved_group) != set(current_group)
+            or type(saved_group.get("params")) is not list
+            or type(actual_group.get("params")) is not list
+            or len(saved_group["params"]) != len(actual_group["params"])
+        ):
+            raise ValueError("training checkpoint optimizer state is incompatible")
+        for saved_id, parameter in zip(
+            saved_group["params"], actual_group["params"], strict=True
+        ):
+            if (
+                type(saved_id) is not int
+                or saved_id in parameter_by_saved_id
+                or not isinstance(parameter, torch.Tensor)
+            ):
+                raise ValueError("training checkpoint optimizer state is incompatible")
+            parameter_by_saved_id[saved_id] = parameter
+    if any(
+        type(saved_id) is not int
+        or saved_id not in parameter_by_saved_id
+        or type(state) is not dict
+        for saved_id, state in saved_states.items()
+    ):
+        raise ValueError("training checkpoint optimizer state is incompatible")
+    for saved_id, state in saved_states.items():
+        parameter = parameter_by_saved_id[saved_id]
+        if any(
+            isinstance(value, torch.Tensor)
+            and value.numel() != 1
+            and value.shape != parameter.shape
+            for value in state.values()
+        ):
+            raise ValueError("training checkpoint optimizer state is incompatible")
+    return optimizer_state
+
+
 @dataclass(frozen=True)
 class TrainingCheckpointState:
     checkpoint_sha256: str
@@ -208,10 +285,13 @@ def load_training_checkpoint(
         raise ValueError("training checkpoint epoch plan mismatch")
     if state.training_plan_sha256 != expected_training_plan_sha256:
         raise ValueError("training checkpoint training plan mismatch")
-    model.load_state_dict(
-        cast(dict[str, Any], payload["model_state_dict"]), strict=True
-    )
-    optimizer.load_state_dict(cast(dict[str, Any], payload["optimizer_state_dict"]))
+    model_state = _validated_model_state(model, payload, require_dtype=True)
+    optimizer_state = _validated_optimizer_state(optimizer, payload)
+    try:
+        optimizer.load_state_dict(optimizer_state)
+        model.load_state_dict(model_state, strict=True)
+    except Exception as error:
+        raise ValueError("training checkpoint state could not be restored") from error
     torch.set_rng_state(cast(torch.Tensor, payload["cpu_rng_state"]))
     cuda_states = payload.get("cuda_rng_state_all")
     if cuda_states is not None and torch.cuda.is_available():
@@ -233,9 +313,11 @@ def load_model_checkpoint_for_inference(
         expected_binding_sha256=expected_binding_sha256,
         expected_model_fingerprint=expected_model_fingerprint,
     )
-    model.load_state_dict(
-        cast(dict[str, Any], payload["model_state_dict"]), strict=True
-    )
+    model_state = _validated_model_state(model, payload, require_dtype=False)
+    try:
+        model.load_state_dict(model_state, strict=True)
+    except Exception as error:
+        raise ValueError("training checkpoint model state could not be restored") from error
     return state
 
 

@@ -176,6 +176,101 @@ class TrainingCheckpointTests(unittest.TestCase):
                             expected_training_plan_sha256="d" * 64,
                         )
 
+    def test_rejects_incompatible_state_before_mutating_model(self):
+        module = importlib.import_module("bosscrafts_model.training_checkpoint")
+        config = ModelConfig.tiny()
+        source_model = EngineeringModel(config)
+        source_optimizer = torch.optim.AdamW(source_model.parameters(), lr=0.001)
+        ids = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
+        loss = next_token_loss(source_model(ids)[0], ids)
+        loss.backward()
+        source_optimizer.step()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.pt"
+            module.save_training_checkpoint(
+                source,
+                source_model,
+                source_optimizer,
+                step=1,
+                examples_seen=1,
+                epoch_index=0,
+                target_epochs=1,
+                last_example_id="c" * 64,
+                cursor_after_example_id="c" * 64,
+                task_database_identity_sha256="a" * 64,
+                binding_sha256="b" * 64,
+                model_fingerprint=config.fingerprint(),
+                training_plan_sha256="d" * 64,
+            )
+            valid = torch.load(source, map_location="cpu", weights_only=True)
+
+            target_model = EngineeringModel(config)
+            target_optimizer = torch.optim.AdamW(target_model.parameters(), lr=0.001)
+            before = {
+                name: tensor.detach().clone()
+                for name, tensor in target_model.state_dict().items()
+            }
+
+            bad_model = dict(valid)
+            bad_model_state = dict(valid["model_state_dict"])
+            first_name = next(iter(bad_model_state))
+            first_tensor = bad_model_state[first_name]
+            bad_model_state[first_name] = torch.zeros(
+                first_tensor.numel() + 1,
+                dtype=first_tensor.dtype,
+            )
+            bad_model["model_state_dict"] = bad_model_state
+            bad_model_path = root / "bad-model.pt"
+            torch.save(bad_model, bad_model_path)
+            with self.assertRaisesRegex(ValueError, "model state is incompatible"):
+                module.load_training_checkpoint(
+                    bad_model_path,
+                    target_model,
+                    target_optimizer,
+                    expected_task_database_identity_sha256="a" * 64,
+                    expected_binding_sha256="b" * 64,
+                    expected_model_fingerprint=config.fingerprint(),
+                    expected_target_epochs=1,
+                    expected_training_plan_sha256="d" * 64,
+                )
+            for name, tensor in target_model.state_dict().items():
+                self.assertTrue(torch.equal(tensor, before[name]), name)
+
+            inference_model = EngineeringModel(config).to(dtype=torch.bfloat16)
+            inference_state = module.load_model_checkpoint_for_inference(
+                source,
+                inference_model,
+                expected_task_database_identity_sha256="a" * 64,
+                expected_binding_sha256="b" * 64,
+                expected_model_fingerprint=config.fingerprint(),
+            )
+            self.assertRegex(inference_state.checkpoint_sha256, r"^[0-9a-f]{64}$")
+            for tensor in inference_model.state_dict().values():
+                self.assertEqual(tensor.dtype, torch.bfloat16)
+
+            bad_optimizer = dict(valid)
+            bad_optimizer_state = dict(valid["optimizer_state_dict"])
+            bad_groups = [dict(group) for group in bad_optimizer_state["param_groups"]]
+            bad_groups[0]["params"] = bad_groups[0]["params"][:-1]
+            bad_optimizer_state["param_groups"] = bad_groups
+            bad_optimizer["optimizer_state_dict"] = bad_optimizer_state
+            bad_optimizer_path = root / "bad-optimizer.pt"
+            torch.save(bad_optimizer, bad_optimizer_path)
+            with self.assertRaisesRegex(ValueError, "optimizer state is incompatible"):
+                module.load_training_checkpoint(
+                    bad_optimizer_path,
+                    target_model,
+                    target_optimizer,
+                    expected_task_database_identity_sha256="a" * 64,
+                    expected_binding_sha256="b" * 64,
+                    expected_model_fingerprint=config.fingerprint(),
+                    expected_target_epochs=1,
+                    expected_training_plan_sha256="d" * 64,
+                )
+            for name, tensor in target_model.state_dict().items():
+                self.assertTrue(torch.equal(tensor, before[name]), name)
+
     def test_rejects_incoherent_resume_cursor_and_unexpected_fields(self):
         module = importlib.import_module("bosscrafts_model.training_checkpoint")
         config = ModelConfig.tiny()
