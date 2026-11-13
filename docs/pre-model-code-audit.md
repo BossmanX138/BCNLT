@@ -20,9 +20,9 @@ actionable defect after the repairs and gates below.
 - The resulting parser runtime identity is
   `c1ca753bf4d1dbabf841fdcd120e5c3eec026b7211ca5c0f08d066074acee938`.
 - Ruff passed every changed Python file.
-- Mypy passed all 64 configured core source files and the changed orchestration
+- Mypy passed all 65 configured core source files and the changed orchestration
   scripts in strict mode.
-- The latest complete regression passed: 508 tests and 188 subtests, with
+- The latest complete regression passed: 541 tests and 195 subtests, with
   warnings treated as errors.
 - The earlier semantic-integrity baseline measured 74.5463% branch coverage:
   17,861 covered and 4,539 missing lines; 3,252 covered and 2,670 missing
@@ -80,6 +80,19 @@ than a hidden functional failure.
     Semantic handoff validation now fails through the preprocessing error
     contract by default and uses raw-code fallback only when explicitly enabled,
     preserving the failure reason in the prepared input.
+11. A training checkpoint recorded its training database but did not freeze the
+    evaluation database and held-out suite chosen before training. Checkpoint V5
+    now binds both identities, the bounded trainer validates the real manifest
+    and database, and its V3 training plan includes the same immutable contract.
+    Full-model training fails closed when that contract is absent.
+12. Evaluation and inference evidence conflated the training database with the
+    separate frozen evaluation database. Their new schemas preserve both
+    identities, propagate the checkpoint-bound held-out manifest, and final
+    acceptance rejects any post-training suite substitution while allowing a
+    legitimate distinct training corpus.
+13. A baseline evaluation could come from a different held-out suite than the
+    candidate. Baseline loading now carries and validates the checkpoint-bound
+    suite identity, and candidate evaluation requires an exact match.
 
 ## Boundaries
 
@@ -95,8 +108,9 @@ than a hidden functional failure.
   remote Git store, but an actual CodeRabbit review result must not be claimed
   until authentication and review complete.
 
-## Promotion decision
+## Current decision
 
-The source/runtime repair gate is clean. Model testing may resume only from the
-committed runtime identity above and must remain a separate evidence gate; this
-record is not evidence that a model has been trained, promoted, or improved.
+The latest repair batch has no regression in the executed source and integration
+gates, but the exhaustive review remains active and CodeRabbit review remains
+pending authentication. Training and model insertion stay held. This record is
+not evidence that a model has been trained, promoted, or improved.

@@ -35,7 +35,7 @@ from .tokenizer import (
     NativeTokenizerBinding,
 )
 
-ACCEPTANCE_SCHEMA = "bosscrafts-model-acceptance-v10"
+ACCEPTANCE_SCHEMA = "bosscrafts-model-acceptance-v11"
 EXPECTED_MODEL_FINGERPRINT = ModelConfig(
     tokenizer_manifest=EXPECTED_BINDING_SHA256
 ).fingerprint()
@@ -97,6 +97,8 @@ _EVALUATION_FIELDS = frozenset(
         "checkpoint_step",
         "checkpoint_target_epochs",
         "checkpoint_task_database_identity_sha256",
+        "checkpoint_evaluation_task_database_identity_sha256",
+        "checkpoint_heldout_suite_manifest_sha256",
         "checkpoint_training_complete",
         "correct_target_token_count",
         "device",
@@ -139,6 +141,8 @@ _INFERENCE_FIELDS = frozenset(
         "checkpoint_step",
         "checkpoint_target_epochs",
         "checkpoint_task_database_identity_sha256",
+        "checkpoint_evaluation_task_database_identity_sha256",
+        "checkpoint_heldout_suite_manifest_sha256",
         "checkpoint_training_complete",
         "device",
         "dtype",
@@ -329,8 +333,11 @@ def _verify_evaluation_consistency(payload: dict[str, object], *, split: str) ->
     database_identity = payload.get("task_database_identity_sha256")
     if (
         not _is_sha256(database_identity)
-        or payload.get("checkpoint_task_database_identity_sha256") != database_identity
+        or not _is_sha256(payload.get("checkpoint_task_database_identity_sha256"))
+        or payload.get("checkpoint_evaluation_task_database_identity_sha256")
+        != database_identity
         or payload.get("evaluation_task_database_identity_sha256") != database_identity
+        or not _is_sha256(payload.get("checkpoint_heldout_suite_manifest_sha256"))
     ):
         raise ValueError(f"{split} evaluation database lineage mismatch")
 
@@ -476,8 +483,11 @@ def _verify_inference_consistency(payload: dict[str, object], *, task: str) -> N
     database_identity = payload.get("task_database_identity_sha256")
     if (
         not _is_sha256(database_identity)
-        or payload.get("checkpoint_task_database_identity_sha256") != database_identity
+        or not _is_sha256(payload.get("checkpoint_task_database_identity_sha256"))
+        or payload.get("checkpoint_evaluation_task_database_identity_sha256")
+        != database_identity
         or payload.get("evaluation_task_database_identity_sha256") != database_identity
+        or not _is_sha256(payload.get("checkpoint_heldout_suite_manifest_sha256"))
     ):
         raise ValueError(f"{task} inference database lineage mismatch")
     epoch_index = _integer_field(payload, "checkpoint_epoch_index", minimum=1)
@@ -506,6 +516,8 @@ class ModelAcceptanceResult:
     checkpoint_sha256: str
     checkpoint_step: int
     task_database_identity_sha256: str
+    checkpoint_task_database_identity_sha256: str
+    evaluation_task_database_identity_sha256: str
     model_fingerprint: str
     evaluation_sha256: dict[str, str]
     inference_sha256: dict[str, str]
@@ -837,6 +849,22 @@ def verify_model_acceptance(
     model_ids = {payload.get("model_fingerprint") for payload in all_payloads}
     checkpoint_ids = {payload.get("checkpoint_sha256") for payload in all_payloads}
     checkpoint_steps = {payload.get("checkpoint_step") for payload in all_payloads}
+    checkpoint_bound_payloads = [
+        *evaluation_by_split.values(),
+        *inference_by_task.values(),
+    ]
+    checkpoint_training_database_ids = {
+        payload.get("checkpoint_task_database_identity_sha256")
+        for payload in checkpoint_bound_payloads
+    }
+    checkpoint_evaluation_database_ids = {
+        payload.get("checkpoint_evaluation_task_database_identity_sha256")
+        for payload in checkpoint_bound_payloads
+    }
+    checkpoint_heldout_suite_ids = {
+        payload.get("checkpoint_heldout_suite_manifest_sha256")
+        for payload in checkpoint_bound_payloads
+    }
     if (
         len(database_ids) != 1
         or len(model_ids) != 1
@@ -844,10 +872,26 @@ def verify_model_acceptance(
         or len(checkpoint_steps) != 1
     ):
         raise ValueError("acceptance evidence lineage mismatch")
+    if (
+        len(checkpoint_training_database_ids) != 1
+        or len(checkpoint_evaluation_database_ids) != 1
+    ):
+        raise ValueError("acceptance checkpoint database lineage mismatch")
+    if len(checkpoint_heldout_suite_ids) != 1:
+        raise ValueError("acceptance checkpoint held-out suite lineage mismatch")
     database_identity_value = next(iter(database_ids))
     model_fingerprint_value = next(iter(model_ids))
     checkpoint_sha256_value = next(iter(checkpoint_ids))
     checkpoint_step_value = next(iter(checkpoint_steps))
+    checkpoint_training_database_identity_value = next(
+        iter(checkpoint_training_database_ids)
+    )
+    checkpoint_evaluation_database_identity_value = next(
+        iter(checkpoint_evaluation_database_ids)
+    )
+    checkpoint_heldout_suite_identity_value = next(
+        iter(checkpoint_heldout_suite_ids)
+    )
     if (
         not _is_sha256(database_identity_value)
         or database_identity_value != task_database_identity_sha256
@@ -855,8 +899,13 @@ def verify_model_acceptance(
         or not _is_sha256(checkpoint_sha256_value)
         or type(checkpoint_step_value) is not int
         or checkpoint_step_value < 1
+        or not _is_sha256(checkpoint_training_database_identity_value)
+        or checkpoint_evaluation_database_identity_value
+        != task_database_identity_sha256
     ):
         raise ValueError("acceptance evidence lineage mismatch")
+    if checkpoint_heldout_suite_identity_value != heldout_suite.manifest_sha256:
+        raise ValueError("acceptance checkpoint held-out suite lineage mismatch")
 
     parser_ids = {
         payload.get("parser_runtime_identity_sha256")
@@ -884,6 +933,12 @@ def verify_model_acceptance(
         checkpoint_sha256=checkpoint_sha256_value,
         checkpoint_step=checkpoint_step_value,
         task_database_identity_sha256=database_identity_value,
+        checkpoint_task_database_identity_sha256=(
+            checkpoint_training_database_identity_value
+        ),
+        evaluation_task_database_identity_sha256=(
+            checkpoint_evaluation_database_identity_value
+        ),
         model_fingerprint=model_fingerprint_value,
         evaluation_sha256={
             split: _payload_sha256(payload)

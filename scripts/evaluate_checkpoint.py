@@ -143,6 +143,7 @@ def main() -> int:
     model = EngineeringModel(config).to(device=device, dtype=dtype)
     baseline_evaluation_sha256 = None
     baseline: EvaluationResult | EvaluationBaseline
+    baseline_path: Path | None = None
     if arguments.baseline_evaluation is None:
         baseline = evaluate_model(
             model,
@@ -153,17 +154,7 @@ def main() -> int:
         baseline_source = "deterministic_random_initialization"
     else:
         baseline_path = arguments.baseline_evaluation.resolve()
-        baseline = load_evaluation_baseline(
-            baseline_path,
-            expected_split=arguments.split,
-            expected_example_count=split_example_count,
-            expected_task_database_identity_sha256=(
-                task_audit.database_identity_sha256
-            ),
-            expected_model_fingerprint=config.fingerprint(),
-        )
         baseline_source = str(baseline_path)
-        baseline_evaluation_sha256 = baseline.artifact_sha256
     state = load_model_checkpoint_for_inference(
         arguments.checkpoint,
         model,
@@ -173,6 +164,26 @@ def main() -> int:
         expected_binding_sha256=binding.binding_sha256,
         expected_model_fingerprint=config.fingerprint(),
     )
+    if (
+        state.evaluation_task_database_identity_sha256 is not None
+        and state.evaluation_task_database_identity_sha256
+        != task_audit.database_identity_sha256
+    ):
+        raise ValueError("checkpoint frozen evaluation database mismatch")
+    if baseline_path is not None:
+        baseline = load_evaluation_baseline(
+            baseline_path,
+            expected_split=arguments.split,
+            expected_example_count=split_example_count,
+            expected_task_database_identity_sha256=(
+                task_audit.database_identity_sha256
+            ),
+            expected_model_fingerprint=config.fingerprint(),
+            expected_heldout_suite_manifest_sha256=(
+                state.heldout_suite_manifest_sha256
+            ),
+        )
+        baseline_evaluation_sha256 = baseline.artifact_sha256
     result = evaluate_model(
         model,
         dataset.iter_examples(split=arguments.split),
@@ -245,6 +256,12 @@ def main() -> int:
         "checkpoint_sha256": state.checkpoint_sha256,
         "checkpoint_task_database_identity_sha256": (
             checkpoint_task_audit.database_identity_sha256
+        ),
+        "checkpoint_evaluation_task_database_identity_sha256": (
+            state.evaluation_task_database_identity_sha256
+        ),
+        "checkpoint_heldout_suite_manifest_sha256": (
+            state.heldout_suite_manifest_sha256
         ),
         "checkpoint_epoch_index": state.epoch_index,
         "checkpoint_step": state.step,

@@ -187,6 +187,7 @@ def _rebind_database(payload: dict[str, object], database_identity: str) -> None
     for field in (
         "task_database_identity_sha256",
         "checkpoint_task_database_identity_sha256",
+        "checkpoint_evaluation_task_database_identity_sha256",
         "evaluation_task_database_identity_sha256",
     ):
         if field in payload:
@@ -234,6 +235,10 @@ def _evaluation(split: str) -> dict[str, object]:
         "checkpoint_step": 86_016,
         "checkpoint_target_epochs": 1,
         "checkpoint_task_database_identity_sha256": DATABASE_ID,
+        "checkpoint_evaluation_task_database_identity_sha256": DATABASE_ID,
+        "checkpoint_heldout_suite_manifest_sha256": HELDOUT_MANIFEST[
+            "manifest_sha256"
+        ],
         "checkpoint_training_complete": True,
         "correct_target_token_count": 42_000,
         "device": "cpu",
@@ -283,6 +288,10 @@ def _inference(task: str) -> dict[str, object]:
         "checkpoint_step": 86_016,
         "checkpoint_target_epochs": 1,
         "checkpoint_task_database_identity_sha256": DATABASE_ID,
+        "checkpoint_evaluation_task_database_identity_sha256": DATABASE_ID,
+        "checkpoint_heldout_suite_manifest_sha256": HELDOUT_MANIFEST[
+            "manifest_sha256"
+        ],
         "checkpoint_training_complete": True,
         "device": "cpu",
         "dtype": "float32",
@@ -310,6 +319,38 @@ def _inference(task: str) -> dict[str, object]:
 
 
 class ModelAcceptanceTests(unittest.TestCase):
+    def test_rejects_post_training_heldout_suite_substitution(self):
+        evaluations = [_evaluation("validation"), _evaluation("test")]
+        inferences = [_inference(task) for task in FAMILIES]
+        substituted_suite = "f" * 64
+        for payload in [*evaluations, *inferences]:
+            payload["checkpoint_heldout_suite_manifest_sha256"] = substituted_suite
+
+        with self.assertRaisesRegex(ValueError, "held-out suite lineage"):
+            verify_model_acceptance(
+                evaluations,
+                inferences,
+                _categories(),
+            )
+
+    def test_accepts_distinct_training_database_when_frozen_evaluation_matches(self):
+        evaluations = [_evaluation("validation"), _evaluation("test")]
+        inferences = [_inference(task) for task in FAMILIES]
+        training_database_identity = "b" * 64
+        for payload in [*evaluations, *inferences]:
+            payload["checkpoint_task_database_identity_sha256"] = (
+                training_database_identity
+            )
+
+        result = verify_model_acceptance(
+            evaluations,
+            inferences,
+            _categories(),
+        )
+
+        self.assertTrue(result.acceptance_passed)
+        self.assertEqual(result.task_database_identity_sha256, DATABASE_ID)
+
     def test_accepts_complete_heldout_and_protocol_evidence(self):
         result = verify_model_acceptance(
             (_evaluation("validation"), _evaluation("test")),
@@ -700,6 +741,10 @@ class ModelAcceptanceTests(unittest.TestCase):
                     payload["heldout_manifest_sha256"] = heldout_manifest[
                         "manifest_sha256"
                     ]
+                if "checkpoint_heldout_suite_manifest_sha256" in payload:
+                    payload["checkpoint_heldout_suite_manifest_sha256"] = (
+                        heldout_manifest["manifest_sha256"]
+                    )
                 _rebind_database(payload, database_identity)
             heldout_path = root / "heldout-manifest.json"
             heldout_path.write_text(json.dumps(heldout_manifest), encoding="utf-8")

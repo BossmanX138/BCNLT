@@ -156,6 +156,12 @@ def main() -> int:
         expected_binding_sha256=binding.binding_sha256,
         expected_model_fingerprint=config.fingerprint(),
     )
+    if (
+        state.evaluation_task_database_identity_sha256 is not None
+        and state.evaluation_task_database_identity_sha256
+        != task_audit.database_identity_sha256
+    ):
+        raise ValueError("checkpoint frozen evaluation database mismatch")
     task = arguments.heldout_family or arguments.task or "raw"
     heldout_case = None
     if arguments.heldout_family is not None:
@@ -199,6 +205,12 @@ def main() -> int:
         "checkpoint_sha256": state.checkpoint_sha256,
         "checkpoint_task_database_identity_sha256": (
             checkpoint_task_audit.database_identity_sha256
+        ),
+        "checkpoint_evaluation_task_database_identity_sha256": (
+            state.evaluation_task_database_identity_sha256
+        ),
+        "checkpoint_heldout_suite_manifest_sha256": (
+            state.heldout_suite_manifest_sha256
         ),
         "checkpoint_epoch_index": state.epoch_index,
         "checkpoint_step": state.step,

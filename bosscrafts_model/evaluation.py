@@ -45,6 +45,9 @@ class EvaluationResult:
 @dataclass(frozen=True)
 class EvaluationBaseline:
     artifact_sha256: str
+    checkpoint_task_database_identity_sha256: str
+    evaluation_task_database_identity_sha256: str
+    heldout_suite_manifest_sha256: str
     mean_loss: float
     perplexity: float
     target_token_accuracy: float
@@ -105,6 +108,7 @@ def load_evaluation_baseline(
     expected_example_count: int,
     expected_task_database_identity_sha256: str,
     expected_model_fingerprint: str,
+    expected_heldout_suite_manifest_sha256: str | None = None,
 ) -> EvaluationBaseline:
     baseline_path = Path(path).resolve()
     try:
@@ -131,13 +135,21 @@ def load_evaluation_baseline(
         or payload.get("split_example_count") != expected_example_count
         or payload.get("task_database_identity_sha256")
         != expected_task_database_identity_sha256
-        or payload.get("checkpoint_task_database_identity_sha256")
+        or not _is_sha256(payload.get("checkpoint_task_database_identity_sha256"))
+        or payload.get("checkpoint_evaluation_task_database_identity_sha256")
         != expected_task_database_identity_sha256
+        or not _is_sha256(payload.get("checkpoint_heldout_suite_manifest_sha256"))
         or payload.get("evaluation_task_database_identity_sha256")
         != expected_task_database_identity_sha256
         or payload.get("model_fingerprint") != expected_model_fingerprint
     ):
         raise ValueError("baseline evaluation lineage mismatch")
+    if expected_heldout_suite_manifest_sha256 is not None and (
+        not _is_sha256(expected_heldout_suite_manifest_sha256)
+        or payload.get("checkpoint_heldout_suite_manifest_sha256")
+        != expected_heldout_suite_manifest_sha256
+    ):
+        raise ValueError("baseline evaluation held-out suite lineage mismatch")
     mean_loss = payload.get("mean_loss")
     perplexity = payload.get("perplexity")
     target_accuracy = payload.get("target_token_accuracy")
@@ -195,6 +207,15 @@ def load_evaluation_baseline(
         raise ValueError("baseline evaluation breakdown is invalid")
     return EvaluationBaseline(
         artifact_sha256=hashlib.sha256(content).hexdigest(),
+        checkpoint_task_database_identity_sha256=str(
+            payload["checkpoint_task_database_identity_sha256"]
+        ),
+        evaluation_task_database_identity_sha256=str(
+            payload["checkpoint_evaluation_task_database_identity_sha256"]
+        ),
+        heldout_suite_manifest_sha256=str(
+            payload["checkpoint_heldout_suite_manifest_sha256"]
+        ),
         mean_loss=float(mean_loss),
         perplexity=float(perplexity),
         target_token_accuracy=float(target_accuracy),

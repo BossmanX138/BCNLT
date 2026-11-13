@@ -20,6 +20,9 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from bosscrafts_model.config import ModelConfig  # noqa: E402
 from bosscrafts_model.model import EngineeringModel  # noqa: E402
+from bosscrafts_model.model_acceptance import (  # noqa: E402
+    verify_heldout_suite_manifest,
+)
 from bosscrafts_model.resumable_task_packing import (  # noqa: E402
     ResumableTaskDataset,
     audit_task_database,
@@ -52,6 +55,31 @@ DEFAULT_CHECKPOINT = (
     / "bcnlt-v7-bounded-training-trial-v1"
     / "checkpoint.pt"
 )
+MAX_HELDOUT_MANIFEST_BYTES = 16 * 1024 * 1024
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    payload: dict[str, object] = {}
+    for key, value in pairs:
+        if key in payload:
+            raise ValueError(f"duplicate held-out manifest key: {key}")
+        payload[key] = value
+    return payload
+
+
+def _read_heldout_manifest(path: Path) -> dict[str, object]:
+    try:
+        content = path.resolve().read_bytes()
+        if len(content) > MAX_HELDOUT_MANIFEST_BYTES:
+            raise ValueError("held-out suite manifest exceeds size limit")
+        payload = json.loads(
+            content.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("held-out suite manifest is unreadable") from error
+    if type(payload) is not dict:
+        raise ValueError("held-out suite manifest must be a JSON object")
+    return payload
 
 
 def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
@@ -104,6 +132,8 @@ def _paths_alias(left: Path, right: Path) -> bool:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--database", type=Path, default=DEFAULT_DATABASE)
+    parser.add_argument("--evaluation-database", type=Path)
+    parser.add_argument("--heldout-suite-manifest", type=Path)
     parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT)
     parser.add_argument("--status-output", type=Path)
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
@@ -147,6 +177,14 @@ def main() -> int:
         parser.error(
             "initial-model-checkpoint and initial-checkpoint-database must be supplied together"
         )
+    if (arguments.evaluation_database is None) != (
+        arguments.heldout_suite_manifest is None
+    ):
+        parser.error(
+            "evaluation-database and heldout-suite-manifest must be supplied together"
+        )
+    if arguments.full_model and arguments.evaluation_database is None:
+        parser.error("full-model training requires a frozen evaluation contract")
     if (arguments.initialization_checkpoint_sha256 is None) != (
         arguments.initialization_database_identity_sha256 is None
     ):
@@ -173,6 +211,10 @@ def main() -> int:
     if arguments.status_output is not None:
         output_paths["status output"] = arguments.status_output
     input_paths = {"training database": arguments.database}
+    if arguments.evaluation_database is not None:
+        input_paths["evaluation database"] = arguments.evaluation_database
+    if arguments.heldout_suite_manifest is not None:
+        input_paths["held-out suite manifest"] = arguments.heldout_suite_manifest
     if arguments.initial_model_checkpoint is not None:
         input_paths["initial checkpoint"] = arguments.initial_model_checkpoint
     if arguments.initial_checkpoint_database is not None:
@@ -197,6 +239,24 @@ def main() -> int:
         torch.cuda.reset_peak_memory_stats(device)
     binding = NativeTokenizerBinding.load()
     task_audit = audit_task_database(binding, arguments.database)
+    evaluation_database_identity_sha256: str | None = None
+    heldout_suite_manifest_sha256: str | None = None
+    if arguments.evaluation_database is not None:
+        if arguments.heldout_suite_manifest is None:
+            raise RuntimeError("validated held-out suite manifest is missing")
+        evaluation_audit = audit_task_database(
+            binding, arguments.evaluation_database
+        )
+        heldout_suite = verify_heldout_suite_manifest(
+            _read_heldout_manifest(arguments.heldout_suite_manifest),
+            task_database_identity_sha256=(
+                evaluation_audit.database_identity_sha256
+            ),
+        )
+        evaluation_database_identity_sha256 = (
+            heldout_suite.task_database_identity_sha256
+        )
+        heldout_suite_manifest_sha256 = heldout_suite.manifest_sha256
     dataset = ResumableTaskDataset(binding, arguments.database)
     train_example_count = dataset.example_count(split="train")
     if train_example_count < 1:
@@ -257,7 +317,7 @@ def main() -> int:
                 arguments.initialization_database_identity_sha256
             ),
         }
-    training_plan = {
+    training_plan: dict[str, object] = {
         "dtype": arguments.dtype,
         "epochs": arguments.epochs,
         "full_model": arguments.full_model,
@@ -278,11 +338,22 @@ def main() -> int:
             "warmup_ratio": arguments.warmup_ratio,
             "warmup_steps": warmup_steps,
         },
-        "schema_version": "bosscrafts-training-plan-v2",
+        "schema_version": (
+            "bosscrafts-training-plan-v3"
+            if evaluation_database_identity_sha256 is not None
+            else "bosscrafts-training-plan-v2"
+        ),
         "seed": 7,
         "split": "train",
         "initialization": initialization,
     }
+    if evaluation_database_identity_sha256 is not None:
+        training_plan["evaluation_contract"] = {
+            "evaluation_task_database_identity_sha256": (
+                evaluation_database_identity_sha256
+            ),
+            "heldout_suite_manifest_sha256": heldout_suite_manifest_sha256,
+        }
     training_plan_sha256 = hashlib.sha256(
         json.dumps(training_plan, separators=(",", ":"), sort_keys=True).encode("utf-8")
     ).hexdigest()
@@ -322,6 +393,12 @@ def main() -> int:
             expected_model_fingerprint=config.fingerprint(),
             expected_target_epochs=arguments.epochs,
             expected_training_plan_sha256=training_plan_sha256,
+            expected_evaluation_task_database_identity_sha256=(
+                evaluation_database_identity_sha256
+            ),
+            expected_heldout_suite_manifest_sha256=(
+                heldout_suite_manifest_sha256
+            ),
         )
         initial_steps = state.step
         initial_examples = state.examples_seen
@@ -417,6 +494,10 @@ def main() -> int:
         binding_sha256=binding.binding_sha256,
         model_fingerprint=config.fingerprint(),
         training_plan_sha256=training_plan_sha256,
+        evaluation_task_database_identity_sha256=(
+            evaluation_database_identity_sha256
+        ),
+        heldout_suite_manifest_sha256=heldout_suite_manifest_sha256,
     )
     checkpoint_write_seconds = time.perf_counter() - checkpoint_started
     checkpoint_sha256 = _sha256_file(arguments.checkpoint.resolve())
@@ -449,6 +530,10 @@ def main() -> int:
         "optimizer_steps_remaining": max(0, planned_optimizer_steps - total_steps),
         "optimizer_step_fraction": min(1.0, total_steps / planned_optimizer_steps),
         "task_database_identity_sha256": task_audit.database_identity_sha256,
+        "evaluation_task_database_identity_sha256": (
+            evaluation_database_identity_sha256
+        ),
+        "heldout_suite_manifest_sha256": heldout_suite_manifest_sha256,
         "training_seconds": training_seconds,
         "sequence_tokens_per_second": (
             invocation_sequence_tokens / training_seconds if training_seconds > 0 else 0.0

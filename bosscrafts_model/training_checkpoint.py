@@ -13,8 +13,9 @@ from typing import Any, TypeGuard, cast
 import torch
 from torch import nn
 
-CHECKPOINT_SCHEMA = "bosscrafts-training-checkpoint-v4"
-_CHECKPOINT_FIELDS = frozenset(
+LEGACY_CHECKPOINT_SCHEMA = "bosscrafts-training-checkpoint-v4"
+CHECKPOINT_SCHEMA = "bosscrafts-training-checkpoint-v5"
+_LEGACY_CHECKPOINT_FIELDS = frozenset(
     {
         "binding_sha256",
         "cpu_rng_state",
@@ -31,6 +32,13 @@ _CHECKPOINT_FIELDS = frozenset(
         "target_epochs",
         "task_database_identity_sha256",
         "training_plan_sha256",
+    }
+)
+_CHECKPOINT_FIELDS = frozenset(
+    {
+        *_LEGACY_CHECKPOINT_FIELDS,
+        "evaluation_task_database_identity_sha256",
+        "heldout_suite_manifest_sha256",
     }
 )
 
@@ -184,6 +192,8 @@ class TrainingCheckpointState:
     last_example_id: str
     cursor_after_example_id: str | None
     task_database_identity_sha256: str
+    evaluation_task_database_identity_sha256: str | None
+    heldout_suite_manifest_sha256: str | None
     binding_sha256: str
     model_fingerprint: str
     training_plan_sha256: str
@@ -204,6 +214,8 @@ def save_training_checkpoint(
     binding_sha256: str,
     model_fingerprint: str,
     training_plan_sha256: str,
+    evaluation_task_database_identity_sha256: str | None = None,
+    heldout_suite_manifest_sha256: str | None = None,
 ) -> None:
     if not isinstance(model, nn.Module):
         raise TypeError("model must be a torch module")
@@ -226,6 +238,16 @@ def save_training_checkpoint(
     ):
         if not _is_sha256(value):
             raise ValueError(f"{name} must be a lowercase SHA-256 digest")
+    evaluation_lineage = (
+        evaluation_task_database_identity_sha256,
+        heldout_suite_manifest_sha256,
+    )
+    if (evaluation_lineage[0] is None) != (evaluation_lineage[1] is None):
+        raise ValueError(
+            "evaluation database and held-out suite identities must be supplied together"
+        )
+    if any(value is not None and not _is_sha256(value) for value in evaluation_lineage):
+        raise ValueError("evaluation lineage must contain lowercase SHA-256 digests")
     if cursor_after_example_id is not None and not _is_sha256(cursor_after_example_id):
         raise ValueError("cursor_after_example_id must be a lowercase SHA-256 or None")
     if (
@@ -244,8 +266,12 @@ def save_training_checkpoint(
         raise ValueError("training checkpoint contains non-finite model state")
     if not _state_values_are_finite(optimizer_state):
         raise ValueError("training checkpoint contains non-finite optimizer state")
-    payload = {
-        "schema_version": CHECKPOINT_SCHEMA,
+    payload: dict[str, object] = {
+        "schema_version": (
+            CHECKPOINT_SCHEMA
+            if evaluation_task_database_identity_sha256 is not None
+            else LEGACY_CHECKPOINT_SCHEMA
+        ),
         "step": step,
         "examples_seen": examples_seen,
         "epoch_index": epoch_index,
@@ -263,6 +289,11 @@ def save_training_checkpoint(
         if torch.cuda.is_available()
         else None,
     }
+    if evaluation_task_database_identity_sha256 is not None:
+        payload["evaluation_task_database_identity_sha256"] = (
+            evaluation_task_database_identity_sha256
+        )
+        payload["heldout_suite_manifest_sha256"] = heldout_suite_manifest_sha256
     try:
         with tempfile.NamedTemporaryFile(
             dir=destination.parent,
@@ -290,12 +321,20 @@ def load_training_checkpoint(
     expected_model_fingerprint: str,
     expected_target_epochs: int,
     expected_training_plan_sha256: str,
+    expected_evaluation_task_database_identity_sha256: str | None = None,
+    expected_heldout_suite_manifest_sha256: str | None = None,
 ) -> TrainingCheckpointState:
     payload, state = _load_verified_payload(
         path,
         expected_task_database_identity_sha256=expected_task_database_identity_sha256,
         expected_binding_sha256=expected_binding_sha256,
         expected_model_fingerprint=expected_model_fingerprint,
+        expected_evaluation_task_database_identity_sha256=(
+            expected_evaluation_task_database_identity_sha256
+        ),
+        expected_heldout_suite_manifest_sha256=(
+            expected_heldout_suite_manifest_sha256
+        ),
     )
     if state.target_epochs != expected_target_epochs:
         raise ValueError("training checkpoint epoch plan mismatch")
@@ -323,12 +362,20 @@ def load_model_checkpoint_for_inference(
     expected_task_database_identity_sha256: str,
     expected_binding_sha256: str,
     expected_model_fingerprint: str,
+    expected_evaluation_task_database_identity_sha256: str | None = None,
+    expected_heldout_suite_manifest_sha256: str | None = None,
 ) -> TrainingCheckpointState:
     payload, state = _load_verified_payload(
         path,
         expected_task_database_identity_sha256=expected_task_database_identity_sha256,
         expected_binding_sha256=expected_binding_sha256,
         expected_model_fingerprint=expected_model_fingerprint,
+        expected_evaluation_task_database_identity_sha256=(
+            expected_evaluation_task_database_identity_sha256
+        ),
+        expected_heldout_suite_manifest_sha256=(
+            expected_heldout_suite_manifest_sha256
+        ),
     )
     model_state = _validated_model_state(model, payload, require_dtype=False)
     try:
@@ -344,6 +391,8 @@ def _load_verified_payload(
     expected_task_database_identity_sha256: str,
     expected_binding_sha256: str,
     expected_model_fingerprint: str,
+    expected_evaluation_task_database_identity_sha256: str | None,
+    expected_heldout_suite_manifest_sha256: str | None,
 ) -> tuple[dict[str, object], TrainingCheckpointState]:
     checkpoint_path = Path(path).resolve()
     if not checkpoint_path.is_file():
@@ -355,6 +404,17 @@ def _load_verified_payload(
     }
     if any(not _is_sha256(value) for value in expected.values()):
         raise ValueError("expected training lineage contains an invalid SHA-256")
+    expected_evaluation_lineage = (
+        expected_evaluation_task_database_identity_sha256,
+        expected_heldout_suite_manifest_sha256,
+    )
+    if (expected_evaluation_lineage[0] is None) != (
+        expected_evaluation_lineage[1] is None
+    ) or any(
+        value is not None and not _is_sha256(value)
+        for value in expected_evaluation_lineage
+    ):
+        raise ValueError("expected evaluation lineage is invalid")
     try:
         checkpoint_sha256 = _sha256_file(checkpoint_path)
     except OSError as error:
@@ -369,14 +429,34 @@ def _load_verified_payload(
         raise ValueError("training checkpoint is unreadable") from error
     if checkpoint_sha256_after_load != checkpoint_sha256:
         raise ValueError("training checkpoint changed while loading")
-    if (
-        type(payload) is not dict
-        or set(payload) != _CHECKPOINT_FIELDS
-        or payload.get("schema_version") != CHECKPOINT_SCHEMA
-    ):
+    if type(payload) is not dict:
+        raise ValueError("training checkpoint fields or schema mismatch")
+    schema_version = payload.get("schema_version")
+    if schema_version == LEGACY_CHECKPOINT_SCHEMA:
+        expected_fields = _LEGACY_CHECKPOINT_FIELDS
+    elif schema_version == CHECKPOINT_SCHEMA:
+        expected_fields = _CHECKPOINT_FIELDS
+    else:
+        raise ValueError("training checkpoint fields or schema mismatch")
+    if set(payload) != expected_fields:
         raise ValueError("training checkpoint fields or schema mismatch")
     if any(payload.get(key) != value for key, value in expected.items()):
         raise ValueError("training checkpoint lineage mismatch")
+    evaluation_database_identity = payload.get(
+        "evaluation_task_database_identity_sha256"
+    )
+    heldout_suite_identity = payload.get("heldout_suite_manifest_sha256")
+    if schema_version == CHECKPOINT_SCHEMA and (
+        not _is_sha256(evaluation_database_identity)
+        or not _is_sha256(heldout_suite_identity)
+    ):
+        raise ValueError("training checkpoint evaluation lineage is invalid")
+    if expected_evaluation_task_database_identity_sha256 is not None and (
+        evaluation_database_identity
+        != expected_evaluation_task_database_identity_sha256
+        or heldout_suite_identity != expected_heldout_suite_manifest_sha256
+    ):
+        raise ValueError("training checkpoint evaluation lineage mismatch")
     model_state = payload.get("model_state_dict")
     optimizer_state = payload.get("optimizer_state_dict")
     cpu_rng_state = payload.get("cpu_rng_state")
@@ -453,6 +533,14 @@ def _load_verified_payload(
         last_example_id=last_example_id,
         cursor_after_example_id=cursor_after_example_id,
         task_database_identity_sha256=expected_task_database_identity_sha256,
+        evaluation_task_database_identity_sha256=(
+            evaluation_database_identity
+            if isinstance(evaluation_database_identity, str)
+            else None
+        ),
+        heldout_suite_manifest_sha256=(
+            heldout_suite_identity if isinstance(heldout_suite_identity, str) else None
+        ),
         binding_sha256=expected_binding_sha256,
         model_fingerprint=expected_model_fingerprint,
         training_plan_sha256=training_plan_sha256,

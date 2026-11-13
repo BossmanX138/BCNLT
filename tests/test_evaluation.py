@@ -27,6 +27,8 @@ class EvaluationTests(unittest.TestCase):
             "checkpoint_lineage_verified": True,
             "checkpoint_sha256": "c" * 64,
             "checkpoint_task_database_identity_sha256": "a" * 64,
+            "checkpoint_evaluation_task_database_identity_sha256": "a" * 64,
+            "checkpoint_heldout_suite_manifest_sha256": "d" * 64,
             "evaluation_task_database_identity_sha256": "a" * 64,
             "full_model": True,
             "example_count": 2,
@@ -65,6 +67,40 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(baseline.mean_loss, 1.0)
         self.assertEqual(baseline.language_mean_loss, {"python": 1.0})
         self.assertEqual(baseline.artifact_sha256, hashlib.sha256(rendered).hexdigest())
+
+    def test_baseline_allows_distinct_training_database_with_frozen_evaluation(self):
+        module = importlib.import_module("bosscrafts_model.evaluation")
+        payload = self._baseline_payload()
+        payload["checkpoint_task_database_identity_sha256"] = "e" * 64
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "baseline.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            baseline = module.load_evaluation_baseline(
+                path,
+                expected_split="validation",
+                expected_example_count=2,
+                expected_task_database_identity_sha256="a" * 64,
+                expected_model_fingerprint="b" * 64,
+            )
+        self.assertEqual(
+            baseline.heldout_suite_manifest_sha256,
+            "d" * 64,
+        )
+
+    def test_baseline_rejects_a_different_frozen_heldout_suite(self):
+        module = importlib.import_module("bosscrafts_model.evaluation")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "baseline.json"
+            path.write_text(json.dumps(self._baseline_payload()), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "held-out suite lineage"):
+                module.load_evaluation_baseline(
+                    path,
+                    expected_split="validation",
+                    expected_example_count=2,
+                    expected_task_database_identity_sha256="a" * 64,
+                    expected_model_fingerprint="b" * 64,
+                    expected_heldout_suite_manifest_sha256="f" * 64,
+                )
 
     def test_rejects_unbounded_duplicate_or_unattested_baseline(self):
         module = importlib.import_module("bosscrafts_model.evaluation")
