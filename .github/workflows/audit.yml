@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - v10-main
-      - audit/**
   pull_request:
 
 permissions:
