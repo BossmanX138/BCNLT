@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from dataclasses import replace
+import math
 from typing import Protocol
 
 from .cache import ProjectIndex
@@ -66,17 +67,12 @@ class KnowledgeBoundaryAssessment:
 
 class EntropyProvider(Protocol):
     def entropy_for(self, unit: ContextualUnit) -> float:
-        raise NotImplementedError
-
-
-class StubEntropyProvider:
-    def entropy_for(self, unit: ContextualUnit) -> float:
-        return 0.0
+        ...
 
 
 class HeuristicUncertaintyScorer:
     def __init__(self, entropy_provider: EntropyProvider | None = None) -> None:
-        self.entropy_provider = entropy_provider or StubEntropyProvider()
+        self.entropy_provider = entropy_provider
 
     def score(self, unit: ContextualUnit, index: ProjectIndex) -> UncertaintyScore:
         signals: list[str] = []
@@ -112,10 +108,18 @@ class HeuristicUncertaintyScorer:
             uncertainty += 0.1
             signals.append("missing AST relation")
 
-        entropy = self.entropy_provider.entropy_for(unit)
-        if entropy:
-            uncertainty += min(entropy, 1.0) * 0.2
-            signals.append("model entropy")
+        if self.entropy_provider is not None:
+            entropy = self.entropy_provider.entropy_for(unit)
+            if (
+                isinstance(entropy, bool)
+                or not isinstance(entropy, (int, float))
+                or not math.isfinite(float(entropy))
+                or not 0.0 <= float(entropy) <= 1.0
+            ):
+                raise ValueError("model entropy must be finite and within [0, 1]")
+            if entropy > 0.0:
+                uncertainty += float(entropy) * 0.2
+                signals.append("model entropy")
 
         uncertainty = min(1.0, uncertainty)
         return UncertaintyScore(

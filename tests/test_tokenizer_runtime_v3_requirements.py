@@ -155,7 +155,7 @@ class TokenizerRuntimeV3RequirementsTests(unittest.TestCase):
 
     def test_semantic_preparation_binds_exact_v10_runtime_identity(self):
         pipeline = BCNLTSourcePipeline(self.binding)
-        expected = "54bd8cf68c0e7ac5fb349a8b42ad0005864b40d4d1094c997e0d073c2d3331e3"
+        expected = "50fddafd5e1f7e1f58bb71650f4c87f4a9bb8177c416b01ac21398c29e41dd45"
         self.assertEqual(pipeline.parser_runtime_identity_sha256, expected)
         prepared = pipeline.prepare_semantic(
             "def add(left, right):\n    return left + right\n",

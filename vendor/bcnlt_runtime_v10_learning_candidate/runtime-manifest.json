@@ -10,11 +10,11 @@
     "git_head": "27521f4bce5426712edc5ed92adca961dfa9ae28",
     "working_tree_was_dirty": true,
     "copy_policy": "preserved verified V6 runtime copy; added an explicit immutable-mode learning boundary without changing Common Core or tokenizer IDs; selectively ported and regression-tested the model-runtime semantic-integrity repair without modifying the upstream BCNLM snapshot",
-    "contained_patch": "The Tree-sitter engine accepts a read-only learned-memory policy; the sidecar has explicit ephemeral, observe and read-only modes; learned state remains per-language append-only Wildcard Memory and validated entries remain outside immutable Common Core in Extended Core; scientific promotion requires independent sandbox-attested executions with negative controls; Extended Core versions use immutable content-addressed artifacts, separate validation receipts, atomic activation, append-only activation events, and rollback; uncertainty calibration uses disjoint calibration and held-out identities, Brier and ECE gates, per-language coverage, and integrity-pinned promoted artifacts. The semantic-integrity repair excludes anonymous grammar tokens from semantic rules, registers JavaScript and TypeScript function expressions, emits Common Core returns for arrow and Rust implicit returns, and prevents unresolved unknown syntax from becoming validated knowledge.",
+    "contained_patch": "The Tree-sitter engine accepts a read-only learned-memory policy; the sidecar has explicit ephemeral, observe and read-only modes; learned state remains per-language append-only Wildcard Memory and validated entries remain outside immutable Common Core in Extended Core; scientific promotion requires independent sandbox-attested executions with negative controls; Extended Core versions use immutable content-addressed artifacts, separate validation receipts, atomic activation, append-only activation events, and rollback; uncertainty calibration uses disjoint calibration and held-out identities, Brier and ECE gates, per-language coverage, and integrity-pinned promoted artifacts. The semantic-integrity repair excludes anonymous grammar tokens from semantic rules, registers JavaScript and TypeScript function expressions, emits Common Core returns for arrow and Rust implicit returns, prevents unresolved unknown syntax from becoming validated knowledge, removes the prototype zero-entropy stub, and fails closed on invalid injected model entropy.",
     "identity_policy": "python-source-bytes-crlf-cr-to-lf-v1",
     "file_count": 79,
-    "bytes": 691411,
-    "aggregate_sha256": "3efd821dcaa10a5cb8bd1d3c4e92d9e19c3fa4e77c4044f332dd83f7ea399cee"
+    "bytes": 691654,
+    "aggregate_sha256": "bd6c89a6d5a295cf95c0af545743ad9792eef67fd2d8aa641519e16b82228aa9"
   },
   "runtime": {
     "python_requirement": "CPython 3.13.x Windows x86_64",
@@ -30,7 +30,7 @@
     "sidecar_bytes": 9541,
     "sidecar_sha256": "c86f40828c0303adad2cbf05eb25b5c358ff88ffc1bb9ebcbd39d9de75b158cc",
     "python_source_identity_policy": "python-source-bytes-crlf-cr-to-lf-v1",
-    "parser_runtime_identity_sha256": "54bd8cf68c0e7ac5fb349a8b42ad0005864b40d4d1094c997e0d073c2d3331e3"
+    "parser_runtime_identity_sha256": "50fddafd5e1f7e1f58bb71650f4c87f4a9bb8177c416b01ac21398c29e41dd45"
   },
   "execution_policy": {
     "downloads": false,

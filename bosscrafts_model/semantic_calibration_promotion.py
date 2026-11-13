@@ -33,10 +33,10 @@ _CONTAINED_PACKAGE_ROOT = (
 )
 _CONTAINED_PACKAGE_NAME = "_bosscrafts_bcnlt_v10_calibration_runtime"
 _EXPECTED_SOURCE_SHA256 = (
-    "3efd821dcaa10a5cb8bd1d3c4e92d9e19c3fa4e77c4044f332dd83f7ea399cee"
+    "bd6c89a6d5a295cf95c0af545743ad9792eef67fd2d8aa641519e16b82228aa9"
 )
 _EXPECTED_SOURCE_FILE_COUNT = 79
-_EXPECTED_SOURCE_BYTES = 691411
+_EXPECTED_SOURCE_BYTES = 691654
 
 
 def _contained_source_identity() -> tuple[str, int, int]:
