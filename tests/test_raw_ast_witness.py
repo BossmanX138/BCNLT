@@ -309,3 +309,38 @@ def test_raw_ast_witness_reuses_one_bounded_sidecar_across_documents():
     finally:
         client.close()
     assert client._process is None
+
+
+def test_raw_ast_witness_rejects_mismatched_response_rows():
+    feature = _feature()
+    query = {
+        "query_id": "return",
+        "span": [2, 4, 2, 12],
+        "ast_relation": "return_statement.self",
+        "scope": "module.f",
+    }
+    valid = {
+        "query_id": "return",
+        "span": [2, 4, 2, 12],
+        "ast_relation": "return_statement.self",
+        "exact_named_node_types": ["return_statement"],
+        "boundary_start_named_node_types": ["return_statement"],
+        "boundary_end_named_node_types": ["return_statement"],
+        "relation_span_match": True,
+        "claimed_scope": "module.f",
+        "derived_scope": "module.f",
+        "scope_match": True,
+    }
+    feature._validate_witness_rows([valid], (query,))
+
+    for field, replacement in (
+        ("span", [1, 0, 1, 1]),
+        ("ast_relation", "call.self"),
+        ("claimed_scope", "module.other"),
+        ("relation_span_match", 1),
+        ("exact_named_node_types", ["return_statement", "return_statement"]),
+    ):
+        malformed = dict(valid)
+        malformed[field] = replacement
+        with pytest.raises(ValueError, match="raw AST witness response"):
+            feature._validate_witness_rows([malformed], (query,))

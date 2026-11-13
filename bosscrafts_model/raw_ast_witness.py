@@ -26,6 +26,69 @@ _RESPONSE_KEYS = {
     "root_node_type",
     "witnesses",
 }
+_WITNESS_KEYS = {
+    "query_id",
+    "span",
+    "ast_relation",
+    "exact_named_node_types",
+    "boundary_start_named_node_types",
+    "boundary_end_named_node_types",
+    "relation_span_match",
+    "claimed_scope",
+    "derived_scope",
+    "scope_match",
+}
+
+
+def _validate_witness_rows(
+    value: object, queries: tuple[dict[str, object], ...]
+) -> None:
+    if type(value) is not list or len(value) != len(queries):
+        raise ValueError("raw AST witness response coverage mismatch")
+    for row, query in zip(value, queries, strict=True):
+        claimed_scope = query.get("scope")
+        if (
+            type(row) is not dict
+            or set(row) != _WITNESS_KEYS
+            or row.get("query_id") != query.get("query_id")
+            or row.get("span") != query.get("span")
+            or row.get("ast_relation") != query.get("ast_relation")
+            or row.get("claimed_scope") != claimed_scope
+            or type(row.get("relation_span_match")) is not bool
+            or (
+                row.get("derived_scope") is not None
+                and (
+                    type(row.get("derived_scope")) is not str
+                    or not row["derived_scope"]
+                )
+            )
+            or (
+                claimed_scope is None
+                and row.get("scope_match") is not None
+            )
+            or (
+                claimed_scope is not None
+                and type(row.get("scope_match")) is not bool
+            )
+        ):
+            raise ValueError("raw AST witness response row mismatch")
+        for field in (
+            "exact_named_node_types",
+            "boundary_start_named_node_types",
+            "boundary_end_named_node_types",
+        ):
+            node_types = row.get(field)
+            if (
+                type(node_types) is not list
+                or any(type(item) is not str or not item for item in node_types)
+                or node_types != sorted(set(node_types))
+            ):
+                raise ValueError("raw AST witness response node types are invalid")
+        if row["relation_span_match"] is False and (
+            row["derived_scope"] is not None
+            or row["scope_match"] not in {False, None}
+        ):
+            raise ValueError("raw AST witness response relation state is inconsistent")
 
 
 def _close_process_streams(process: subprocess.Popen[bytes]) -> None:
@@ -203,12 +266,8 @@ class RawAstWitnessClient:
             or response["path"] != path
             or response["dialect"] != dialect
             or type(response["root_node_type"]) is not str
-            or type(response["witnesses"]) is not list
-            or len(response["witnesses"]) != len(queries)
+            or not response["root_node_type"]
         ):
             raise ValueError("raw AST witness response provenance mismatch")
-        expected_ids = [query.get("query_id") for query in queries]
-        actual_ids = [row.get("query_id") for row in response["witnesses"]]
-        if actual_ids != expected_ids:
-            raise ValueError("raw AST witness query identity mismatch")
+        _validate_witness_rows(response["witnesses"], queries)
         return response
