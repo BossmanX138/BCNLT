@@ -66,6 +66,13 @@ artifacts/tokenizers/*
 !artifacts/tokenizers/bcnlt-native-foundation-65536-v1/
 !artifacts/tokenizers/bcnlt-native-foundation-65536-v1/**
 
+# Small immutable parser fixtures are source-controlled test inputs.
+!artifacts/bcnlt/
+artifacts/bcnlt/*
+!artifacts/bcnlt/multilingual-parser-output-v1/
+!artifacts/bcnlt/multilingual-parser-output-v1/fixture-manifest.json
+!artifacts/bcnlt/multilingual-parser-output-v1/real-output.jsonl
+
 !vendor/tokenizers_runtime_0_23/
 !vendor/tokenizers_runtime_0_23/**
 !vendor/bcnlt_runtime_v10_learning_candidate/grammars/
