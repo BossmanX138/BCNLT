@@ -35,6 +35,12 @@ from .bcnlt_adapter import (
 )
 from .semantic import NativeSemanticRecordCodec
 from .tokenizer import NativeTokenizerBinding
+from .runtime_identity import (
+    PYTHON_SOURCE_IDENTITY_POLICY,
+    aggregate_sha256 as _aggregate_sha256,
+    identity_bytes as _identity_bytes,
+    sha256_file as _sha256,
+)
 
 
 SIDECAR_PROTOCOL = "bosscrafts-bcnlt-source-sidecar-v2"
@@ -45,14 +51,14 @@ CURRENT_RUNTIME_SPEC_SHA256 = {
     "cpp": "c499bd19f76c84e522d6a8370a5d5e6ae26a96c7ca6bddf54b8f01e177182378",
     "go": "23f3a60f689ae22f34e5b819066d8e29ce823d4535cfca915e945ba2f2f3e6c2",
     "java": "c20f4e36ab239b8ed7f75428587f72d56f7e85c2f0a46a5a38a853f0ba033e4b",
-    "javascript": "ed9e52d0dc7c0cecc5478b3fa60d7c4605a69015bc72af70381eda286312b4cd",
+    "javascript": "b300189c01eb2607a1d6597e9fef5b5d74795d7283f5194ca1b11712673c96c3",
     "kotlin": "02568b22e74dc1a05d3c4cf84c23808eec19f818ee312f497107782bbf3be9a5",
     "php": "6f5aaff7714b1893ff7966d671700d6fc55a641b7665dcdd98701e11904e57ed",
     "python": "9dec2e498ca82f936d4d454a650de48f55dcea094000f27507dbbaf0cd408381",
     "ruby": "59ecd18636cc23219ce4e0a50bebe5b5904db420dca47b2666e108387d77ae57",
     "rust": "d0df302624a6374508c715ea95e4351a5479e7fbced804784b0c19df4831d66b",
     "swift": "d553d2c3df05cc7448e833ecf54266fb73a297d74b57db1bea0be1a099e3dd5a",
-    "typescript": "0a69b500f983e3690aa18cdaabca1690b70b0099e02fc0dd3a53b500d5cfd67a",
+    "typescript": "7124ea196695ceb20d9657f9cd4f144c97a872632ec07a7c55a90de23dbf6e2b",
 }
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -61,14 +67,14 @@ _SIDECAR = _RUNTIME_ROOT / "bcnlt_source_sidecar.py"
 _DEFAULT_PYTHON_313 = Path(r"C:\ProgramData\anaconda3\python.exe")
 _RUNTIME_MANIFEST = _RUNTIME_ROOT / "runtime-manifest.json"
 _EXPECTED_RUNTIME_IDENTITY = {
-    "source": "8f7f820ba20206a61ddc3509dd8c2a7564954bb3197de118fdc373a2fffc7c66",
+    "source": "3efd821dcaa10a5cb8bd1d3c4e92d9e19c3fa4e77c4044f332dd83f7ea399cee",
     "sidecar": "c86f40828c0303adad2cbf05eb25b5c358ff88ffc1bb9ebcbd39d9de75b158cc",
     "tree_sitter": "d8efa5533a1c79cc404df3a0ff03d76626ad50d54b74d97e4cf6e30ab85bebe4",
     "language_pack": "18fda57fbe2f52f85cf09fd1fc5af6509bfe0a8c6d3d425cafe3d7b63f8dca6e",
     "grammars": "19fc42827e8ab3b37282c0666caa1ddd8abcd3708298fb1665c10df440c3d090",
 }
 PARSER_RUNTIME_IDENTITY_SHA256 = (
-    "d0a0a61605faf57270d9df4828a01c281ace1af095e87c86fa2a5812b1cd950a"
+    "54bd8cf68c0e7ac5fb349a8b42ad0005864b40d4d1094c997e0d073c2d3331e3"
 )
 PARSER_RUNTIME_NOT_APPLICABLE = "not_applicable"
 _FIELD_ORDER = (
@@ -146,28 +152,6 @@ def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]
 
 def _reject_nonfinite(value: str) -> object:
     raise ValueError(f"non-finite JSON constant is forbidden: {value}")
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _aggregate_sha256(root: Path, pattern: str) -> tuple[str, int, int]:
-    paths = sorted(root.rglob(pattern), key=lambda item: item.relative_to(root).as_posix())
-    digest = hashlib.sha256()
-    total_bytes = 0
-    for path in paths:
-        relative = path.relative_to(root).as_posix()
-        digest.update(relative.encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(_sha256(path).encode("ascii"))
-        digest.update(b"\n")
-        total_bytes += path.stat().st_size
-    return digest.hexdigest(), len(paths), total_bytes
 
 
 def _sidecar_environment() -> dict[str, str]:
@@ -642,12 +626,19 @@ class BCNLTSourcePipeline:
             source_manifest.get("aggregate_sha256") != source_hash
             or source_manifest.get("file_count") != source_count
             or source_manifest.get("bytes") != source_bytes
+            or source_manifest.get("identity_policy")
+            != PYTHON_SOURCE_IDENTITY_POLICY
             or runtime_manifest.get("sidecar_sha256") != actual["sidecar"]
+            or runtime_manifest.get("sidecar_bytes") != len(_identity_bytes(_SIDECAR))
             or runtime_manifest.get("tree_sitter_binding_sha256") != actual["tree_sitter"]
             or runtime_manifest.get("language_pack_binding_sha256") != actual["language_pack"]
             or runtime_manifest.get("grammar_aggregate_sha256") != grammar_hash
             or runtime_manifest.get("grammar_count") != grammar_count
             or runtime_manifest.get("grammar_bytes") != grammar_bytes
+            or runtime_manifest.get("python_source_identity_policy")
+            != PYTHON_SOURCE_IDENTITY_POLICY
+            or runtime_manifest.get("parser_runtime_identity_sha256")
+            != PARSER_RUNTIME_IDENTITY_SHA256
         ):
             raise ValueError("project-contained BCNLT runtime manifest identity mismatch")
         version_check = subprocess.run(
