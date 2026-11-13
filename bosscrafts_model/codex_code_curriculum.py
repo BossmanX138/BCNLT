@@ -456,6 +456,7 @@ def _build_shard_worker(
         raise RuntimeError("CodeX curriculum requires tokenizers 0.23.2")
     source_path = Path(source_path_text).resolve()
     destination = Path(destination_text).resolve()
+    humaneval_path = Path(humaneval_path_text).resolve()
     source_sha256 = _sha256_file(source_path)
     source_size = source_path.stat().st_size
     parquet_file = parquet.ParquetFile(source_path)
@@ -474,21 +475,29 @@ def _build_shard_worker(
         "source_sha256": source_sha256,
         "source_size_bytes": str(source_size),
         "source_rows": str(source_rows),
-        "humaneval_exclusion_sha256": _sha256_file(Path(humaneval_path_text)),
+        "humaneval_exclusion_sha256": _sha256_file(humaneval_path),
     }
     existing = _load_completed_shard(destination, expected)
     if existing is not None:
         return existing
+    incomplete_destination_sha256: str | None = None
     if destination.exists():
-        destination.unlink()
+        if not destination.is_file():
+            raise ValueError("CodeX shard destination is not a regular file")
+        incomplete_destination_sha256 = _sha256_file(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f".{destination.name}.tmp-{os.getpid()}")
-    if temporary.exists():
-        temporary.unlink()
+    temporary_handle = tempfile.NamedTemporaryFile(
+        dir=destination.parent,
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+        delete=False,
+    )
+    temporary = Path(temporary_handle.name)
+    temporary_handle.close()
     metadata = {**expected, "packing_complete": "false"}
     connection = _initialize_shard_database(temporary, metadata)
     tokenizer = tokenizers.Tokenizer.from_file(tokenizer_path_text)
-    exclusion = HumanEvalExclusion(humaneval_path_text)
+    exclusion = HumanEvalExclusion(humaneval_path)
     task_token = structural_ids["<|bcnlt:task:mixed_instruction|>"]
     stream_begin = structural_ids["<|bcnlt:stream:begin|>"]
     stream_end = structural_ids["<|bcnlt:stream:end|>"]
@@ -671,7 +680,38 @@ def _build_shard_worker(
         raise
     else:
         connection.close()
-    temporary.replace(destination)
+    try:
+        validated = _load_completed_shard(temporary, expected)
+        if validated is None:
+            raise ValueError("new CodeX shard did not pass its completion audit")
+        if (
+            _sha256_file(source_path) != source_sha256
+            or source_path.stat().st_size != source_size
+            or _sha256_file(humaneval_path)
+            != expected["humaneval_exclusion_sha256"]
+        ):
+            raise ValueError("CodeX shard source changed during build")
+        with temporary.open("r+b") as stream:
+            os.fsync(stream.fileno())
+        if incomplete_destination_sha256 is not None:
+            if (
+                not destination.is_file()
+                or _sha256_file(destination) != incomplete_destination_sha256
+            ):
+                raise ValueError("CodeX shard destination changed during build")
+            os.replace(temporary, destination)
+        else:
+            if destination.exists():
+                raise ValueError("CodeX shard destination already exists")
+            try:
+                os.link(temporary, destination)
+            except FileExistsError as error:
+                raise ValueError("CodeX shard destination already exists") from error
+            temporary.unlink()
+    except BaseException:
+        if temporary.exists():
+            temporary.unlink()
+        raise
     return ShardBuildStatus(
         database_path=str(destination),
         source_path=str(source_path),

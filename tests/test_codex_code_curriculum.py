@@ -259,6 +259,48 @@ class CodeXCodeCurriculumTests(unittest.TestCase):
 
             self.assertFalse((output / "tasks.sqlite").exists())
 
+    def test_rejects_humaneval_exclusion_changed_during_shard_build(self) -> None:
+        binding = NativeTokenizerBinding.load()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dataset, humaneval = self._write_tiny_inputs(root)
+            output = root / "output"
+            real_overlaps = HumanEvalExclusion.overlaps
+            exclusion_changed = False
+
+            def overlap_then_change_exclusion(
+                exclusion: HumanEvalExclusion, prompt: str, code: str
+            ) -> bool:
+                nonlocal exclusion_changed
+                result = real_overlaps(exclusion, prompt, code)
+                if not exclusion_changed:
+                    humaneval.write_bytes(humaneval.read_bytes() + b"changed")
+                    exclusion_changed = True
+                return result
+
+            with (
+                mock.patch.object(
+                    HumanEvalExclusion,
+                    "overlaps",
+                    autospec=True,
+                    side_effect=overlap_then_change_exclusion,
+                ),
+                self.assertRaisesRegex(ValueError, "changed during build"),
+            ):
+                build_codex_code_curriculum(
+                    binding,
+                    dataset_root=dataset,
+                    shard_indices=(0,),
+                    output_root=output,
+                    humaneval_dataset=humaneval,
+                    workers=1,
+                    batch_size=2,
+                    max_sequence=2048,
+                )
+
+            self.assertFalse((output / "tasks.sqlite").exists())
+            self.assertFalse((output / "shards" / "shard_00000.sqlite").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
