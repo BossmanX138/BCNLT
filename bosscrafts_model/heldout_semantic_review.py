@@ -3,14 +3,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
-from .bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
+from .bcnlt_source_pipeline import (
+    CURRENT_RUNTIME_SPEC_SHA256,
+    PARSER_RUNTIME_IDENTITY_SHA256,
+)
 from .current_task_packing import (
     EXAMPLE_SCHEMA,
+    FAMILIES,
     PACKED_MANIFEST_SCHEMA,
     CurrentCorpusTaskPacker,
 )
@@ -72,17 +78,35 @@ class HeldoutSemanticReviewQueue:
     def _load_tasks(self, root: Path) -> tuple[dict[str, object], list[dict[str, object]], set[str]]:
         manifest_path = root / "manifest.json"
         examples_path = root / "examples.jsonl"
+        rejections_path = root / "rejected.jsonl"
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
             raise ValueError("packed manifest is invalid") from error
+        if type(manifest) is not dict:
+            raise ValueError("packed manifest is invalid")
         if manifest.get("schema_version") != PACKED_MANIFEST_SCHEMA:
             raise ValueError("packed manifest schema mismatch")
-        claimed_manifest_hash = manifest.pop("manifest_sha256", None)
-        if claimed_manifest_hash != _sha256_text(_canonical_json(manifest)):
+        claimed_manifest_hash = manifest.get("manifest_sha256")
+        unsigned_manifest = {
+            key: value for key, value in manifest.items() if key != "manifest_sha256"
+        }
+        if claimed_manifest_hash != _sha256_text(_canonical_json(unsigned_manifest)):
             raise ValueError("packed manifest SHA-256 mismatch")
-        if _sha256_file(examples_path) != manifest.get("examples_sha256"):
+        if (
+            manifest.get("examples_file") != "examples.jsonl"
+            or manifest.get("rejections_file") != "rejected.jsonl"
+        ):
+            raise ValueError("packed manifest file inventory mismatch")
+        try:
+            examples_text = examples_path.read_text(encoding="utf-8")
+            rejections_text = rejections_path.read_text(encoding="utf-8")
+        except OSError as error:
+            raise ValueError("packed task files cannot be read") from error
+        if _sha256_text(examples_text) != manifest.get("examples_sha256"):
             raise ValueError("packed examples SHA-256 mismatch")
+        if _sha256_text(rejections_text) != manifest.get("rejections_sha256"):
+            raise ValueError("packed rejections SHA-256 mismatch")
         if (
             manifest.get("binding_sha256") != self._binding.binding_sha256
             or manifest.get("tokenizer_sha256") != self._binding.tokenizer_sha256
@@ -94,33 +118,95 @@ class HeldoutSemanticReviewQueue:
 
         eligible: list[dict[str, object]] = []
         all_languages: set[str] = set()
-        with examples_path.open(encoding="utf-8") as handle:
-            for line in handle:
-                try:
-                    row = json.loads(line)
-                except json.JSONDecodeError as error:
-                    raise ValueError("packed example JSON is invalid") from error
-                if type(row) is not dict or row.get("schema_version") != EXAMPLE_SCHEMA:
-                    raise ValueError("packed example schema mismatch")
-                if (
-                    row.get("binding_sha256") != self._binding.binding_sha256
-                    or row.get("tokenizer_sha256") != self._binding.tokenizer_sha256
-                    or row.get("parser_runtime_identity_sha256")
-                    != PARSER_RUNTIME_IDENTITY_SHA256
-                ):
-                    raise ValueError("packed example tokenizer lineage mismatch")
-                language = row.get("language")
-                if type(language) is not str or not language:
-                    raise ValueError("packed example language is invalid")
-                all_languages.add(language)
-                if row.get("family") == "code_to_semantic" and row.get("split") in {
-                    "validation",
-                    "test",
-                }:
-                    eligible.append(row)
+        example_ids: set[str] = set()
+        document_splits: dict[str, set[str]] = {}
+        family_counts = {family: 0 for family in FAMILIES}
+        split_counts = {split: 0 for split in ("train", "validation", "test")}
+        for line in split_jsonl_records(examples_text):
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise ValueError("packed example JSON is invalid") from error
+            if type(row) is not dict or row.get("schema_version") != EXAMPLE_SCHEMA:
+                raise ValueError("packed example schema mismatch")
+            if (
+                row.get("binding_sha256") != self._binding.binding_sha256
+                or row.get("tokenizer_sha256") != self._binding.tokenizer_sha256
+                or row.get("parser_runtime_identity_sha256")
+                != PARSER_RUNTIME_IDENTITY_SHA256
+            ):
+                raise ValueError("packed example tokenizer lineage mismatch")
+            language = row.get("language")
+            family = row.get("family")
+            split = row.get("split")
+            document_id = row.get("document_id")
+            record_index = row.get("record_index")
+            example_id = row.get("example_id")
+            input_ids = row.get("input_ids")
+            loss_start = row.get("loss_start_index")
+            if (
+                type(language) is not str
+                or language not in CURRENT_RUNTIME_SPEC_SHA256
+                or row.get("semantic_spec_sha256")
+                != CURRENT_RUNTIME_SPEC_SHA256[language]
+                or family not in FAMILIES
+                or split not in split_counts
+                or type(document_id) is not str
+                or not document_id
+                or type(record_index) is not int
+                or record_index < 0
+                or type(example_id) is not str
+                or not example_id
+                or type(input_ids) is not list
+                or any(type(token_id) is not int for token_id in input_ids)
+                or any(
+                    not 0 <= token_id < self._binding.vocab_size
+                    for token_id in input_ids
+                )
+                or len(input_ids) > manifest.get("maximum_sequence_tokens", 0)
+                or type(loss_start) is not int
+                or not 0 < loss_start < len(input_ids)
+                or row.get("target_token_count") != len(input_ids) - loss_start
+                or input_ids[0]
+                != self._binding.structural_token_ids[f"<|bcnlt:task:{family}|>"]
+                or input_ids[-1]
+                != self._binding.structural_token_ids["<|bcnlt:task:end|>"]
+            ):
+                raise ValueError("packed example content is invalid")
+            expected_example_id = _sha256_text(
+                _canonical_json(
+                    {
+                        "document_id": document_id,
+                        "family": family,
+                        "record_index": record_index,
+                        "input_ids_sha256": _sha256_text(
+                            _canonical_json(input_ids)
+                        ),
+                    }
+                )
+            )
+            if example_id != expected_example_id or example_id in example_ids:
+                raise ValueError("packed example identity is invalid")
+            example_ids.add(example_id)
+            document_splits.setdefault(document_id, set()).add(str(split))
+            family_counts[str(family)] += 1
+            split_counts[str(split)] += 1
+            all_languages.add(language)
+            if family == "code_to_semantic" and split in {"validation", "test"}:
+                eligible.append(row)
+        if any(len(splits) != 1 for splits in document_splits.values()):
+            raise ValueError("packed examples violate document split isolation")
+        if (
+            len(example_ids) != manifest.get("example_count")
+            or family_counts != manifest.get("family_counts")
+            or split_counts != manifest.get("split_counts")
+            or len(split_jsonl_records(rejections_text))
+            != manifest.get("rejected_count")
+        ):
+            raise ValueError("packed task manifest counts mismatch")
         if len(all_languages) > 255:
             raise ValueError("review language count exceeds supported range")
-        return {**manifest, "manifest_sha256": claimed_manifest_hash}, eligible, all_languages
+        return dict(manifest), eligible, all_languages
 
     def materialize(
         self,
@@ -137,6 +223,8 @@ class HeldoutSemanticReviewQueue:
             self._binding
         )._load_admission(admission_path)
         packed_manifest, eligible, all_languages = self._load_tasks(tasks_path)
+        if any(output_path.iterdir()):
+            raise ValueError("held-out review output already contains files")
         if packed_manifest.get("source_admission_manifest_sha256") != admission_manifest.get(
             "manifest_sha256"
         ):
@@ -235,8 +323,12 @@ class HeldoutSemanticReviewQueue:
         }
         manifest_sha256 = _sha256_text(_canonical_json(unsigned_manifest))
         manifest = {**unsigned_manifest, "manifest_sha256": manifest_sha256}
-        self._replace_text(output_path / "review_queue.jsonl", queue_text)
-        self._replace_text(output_path / "manifest.json", f"{_canonical_json(manifest)}\n")
+        self._publish_new_files(
+            (
+                (output_path / "review_queue.jsonl", queue_text),
+                (output_path / "manifest.json", f"{_canonical_json(manifest)}\n"),
+            )
+        )
         return HeldoutSemanticReviewResult(
             output_root=output_path,
             item_count=len(selected),
@@ -258,6 +350,8 @@ class HeldoutSemanticReviewQueue:
         admission_manifest, admission_rows = CurrentCorpusTaskPacker(
             self._binding
         )._load_admission(admission_path)
+        if any(output_path.iterdir()):
+            raise ValueError("held-out review output already contains files")
         all_languages = {str(row["language"]) for row in admission_rows}
         counts: dict[str, int] = {}
         selected: list[dict[str, object]] = []
@@ -353,8 +447,12 @@ class HeldoutSemanticReviewQueue:
         }
         manifest_sha256 = _sha256_text(_canonical_json(unsigned_manifest))
         manifest = {**unsigned_manifest, "manifest_sha256": manifest_sha256}
-        self._replace_text(output_path / "review_queue.jsonl", queue_text)
-        self._replace_text(output_path / "manifest.json", f"{_canonical_json(manifest)}\n")
+        self._publish_new_files(
+            (
+                (output_path / "review_queue.jsonl", queue_text),
+                (output_path / "manifest.json", f"{_canonical_json(manifest)}\n"),
+            )
+        )
         return HeldoutSemanticReviewResult(
             output_root=output_path,
             item_count=len(selected),
@@ -405,10 +503,47 @@ class HeldoutSemanticReviewQueue:
         return result
 
     @staticmethod
-    def _replace_text(path: Path, content: str) -> None:
-        temporary = path.with_name(f".{path.name}.tmp")
-        temporary.write_text(content, encoding="utf-8", newline="\n")
-        temporary.replace(path)
+    def _publish_new_files(files: tuple[tuple[Path, str], ...]) -> None:
+        staged: list[tuple[Path, Path]] = []
+        published: list[tuple[Path, Path]] = []
+        try:
+            for path, content in files:
+                temporary_handle = tempfile.NamedTemporaryFile(
+                    mode="w",
+                    encoding="utf-8",
+                    newline="\n",
+                    dir=path.parent,
+                    prefix=f".{path.name}.",
+                    suffix=".tmp",
+                    delete=False,
+                )
+                temporary = Path(temporary_handle.name)
+                try:
+                    temporary_handle.write(content)
+                    temporary_handle.flush()
+                    os.fsync(temporary_handle.fileno())
+                finally:
+                    temporary_handle.close()
+                staged.append((path, temporary))
+            for path, temporary in staged:
+                if path.exists():
+                    raise ValueError("held-out review output file already exists")
+                try:
+                    os.link(temporary, path)
+                except FileExistsError as error:
+                    raise ValueError(
+                        "held-out review output file already exists"
+                    ) from error
+                published.append((path, temporary))
+        except BaseException:
+            for path, temporary in reversed(published):
+                if path.exists() and path.samefile(temporary):
+                    path.unlink()
+            raise
+        finally:
+            for _, temporary in staged:
+                if temporary.exists():
+                    temporary.unlink()
 
 
 class HeldoutSemanticReviewAdjudicator:
@@ -437,12 +572,23 @@ class HeldoutSemanticReviewAdjudicator:
             source_manifest = json.loads((queue_path / "manifest.json").read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
             raise ValueError("review queue manifest is invalid") from error
+        if type(source_manifest) is not dict:
+            raise ValueError("review queue manifest is invalid")
         if source_manifest.get("schema_version") != REVIEW_MANIFEST_SCHEMA:
             raise ValueError("review queue manifest schema mismatch")
-        source_manifest_sha256 = source_manifest.pop("manifest_sha256", None)
-        if source_manifest_sha256 != _sha256_text(_canonical_json(source_manifest)):
+        source_manifest_sha256 = source_manifest.get("manifest_sha256")
+        unsigned_source_manifest = {
+            key: value
+            for key, value in source_manifest.items()
+            if key != "manifest_sha256"
+        }
+        if source_manifest_sha256 != _sha256_text(
+            _canonical_json(unsigned_source_manifest)
+        ):
             raise ValueError("review queue manifest SHA-256 mismatch")
-        queue_file = queue_path / str(source_manifest.get("queue_file"))
+        if source_manifest.get("queue_file") != "review_queue.jsonl":
+            raise ValueError("review queue manifest file inventory mismatch")
+        queue_file = queue_path / "review_queue.jsonl"
         queue_text = queue_file.read_text(encoding="utf-8")
         if _sha256_text(queue_text) != source_manifest.get("queue_sha256"):
             raise ValueError("review queue SHA-256 mismatch")
@@ -457,8 +603,39 @@ class HeldoutSemanticReviewAdjudicator:
             if (
                 item.get("parser_runtime_identity_sha256")
                 != source_manifest.get("parser_runtime_identity_sha256")
+                or item.get("binding_sha256")
+                != source_manifest.get("binding_sha256")
+                or item.get("tokenizer_sha256")
+                != source_manifest.get("tokenizer_sha256")
             ):
-                raise ValueError("review queue parser-runtime lineage mismatch")
+                raise ValueError("review queue tokenizer lineage mismatch")
+            example_id = item.get("example_id")
+            if example_id is None:
+                identity = {
+                    "document_id": item.get("document_id"),
+                    "record_index": item.get("record_index"),
+                    "source_sha256": item.get("source_sha256"),
+                    "semantic_spec_sha256": item.get("semantic_spec_sha256"),
+                    "parser_runtime_identity_sha256": item.get(
+                        "parser_runtime_identity_sha256"
+                    ),
+                }
+            else:
+                identity = {
+                    "example_id": example_id,
+                    "source_sha256": item.get("source_sha256"),
+                    "semantic_spec_sha256": item.get("semantic_spec_sha256"),
+                    "parser_runtime_identity_sha256": item.get(
+                        "parser_runtime_identity_sha256"
+                    ),
+                }
+            if (
+                item.get("review_id") != _sha256_text(_canonical_json(identity))
+                or item.get("review_status") != "unreviewed"
+                or type(item.get("canonical_record")) is not dict
+                or type(item.get("source_excerpt")) is not str
+            ):
+                raise ValueError("review queue item identity is invalid")
             items.append(item)
         if len(items) != source_manifest.get("item_count"):
             raise ValueError("review queue item count mismatch")
@@ -497,6 +674,8 @@ class HeldoutSemanticReviewAdjudicator:
         missing = sorted(set(item_ids) - set(decisions_by_id))
         if missing:
             raise ValueError(f"missing review decisions: {missing}")
+        if any(output_path.iterdir()):
+            raise ValueError("held-out adjudication output already contains files")
 
         adjudicated: list[dict[str, object]] = []
         counts = {"keep": 0, "reject": 0, "uncertain": 0}
@@ -544,11 +723,11 @@ class HeldoutSemanticReviewAdjudicator:
         }
         manifest_sha256 = _sha256_text(_canonical_json(unsigned_manifest))
         manifest = {**unsigned_manifest, "manifest_sha256": manifest_sha256}
-        HeldoutSemanticReviewQueue._replace_text(
-            output_path / "adjudicated_queue.jsonl", adjudicated_text
-        )
-        HeldoutSemanticReviewQueue._replace_text(
-            output_path / "manifest.json", f"{_canonical_json(manifest)}\n"
+        HeldoutSemanticReviewQueue._publish_new_files(
+            (
+                (output_path / "adjudicated_queue.jsonl", adjudicated_text),
+                (output_path / "manifest.json", f"{_canonical_json(manifest)}\n"),
+            )
         )
         return HeldoutSemanticAdjudicationResult(
             output_root=output_path,
