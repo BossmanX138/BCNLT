@@ -6,6 +6,7 @@ import json
 import sys
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any, Protocol
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RECOVERY_ROOT = PROJECT_ROOT / "artifacts" / "bcnlt" / "runtime-recovery-v1"
@@ -35,6 +36,15 @@ OBSERVED_SPEC_SHA256 = {
 }
 
 
+class _SemanticSpec(Protocol):
+    semantic_spec_version: str
+    resolved_node_rules: tuple[Any, ...]
+    resolved_identifier_roles: tuple[Any, ...]
+    resolved_scope_rules: tuple[Any, ...]
+    resolved_uncertainty_rules: tuple[Any, ...]
+    resolved_excluded_node_types: tuple[str, ...]
+
+
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -44,7 +54,7 @@ def canonical_hash(payload: object) -> str:
     return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
 
-def spec_payload(spec: object) -> dict[str, object]:
+def spec_payload(spec: _SemanticSpec) -> dict[str, object]:
     return {
         "semantic_spec_version": spec.semantic_spec_version,
         "node_rules": [asdict(item) for item in spec.resolved_node_rules],

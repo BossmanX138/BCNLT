@@ -103,6 +103,7 @@ def main() -> int:
     boundaries = torch.tensor([loss_start], dtype=torch.long, device=device)
     probe_token = ids_list[loss_start]
     before = model.embedding.weight[probe_token].detach().float().clone()
+    optimizer: torch.optim.Optimizer
     if arguments.optimizer == "adamw":
         optimizer = torch.optim.AdamW(model.parameters(), lr=arguments.learning_rate)
     else:
@@ -110,7 +111,7 @@ def main() -> int:
     optimizer.zero_grad(set_to_none=True)
     logits, routes = model(ids)
     loss = masked_next_token_loss(logits, ids, boundaries)
-    loss.backward()
+    torch.autograd.backward(loss)
 
     gradient_square_sum = torch.zeros((), dtype=torch.float32, device=device)
     gradient_finite = True

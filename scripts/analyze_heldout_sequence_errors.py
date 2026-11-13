@@ -7,6 +7,7 @@ import sys
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
+from typing import TypedDict
 
 import torch
 
@@ -47,6 +48,18 @@ DEFAULT_CHECKPOINT = (
     / "bosscrafts-engineering-v2"
     / "checkpoint.pt"
 )
+
+
+class _RankedSequenceError(TypedDict):
+    example_id: str
+    language: str
+    prompt_token_count: int
+    target_token_count: int
+    mismatch_count: int
+    token_accuracy: float
+    first_mismatch_offset: int | None
+    expected_token_id_at_first_mismatch: int | None
+    predicted_token_id_at_first_mismatch: int | None
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:
@@ -107,7 +120,7 @@ def main() -> int:
         expected_model_fingerprint=config.fingerprint(),
     )
 
-    candidates: dict[str, list[dict[str, object]]] = defaultdict(list)
+    candidates: dict[str, list[_RankedSequenceError]] = defaultdict(list)
     mismatch_histograms: dict[str, Counter[int]] = defaultdict(Counter)
     scanned_by_family: Counter[str] = Counter()
     exact_by_family: Counter[str] = Counter()
@@ -153,7 +166,7 @@ def main() -> int:
                     )
                     expected_token_id = int(expected[first_mismatch_offset].item())
                     predicted_token_id = int(predictions[first_mismatch_offset].item())
-                item = {
+                item: _RankedSequenceError = {
                     "example_id": example["example_id"],
                     "language": example["language"],
                     "prompt_token_count": loss_start,

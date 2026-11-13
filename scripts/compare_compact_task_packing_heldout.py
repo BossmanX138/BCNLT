@@ -27,10 +27,13 @@ DEFAULT_OUTPUT = PROJECT_ROOT / "artifacts" / "audits" / "compact-task-packing-h
 
 
 def _key(example: dict[str, object]) -> tuple[str, str, int]:
+    record_index = example["record_index"]
+    if type(record_index) is not int:
+        raise ValueError("task record_index must be an integer")
     return (
         str(example["document_id"]),
         str(example["family"]),
-        int(example["record_index"]),
+        record_index,
     )
 
 

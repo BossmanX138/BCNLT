@@ -10,7 +10,7 @@ from collections import Counter
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, TypedDict
 
 PILOT_SCHEMA = "bosscrafts-project-codenet-pilot-v1"
 DATASET_LICENSE = "CDLA-Permissive-2.0"
@@ -21,6 +21,30 @@ class OverlapFilter(Protocol):
     sha256: str
 
     def overlaps(self, prompt: str, code: str) -> bool: ...
+
+
+class PilotSelection(TypedDict):
+    languages: list[str]
+    per_language_limit: int
+    seed: str
+    minimum_code_bytes: int
+    maximum_code_bytes: int
+    one_solution_per_problem_language_pair: bool
+    split_unit: str
+
+
+class PilotReport(TypedDict):
+    schema_version: str
+    dataset: str
+    dataset_license: str
+    archive_sha256: str
+    tooling_commit: str
+    selection: PilotSelection
+    benchmark_exclusion_sha256: str | None
+    record_count: int
+    language_counts: dict[str, int]
+    split_counts: dict[str, int]
+    rejection_counts: dict[str, int]
 
 
 class _TextExtractor(HTMLParser):
@@ -193,7 +217,7 @@ def build_pilot(
     archive_sha256: str,
     tooling_commit: str,
     overlap_filter: OverlapFilter | None,
-) -> tuple[list[dict[str, object]], dict[str, object]]:
+) -> tuple[list[dict[str, object]], PilotReport]:
     if not _HEX64.fullmatch(archive_sha256):
         raise ValueError("archive SHA-256 is invalid")
     candidates, rejections = select_candidates(
@@ -254,7 +278,7 @@ def build_pilot(
         records.append(record)
         language_counts[candidate.language] += 1
         split_counts[split] += 1
-    report: dict[str, object] = {
+    report: PilotReport = {
         "schema_version": PILOT_SCHEMA,
         "dataset": "IBM/Project_CodeNet",
         "dataset_license": DATASET_LICENSE,

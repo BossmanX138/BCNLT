@@ -5,6 +5,7 @@ import hashlib
 import itertools
 import json
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -86,7 +87,7 @@ def _verify_signed_manifest(path: Path) -> tuple[dict[str, object], str]:
     return manifest, claimed
 
 
-def _iter_jsonl(path: Path):
+def _iter_jsonl(path: Path) -> Iterator[dict[str, object]]:
     with path.open("rb") as stream:
         while True:
             raw = stream.readline(MAX_JSONL_LINE_BYTES + 1)

@@ -7,6 +7,7 @@ import sqlite3
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
+from typing import TypedDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -39,6 +40,18 @@ DEFAULT_DATABASE = (
 )
 
 
+class _CollisionRecord(TypedDict):
+    example_id: str
+    document_id: str
+    language: str
+    record_index: int
+    split: str
+    prompt: tuple[int, ...]
+    fragment: tuple[int, ...]
+    event_token_id: int
+    source_sha256: str
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--database", type=Path, default=DEFAULT_DATABASE)
@@ -69,7 +82,7 @@ def main() -> int:
     database = arguments.database.resolve()
     connection = sqlite3.connect(f"{database.as_uri()}?mode=ro", uri=True, timeout=30)
     connection.execute("PRAGMA query_only=ON")
-    groups: dict[tuple[str, tuple[int, ...]], list[dict[str, object]]] = defaultdict(list)
+    groups: dict[tuple[str, tuple[int, ...]], list[_CollisionRecord]] = defaultdict(list)
     try:
         rows = connection.execute(
             """SELECT example_id,document_id,language,record_index,split,

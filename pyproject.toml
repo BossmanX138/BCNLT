@@ -4,6 +4,7 @@ version = "0.0.0"
 description = "Isolated, evidence-gated BossCrafts model and BCNLT runtime candidate"
 requires-python = ">=3.13,<3.14"
 dependencies = [
+    "numpy==2.5.4",
     "pyarrow==23.0.1",
     "torch==2.13.0",
 ]

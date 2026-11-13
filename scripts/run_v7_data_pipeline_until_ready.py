@@ -124,7 +124,7 @@ def _admission_status() -> dict[str, object]:
 def _process_is_active(process_id: int) -> bool:
     if os.name != "nt":
         raise RuntimeError("the V7 pipeline controller currently requires Windows")
-    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+    kernel32 = ctypes.windll.kernel32
     handle = kernel32.OpenProcess(
         PROCESS_QUERY_LIMITED_INFORMATION, False, process_id
     )

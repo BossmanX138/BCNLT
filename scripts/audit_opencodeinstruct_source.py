@@ -29,6 +29,8 @@ def _sha256(path: Path) -> str:
 
 
 def _score(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
     try:
         score = float(value)
     except (TypeError, ValueError):

@@ -8,7 +8,9 @@ import os
 import sys
 import time
 from collections import defaultdict
+from collections.abc import Mapping
 from pathlib import Path
+from typing import TypedDict
 
 import torch
 
@@ -27,6 +29,11 @@ import tokenizers
 if tokenizers.__version__ != "0.23.2":
     raise RuntimeError("project-contained tokenizers runtime version mismatch")
 
+from bosscrafts_model.generation_artifacts import (
+    GENERATION_GATE_SCHEMA,
+    GenerationGateRecord,
+    load_generation_gate_records,
+)
 from bosscrafts_model.inference_protocol import (
     INFERENCE_TASKS,
     response_payload_token_ids,
@@ -43,7 +50,7 @@ from bosscrafts_model.resumable_task_packing import (
 from bosscrafts_model.tokenizer import NativeTokenizerBinding, bound_native_65k_config
 from bosscrafts_model.training_checkpoint import load_model_checkpoint_for_inference
 
-SCHEMA = "bosscrafts-strict-generation-gate-v1"
+SCHEMA = GENERATION_GATE_SCHEMA
 DEFAULT_DATABASE = (
     PROJECT_ROOT
     / "artifacts"
@@ -60,7 +67,24 @@ DEFAULT_CHECKPOINT = (
 )
 
 
-def _atomic_json(path: Path, payload: dict[str, object]) -> None:
+class _GenerationCase(TypedDict):
+    example_id: str
+    family: str
+    prompt_ids: list[int]
+    expected_ids: list[int]
+
+
+class _GenerationSummary(TypedDict):
+    case_count: int
+    protocol_complete_count: int
+    protocol_complete_rate: float
+    exact_match_count: int
+    exact_match_rate: float
+    mean_target_token_accuracy: float
+    total_generation_seconds: float
+
+
+def _atomic_json(path: Path, payload: Mapping[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp")
     temporary.write_text(
@@ -70,29 +94,11 @@ def _atomic_json(path: Path, payload: dict[str, object]) -> None:
     temporary.replace(path)
 
 
-def _append_jsonl(path: Path, payload: dict[str, object]) -> None:
+def _append_jsonl(path: Path, payload: Mapping[str, object]) -> None:
     with path.open("a", encoding="utf-8", newline="\n") as handle:
         handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
         handle.flush()
         os.fsync(handle.fileno())
-
-
-def _load_records(path: Path, run_identity: str) -> dict[str, dict[str, object]]:
-    records: dict[str, dict[str, object]] = {}
-    if not path.exists():
-        return records
-    with path.open("r", encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, start=1):
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            if type(row) is not dict or row.get("run_identity_sha256") != run_identity:
-                raise ValueError(f"generation gate record {line_number} has wrong identity")
-            example_id = row.get("example_id")
-            if type(example_id) is not str or example_id in records:
-                raise ValueError(f"generation gate record {line_number} is invalid")
-            records[example_id] = row
-    return records
 
 
 def _select_cases(
@@ -103,8 +109,8 @@ def _select_cases(
     limit_per_family: int,
     maximum_new_tokens: int,
     maximum_sequence: int,
-) -> list[dict[str, object]]:
-    selected: dict[str, list[dict[str, object]]] = {
+) -> list[_GenerationCase]:
+    selected: dict[str, list[_GenerationCase]] = {
         family: [] for family in families
     }
     for row in dataset.iter_examples(split=split):
@@ -121,12 +127,12 @@ def _select_cases(
         ):
             continue
         selected[family].append(
-            {
-                "example_id": str(row["example_id"]),
-                "family": family,
-                "prompt_ids": prompt_ids,
-                "expected_ids": expected_ids,
-            }
+            _GenerationCase(
+                example_id=str(row["example_id"]),
+                family=family,
+                prompt_ids=prompt_ids,
+                expected_ids=expected_ids,
+            )
         )
     missing = {
         family: len(rows)
@@ -256,7 +262,7 @@ def main() -> int:
         _atomic_json(manifest_path, run_spec)
 
     records_path = output / "generation-records.jsonl"
-    records = _load_records(records_path, run_identity)
+    records = load_generation_gate_records(records_path, run_identity)
     selected_ids = {str(row["example_id"]) for row in cases}
     if not set(records).issubset(selected_ids):
         raise ValueError("generation gate records contain an unselected example")
@@ -305,29 +311,29 @@ def main() -> int:
             for actual, expected in zip(generated_ids, expected_ids, strict=False)
         )
         payload_ids = response_payload_token_ids(binding, family, generated_ids)
-        record: dict[str, object] = {
-            "schema_version": SCHEMA,
-            "run_identity_sha256": run_identity,
-            "example_id": example_id,
-            "family": family,
-            "prompt_token_count": len(prompt_ids),
-            "expected_token_count": len(expected_ids),
-            "generated_token_count": len(generated_ids),
-            "expected_ids": expected_ids,
-            "generated_ids": generated_ids,
-            "expected_protocol_text": binding.decode(expected_ids),
-            "generated_protocol_text": binding.decode(generated_ids),
-            "generated_payload_text": binding.decode(payload_ids),
-            "protocol_complete": response_protocol_complete(
+        record = GenerationGateRecord(
+            schema_version=SCHEMA,
+            run_identity_sha256=run_identity,
+            example_id=example_id,
+            family=family,
+            prompt_token_count=len(prompt_ids),
+            expected_token_count=len(expected_ids),
+            generated_token_count=len(generated_ids),
+            expected_ids=expected_ids,
+            generated_ids=generated_ids,
+            expected_protocol_text=binding.decode(expected_ids),
+            generated_protocol_text=binding.decode(generated_ids),
+            generated_payload_text=binding.decode(payload_ids),
+            protocol_complete=response_protocol_complete(
                 binding,
                 task=family,
                 generated_ids=generated_ids,
             ),
-            "exact_match": generated_ids == expected_ids,
-            "target_token_accuracy": correct / len(expected_ids),
-            "generation_seconds": elapsed,
-            "tokens_per_second": len(generated_ids) / elapsed,
-        }
+            exact_match=generated_ids == expected_ids,
+            target_token_accuracy=correct / len(expected_ids),
+            generation_seconds=elapsed,
+            tokens_per_second=len(generated_ids) / elapsed,
+        )
         _append_jsonl(records_path, record)
         records[example_id] = record
         _atomic_json(
@@ -357,11 +363,11 @@ def main() -> int:
         )
 
     ordered = [records[str(case["example_id"])] for case in cases]
-    by_family: dict[str, list[dict[str, object]]] = defaultdict(list)
+    by_family: dict[str, list[GenerationGateRecord]] = defaultdict(list)
     for record in ordered:
         by_family[str(record["family"])].append(record)
 
-    def summarize(items: list[dict[str, object]]) -> dict[str, object]:
+    def summarize(items: list[GenerationGateRecord]) -> _GenerationSummary:
         return {
             "case_count": len(items),
             "protocol_complete_count": sum(
