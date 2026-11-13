@@ -17,6 +17,11 @@ from bosscrafts_model.bcnlt_source_pipeline import (
     CURRENT_RUNTIME_SPEC_SHA256,
     PARSER_RUNTIME_IDENTITY_SHA256,
 )
+from bosscrafts_model.ifeval_case_runner import (
+    IfevalBatchResult,
+    build_ifeval_batch_receipt,
+)
+from bosscrafts_model.ifeval_runtime import EXPECTED_IFEVAL_RUNTIME_MANIFEST_SHA256
 from bosscrafts_model.inference_protocol import (
     HeldoutInferenceCase,
     response_payload_token_ids,
@@ -417,12 +422,46 @@ def _records(category: str) -> list[dict[str, object]]:
     return records
 
 
-def _category(category: str) -> dict[str, object]:
-    supporting_evidence = (
-        {"strict_uncertainty_receipt": _strict_receipt_payload()}
-        if category == "semantic_fidelity"
-        else {}
+def _ifeval_receipt_payload() -> dict[str, object]:
+    records = _records("ordinary_instruction")
+    example_ids = tuple(str(record["example_id"]) for record in records)
+    details = tuple(
+        {
+            "example_id": example_id,
+            "candidate_strict": True,
+            "candidate_loose": True,
+            "baseline_strict": False,
+            "candidate_strict_instruction_results": [True],
+            "candidate_loose_instruction_results": [True],
+            "baseline_strict_instruction_results": [False],
+        }
+        for example_id in example_ids
     )
+    return build_ifeval_batch_receipt(
+        IfevalBatchResult(
+            runtime_manifest_sha256=EXPECTED_IFEVAL_RUNTIME_MANIFEST_SHA256,
+            case_example_ids=example_ids,
+            records=tuple(records),
+            details=details,
+        ),
+        {example_id: "candidate" for example_id in example_ids},
+        {example_id: "" for example_id in example_ids},
+        checkpoint_sha256=CHECKPOINT_ID,
+        checkpoint_step=86_016,
+        baseline_source="deterministic_random_initialization",
+        baseline_evaluation_sha256=None,
+    )
+
+
+def _category(category: str) -> dict[str, object]:
+    if category == "semantic_fidelity":
+        supporting_evidence = {
+            "strict_uncertainty_receipt": _strict_receipt_payload()
+        }
+    elif category == "ordinary_instruction":
+        supporting_evidence = {"ifeval_batch_receipt": _ifeval_receipt_payload()}
+    else:
+        supporting_evidence = {}
     payload: dict[str, object] = {
         "schema_version": MODEL_CATEGORY_EVIDENCE_SCHEMA,
         "category": category,
@@ -467,6 +506,31 @@ class FullModelAcceptanceCategoryTests(unittest.TestCase):
         )
         self.assertEqual(result.tokenizer_sha256, TOKENIZER_ID)
         self.assertEqual(result.heldout_manifest_sha256, HELDOUT_ID)
+
+    def test_ordinary_instruction_requires_receipt_and_matching_baseline(self):
+        evidence = [_category(category) for category in CATEGORIES]
+        ordinary = next(
+            item for item in evidence if item["category"] == "ordinary_instruction"
+        )
+        ordinary["supporting_evidence"] = {}
+        body = {
+            key: value for key, value in ordinary.items() if key != "artifact_sha256"
+        }
+        ordinary["artifact_sha256"] = hashlib.sha256(_canonical(body)).hexdigest()
+        with self.assertRaisesRegex(ValueError, "supporting evidence"):
+            self._verify(tuple(evidence))
+
+        evidence = [_category(category) for category in CATEGORIES]
+        evaluations = [_evaluation("validation"), _evaluation("test")]
+        for evaluation in evaluations:
+            evaluation["baseline_source"] = "different-baseline"
+            evaluation["baseline_evaluation_sha256"] = "f" * 64
+        with self.assertRaisesRegex(ValueError, "baseline lineage"):
+            verify_model_acceptance(
+                tuple(evaluations),
+                tuple(_inference(task) for task in FAMILIES),
+                tuple(evidence),
+            )
 
     def test_missing_or_failed_category_cannot_be_hidden_by_loss_improvement(self):
         evidence = [_category(category) for category in CATEGORIES]

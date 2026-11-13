@@ -22,7 +22,7 @@ actionable defect after the repairs and gates below.
 - Ruff passed every changed Python file.
 - Mypy passed all 71 configured core source files and the changed orchestration
   scripts in strict mode.
-- The latest complete combined regression passed 582 tests and 195 subtests
+- The latest complete combined regression passed 586 tests and 195 subtests
   with warnings treated as errors.
 - The complementary Docker containment slice passed all 13 Docker-only tests
   and 13 subtests; 560 other tests were explicitly deselected.
@@ -150,6 +150,15 @@ actionable defect after the repairs and gates below.
     measures official strict and loose instruction following, baseline delta,
     and empty-response rate. A real all-541-case diagnostic run completed in
     2.298 seconds and left the pinned runtime unchanged.
+19. The executable IFEval runner initially returned in-memory records that a
+    caller could copy or replace before compiling category evidence. It now
+    creates an atomic no-clobber receipt binding the exact checkpoint and step,
+    baseline lineage, official runtime manifest, content-addressed case IDs,
+    per-response hashes, per-instruction outcomes and records. The compiler
+    takes ordinary-instruction records from that validated receipt, and final
+    acceptance independently revalidates the receipt and requires its baseline
+    to match the frozen test evaluation. Category Evidence Schema V6 makes the
+    stronger supporting-evidence contract explicit.
 
 ## Boundaries
 
@@ -173,9 +182,9 @@ actionable defect after the repairs and gates below.
 The latest repair batch has no regression in the executed source and integration
 gates, but the exhaustive review remains active and CodeRabbit review remains
 pending authentication. The ordinary-instruction runner is executable and
-audited, but its batch output is not yet published as an immutable receipt and
-the acceptance compiler does not yet require that receipt. The safety and other
-remaining category runners are also incomplete. Training and meaningful model
-insertion stay held; a read-only diagnostic Mk10 smoke would be permissible but
-would not be promotion evidence. This record is not evidence that a model has
-been trained, promoted, or improved.
+audited, publishes an immutable self-verifying receipt, and is required by both
+the category compiler and final acceptance. The safety and other remaining
+category runners are still incomplete. Training and meaningful model insertion
+stay held; a read-only diagnostic Mk10 smoke would be permissible but would not
+be promotion evidence. This record is not evidence that a model has been
+trained, promoted, or improved.

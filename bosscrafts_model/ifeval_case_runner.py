@@ -20,10 +20,16 @@ from .category_case_inventory import (
     _valid_ifeval_case,
     _valid_provenance,
 )
-from .ifeval_runtime import IfevalRuntime, verify_ifeval_runtime
+from .ifeval_runtime import (
+    EXPECTED_IFEVAL_RUNTIME_MANIFEST_SHA256,
+    IfevalRuntime,
+    verify_ifeval_runtime,
+)
+from .immutable_artifacts import publish_new_files
 
 IFEVAL_WORKER_INPUT_SCHEMA = "bosscrafts-ifeval-worker-input-v1"
 IFEVAL_WORKER_OUTPUT_SCHEMA = "bosscrafts-ifeval-worker-output-v1"
+IFEVAL_BATCH_RECEIPT_SCHEMA = "bosscrafts-ifeval-batch-receipt-v1"
 MAX_IFEVAL_BATCH_BYTES = 64 * 1024 * 1024
 MAX_IFEVAL_RESPONSE_BYTES = 1024 * 1024
 MAX_IFEVAL_CASES = 4_096
@@ -33,6 +39,7 @@ _WORKER_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "run_ifeval_w
 @dataclass(frozen=True)
 class IfevalBatchResult:
     runtime_manifest_sha256: str
+    case_example_ids: tuple[str, ...]
     records: tuple[dict[str, object], ...]
     details: tuple[dict[str, object], ...]
 
@@ -53,6 +60,10 @@ def _is_sha256(value: object) -> bool:
         and len(value) == 64
         and all(character in "0123456789abcdef" for character in value)
     )
+
+
+def _sha256(value: object) -> str:
+    return hashlib.sha256(_canonical(value)).hexdigest()
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -318,9 +329,295 @@ def run_ifeval_cases(
     )
     return IfevalBatchResult(
         runtime_manifest_sha256=runtime.manifest_sha256,
+        case_example_ids=example_ids,
         records=records,
         details=details,
     )
+
+
+_IFEVAL_RECEIPT_FIELDS = {
+    "schema_version",
+    "checkpoint_sha256",
+    "checkpoint_step",
+    "baseline_source",
+    "baseline_evaluation_sha256",
+    "runtime_manifest_sha256",
+    "case_example_ids",
+    "case_example_ids_sha256",
+    "candidate_response_sha256_by_example_id",
+    "candidate_response_nonempty_by_example_id",
+    "candidate_response_manifest_sha256",
+    "baseline_response_sha256_by_example_id",
+    "baseline_response_manifest_sha256",
+    "records",
+    "records_sha256",
+    "details",
+    "details_sha256",
+    "receipt_sha256",
+}
+
+
+def _validate_baseline_lineage(source: object, digest: object) -> None:
+    if (
+        type(source) is not str
+        or not source
+        or source != source.strip()
+        or len(source.encode("utf-8")) > 256
+    ):
+        raise ValueError("IFEval baseline source is invalid")
+    if digest is None:
+        if source != "deterministic_random_initialization":
+            raise ValueError("IFEval baseline lineage is invalid")
+    elif not _is_sha256(digest) or source == "deterministic_random_initialization":
+        raise ValueError("IFEval baseline lineage is invalid")
+
+
+def _validate_receipt_results(
+    example_ids: tuple[str, ...],
+    records: object,
+    details: object,
+    response_nonempty: Mapping[str, bool],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    if (
+        type(records) is not list
+        or type(details) is not list
+        or len(records) != len(example_ids)
+        or len(details) != len(example_ids)
+    ):
+        raise ValueError("IFEval receipt result inventory is invalid")
+    record_fields = {
+        "example_id",
+        "strict_instruction_following",
+        "loose_instruction_following",
+        "baseline_strict_instruction_following",
+        "response_nonempty",
+    }
+    detail_fields = {
+        "example_id",
+        "candidate_strict",
+        "candidate_loose",
+        "baseline_strict",
+        "candidate_strict_instruction_results",
+        "candidate_loose_instruction_results",
+        "baseline_strict_instruction_results",
+    }
+    normalized_records: list[dict[str, object]] = []
+    normalized_details: list[dict[str, object]] = []
+    for example_id, record, detail in zip(
+        example_ids, records, details, strict=True
+    ):
+        if (
+            type(detail) is not dict
+            or set(detail) != detail_fields
+            or detail.get("example_id") != example_id
+        ):
+            raise ValueError("IFEval receipt detail is invalid")
+        strict_results = detail.get("candidate_strict_instruction_results")
+        loose_results = detail.get("candidate_loose_instruction_results")
+        baseline_results = detail.get("baseline_strict_instruction_results")
+        if (
+            type(strict_results) is not list
+            or type(loose_results) is not list
+            or type(baseline_results) is not list
+            or not 1 <= len(strict_results) <= 64
+            or len(loose_results) != len(strict_results)
+            or len(baseline_results) != len(strict_results)
+            or any(type(item) is not bool for item in strict_results)
+            or any(type(item) is not bool for item in loose_results)
+            or any(type(item) is not bool for item in baseline_results)
+            or type(detail.get("candidate_strict")) is not bool
+            or type(detail.get("candidate_loose")) is not bool
+            or type(detail.get("baseline_strict")) is not bool
+            or detail["candidate_strict"] != all(strict_results)
+            or detail["candidate_loose"] != all(loose_results)
+            or detail["baseline_strict"] != all(baseline_results)
+            or (detail["candidate_strict"] and not detail["candidate_loose"])
+        ):
+            raise ValueError("IFEval receipt detail is inconsistent")
+        expected_record: dict[str, object] = {
+            "example_id": example_id,
+            "strict_instruction_following": detail["candidate_strict"],
+            "loose_instruction_following": detail["candidate_loose"],
+            "baseline_strict_instruction_following": detail["baseline_strict"],
+            "response_nonempty": response_nonempty[example_id],
+        }
+        if type(record) is not dict or set(record) != record_fields or record != expected_record:
+            raise ValueError("IFEval receipt record is inconsistent")
+        normalized_records.append(record)
+        normalized_details.append(detail)
+    return normalized_records, normalized_details
+
+
+def build_ifeval_batch_receipt(
+    result: IfevalBatchResult,
+    candidate_responses: Mapping[str, str],
+    baseline_responses: Mapping[str, str],
+    *,
+    checkpoint_sha256: str,
+    checkpoint_step: int,
+    baseline_source: str,
+    baseline_evaluation_sha256: str | None,
+) -> dict[str, object]:
+    """Build a self-verifying receipt from one completed pinned IFEval run."""
+    if (
+        not _is_sha256(checkpoint_sha256)
+        or type(checkpoint_step) is not int
+        or checkpoint_step < 1
+        or result.runtime_manifest_sha256
+        != EXPECTED_IFEVAL_RUNTIME_MANIFEST_SHA256
+    ):
+        raise ValueError("IFEval receipt lineage is invalid")
+    _validate_baseline_lineage(baseline_source, baseline_evaluation_sha256)
+    example_ids = result.case_example_ids
+    if (
+        not 1 <= len(example_ids) <= MAX_IFEVAL_CASES
+        or example_ids != tuple(sorted(example_ids))
+        or len(set(example_ids)) != len(example_ids)
+        or any(not _is_sha256(example_id) for example_id in example_ids)
+    ):
+        raise ValueError("IFEval receipt case inventory is invalid")
+    candidate = _validated_responses(candidate_responses, example_ids, "candidate")
+    baseline = _validated_responses(baseline_responses, example_ids, "baseline")
+    candidate_hashes = {
+        example_id: hashlib.sha256(candidate[example_id].encode("utf-8")).hexdigest()
+        for example_id in example_ids
+    }
+    baseline_hashes = {
+        example_id: hashlib.sha256(baseline[example_id].encode("utf-8")).hexdigest()
+        for example_id in example_ids
+    }
+    nonempty = {
+        example_id: bool(candidate[example_id].strip()) for example_id in example_ids
+    }
+    records, details = _validate_receipt_results(
+        example_ids,
+        list(result.records),
+        list(result.details),
+        nonempty,
+    )
+    body: dict[str, object] = {
+        "schema_version": IFEVAL_BATCH_RECEIPT_SCHEMA,
+        "checkpoint_sha256": checkpoint_sha256,
+        "checkpoint_step": checkpoint_step,
+        "baseline_source": baseline_source,
+        "baseline_evaluation_sha256": baseline_evaluation_sha256,
+        "runtime_manifest_sha256": result.runtime_manifest_sha256,
+        "case_example_ids": list(example_ids),
+        "case_example_ids_sha256": _sha256(list(example_ids)),
+        "candidate_response_sha256_by_example_id": candidate_hashes,
+        "candidate_response_nonempty_by_example_id": nonempty,
+        "candidate_response_manifest_sha256": _sha256(candidate_hashes),
+        "baseline_response_sha256_by_example_id": baseline_hashes,
+        "baseline_response_manifest_sha256": _sha256(baseline_hashes),
+        "records": records,
+        "records_sha256": _sha256(records),
+        "details": details,
+        "details_sha256": _sha256(details),
+    }
+    return {**body, "receipt_sha256": _sha256(body)}
+
+
+def validate_ifeval_batch_receipt(
+    payload: object,
+    *,
+    expected_checkpoint_sha256: str | None = None,
+    expected_checkpoint_step: int | None = None,
+    expected_example_ids: Sequence[str] | None = None,
+    expected_records: Sequence[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    """Recompute every receipt contract rather than trusting its pass fields."""
+    if type(payload) is not dict or set(payload) != _IFEVAL_RECEIPT_FIELDS:
+        raise ValueError("IFEval batch receipt fields are invalid")
+    body = {key: value for key, value in payload.items() if key != "receipt_sha256"}
+    raw_ids = payload.get("case_example_ids")
+    if (
+        payload.get("schema_version") != IFEVAL_BATCH_RECEIPT_SCHEMA
+        or not _is_sha256(payload.get("checkpoint_sha256"))
+        or type(payload.get("checkpoint_step")) is not int
+        or int(cast(int, payload["checkpoint_step"])) < 1
+        or payload.get("runtime_manifest_sha256")
+        != EXPECTED_IFEVAL_RUNTIME_MANIFEST_SHA256
+        or type(raw_ids) is not list
+        or not 1 <= len(raw_ids) <= MAX_IFEVAL_CASES
+        or any(not _is_sha256(example_id) for example_id in raw_ids)
+        or raw_ids != sorted(raw_ids)
+        or len(set(raw_ids)) != len(raw_ids)
+        or payload.get("case_example_ids_sha256") != _sha256(raw_ids)
+        or payload.get("receipt_sha256") != _sha256(body)
+    ):
+        raise ValueError("IFEval batch receipt integrity mismatch")
+    _validate_baseline_lineage(
+        payload.get("baseline_source"), payload.get("baseline_evaluation_sha256")
+    )
+    example_ids = tuple(cast(list[str], raw_ids))
+    candidate_hashes = payload.get("candidate_response_sha256_by_example_id")
+    baseline_hashes = payload.get("baseline_response_sha256_by_example_id")
+    nonempty = payload.get("candidate_response_nonempty_by_example_id")
+    if (
+        type(candidate_hashes) is not dict
+        or type(baseline_hashes) is not dict
+        or type(nonempty) is not dict
+        or set(candidate_hashes) != set(example_ids)
+        or set(baseline_hashes) != set(example_ids)
+        or set(nonempty) != set(example_ids)
+        or any(not _is_sha256(value) for value in candidate_hashes.values())
+        or any(not _is_sha256(value) for value in baseline_hashes.values())
+        or any(type(value) is not bool for value in nonempty.values())
+        or payload.get("candidate_response_manifest_sha256")
+        != _sha256(candidate_hashes)
+        or payload.get("baseline_response_manifest_sha256")
+        != _sha256(baseline_hashes)
+    ):
+        raise ValueError("IFEval response manifest is invalid")
+    records, details = _validate_receipt_results(
+        example_ids,
+        payload.get("records"),
+        payload.get("details"),
+        cast(dict[str, bool], nonempty),
+    )
+    if (
+        payload.get("records_sha256") != _sha256(records)
+        or payload.get("details_sha256") != _sha256(details)
+    ):
+        raise ValueError("IFEval receipt result integrity mismatch")
+    if (
+        expected_checkpoint_sha256 is not None
+        and payload.get("checkpoint_sha256") != expected_checkpoint_sha256
+    ):
+        raise ValueError("IFEval receipt checkpoint lineage mismatch")
+    if (
+        expected_checkpoint_step is not None
+        and payload.get("checkpoint_step") != expected_checkpoint_step
+    ):
+        raise ValueError("IFEval receipt checkpoint lineage mismatch")
+    if expected_example_ids is not None and example_ids != tuple(expected_example_ids):
+        raise ValueError("IFEval receipt case inventory mismatch")
+    if expected_records is not None and records != list(expected_records):
+        raise ValueError("IFEval receipt records mismatch")
+    return payload
+
+
+def publish_ifeval_batch_receipt(
+    output: str | Path,
+    payload: dict[str, object],
+) -> Path:
+    """Publish one validated receipt without replacing prior evidence."""
+    validated = validate_ifeval_batch_receipt(payload)
+    rendered = json.dumps(
+        validated,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+        allow_nan=False,
+    ).encode("utf-8") + b"\n"
+    if len(rendered) > MAX_IFEVAL_BATCH_BYTES:
+        raise ValueError("IFEval batch receipt size is invalid")
+    destination = Path(output).resolve()
+    publish_new_files(
+        ((destination, rendered),),
+        artifact_label="IFEval batch receipt",
+    )
+    return destination
 
 
 def _score_response(

@@ -19,6 +19,7 @@ from test_full_model_acceptance_categories import (
     LANGUAGES,
     _category,
     _evaluation,
+    _ifeval_receipt_payload,
     _inference,
     _records,
     verify_model_acceptance,
@@ -67,7 +68,12 @@ def _strict_receipt() -> StrictUncertaintyAcceptanceReceipt:
     )
 
 
-def _compile(category: str, *, receipt: dict[str, object] | None = None):
+def _compile(
+    category: str,
+    *,
+    receipt: dict[str, object] | None = None,
+    ifeval_receipt: dict[str, object] | None = None,
+):
     return compile_model_category_evidence(
         category=category,
         records=_records(category),
@@ -76,6 +82,7 @@ def _compile(category: str, *, receipt: dict[str, object] | None = None):
         checkpoint_sha256=CHECKPOINT_ID,
         checkpoint_step=86_016,
         strict_uncertainty_receipt=receipt,
+        ifeval_batch_receipt=ifeval_receipt,
     )
 
 
@@ -143,6 +150,21 @@ def test_semantic_compiler_requires_and_validates_current_runtime_receipt():
         _compile("semantic_fidelity", receipt=weak.to_dict())
 
 
+def test_ordinary_compiler_requires_grounded_ifeval_receipt():
+    with pytest.raises(ValueError, match="requires an IFEval batch receipt"):
+        _compile("ordinary_instruction")
+
+    receipt = _ifeval_receipt_payload()
+    compiled = _compile("ordinary_instruction", ifeval_receipt=receipt)
+    assert compiled["passed"] is True
+    assert compiled["supporting_evidence"] == {"ifeval_batch_receipt": receipt}
+
+    forged = dict(receipt)
+    forged["checkpoint_sha256"] = "f" * 64
+    with pytest.raises(ValueError, match="integrity|lineage"):
+        _compile("ordinary_instruction", ifeval_receipt=forged)
+
+
 def test_failed_case_outcome_is_published_as_failed_not_promoted():
     records = _records("tokenizer_fidelity")
     records[0]["exact_roundtrip"] = False
@@ -195,3 +217,4 @@ def test_checkpoint_digest_and_script_entrypoint(tmp_path: Path):
     assert completed.returncode == 0, completed.stderr
     assert "--heldout-manifest" in completed.stdout
     assert "--strict-uncertainty-receipt" in completed.stdout
+    assert "--ifeval-batch-receipt" in completed.stdout

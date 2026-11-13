@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import random
+import subprocess
 import sys
 from pathlib import Path
 
@@ -11,11 +12,18 @@ import pytest
 import bosscrafts_model.ifeval_case_runner as runner
 from bosscrafts_model.category_case_inventory import CATEGORY_CASE_SCHEMA
 from bosscrafts_model.ifeval_case_runner import (
+    IfevalBatchResult,
     _evaluate_payload,
     _worker_environment,
+    build_ifeval_batch_receipt,
+    publish_ifeval_batch_receipt,
     run_ifeval_cases,
+    validate_ifeval_batch_receipt,
 )
-from bosscrafts_model.ifeval_runtime import IfevalRuntime
+from bosscrafts_model.ifeval_runtime import (
+    EXPECTED_IFEVAL_RUNTIME_MANIFEST_SHA256,
+    IfevalRuntime,
+)
 
 
 def _canonical(value: object) -> bytes:
@@ -235,3 +243,101 @@ def test_worker_environment_pins_nltk_data_without_forwarding_secrets(
     assert environment["NLTK_DATA"] == str(tmp_path.resolve() / "nltk_data")
     assert environment["PYTHONDONTWRITEBYTECODE"] == "1"
     assert "HF_TOKEN" not in environment
+
+
+def test_batch_receipt_is_derived_self_hashed_and_published_no_clobber(
+    tmp_path: Path,
+) -> None:
+    ids = tuple(sorted(str(_case(index)["example_id"]) for index in range(2)))
+    candidate = {example_id: f"candidate {index}" for index, example_id in enumerate(ids)}
+    baseline = {example_id: "" for example_id in ids}
+    details = tuple(
+        {
+            "example_id": example_id,
+            "candidate_strict": True,
+            "candidate_loose": True,
+            "baseline_strict": False,
+            "candidate_strict_instruction_results": [True],
+            "candidate_loose_instruction_results": [True],
+            "baseline_strict_instruction_results": [False],
+        }
+        for example_id in ids
+    )
+    records = tuple(
+        {
+            "example_id": example_id,
+            "strict_instruction_following": True,
+            "loose_instruction_following": True,
+            "baseline_strict_instruction_following": False,
+            "response_nonempty": True,
+        }
+        for example_id in ids
+    )
+    result = IfevalBatchResult(
+        runtime_manifest_sha256=EXPECTED_IFEVAL_RUNTIME_MANIFEST_SHA256,
+        case_example_ids=ids,
+        records=records,
+        details=details,
+    )
+
+    receipt = build_ifeval_batch_receipt(
+        result,
+        candidate,
+        baseline,
+        checkpoint_sha256="d" * 64,
+        checkpoint_step=17,
+        baseline_source="fixture-baseline",
+        baseline_evaluation_sha256="e" * 64,
+    )
+    validated = validate_ifeval_batch_receipt(
+        receipt,
+        expected_checkpoint_sha256="d" * 64,
+        expected_checkpoint_step=17,
+        expected_example_ids=ids,
+        expected_records=records,
+    )
+
+    assert validated == receipt
+    assert receipt["records"] == list(records)
+    assert receipt["case_example_ids_sha256"] == hashlib.sha256(
+        _canonical(list(ids))
+    ).hexdigest()
+    output = tmp_path / "receipt.json"
+    assert publish_ifeval_batch_receipt(output, receipt) == output.resolve()
+    assert json.loads(output.read_text(encoding="utf-8")) == receipt
+    with pytest.raises(ValueError, match="already exists"):
+        publish_ifeval_batch_receipt(output, receipt)
+
+    forged = json.loads(json.dumps(receipt))
+    forged["details"][0]["candidate_strict"] = False
+    forged["details"][0]["candidate_strict_instruction_results"] = [False]
+    forged["details_sha256"] = hashlib.sha256(
+        _canonical(forged["details"])
+    ).hexdigest()
+    forged_body = {
+        key: value for key, value in forged.items() if key != "receipt_sha256"
+    }
+    forged["receipt_sha256"] = hashlib.sha256(_canonical(forged_body)).hexdigest()
+    with pytest.raises(ValueError, match="record is inconsistent"):
+        validate_ifeval_batch_receipt(forged)
+
+
+def test_ifeval_acceptance_script_exposes_grounded_inputs() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(project_root / "scripts" / "run_ifeval_acceptance.py"),
+            "--help",
+        ],
+        cwd=project_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "--candidate-responses" in completed.stdout
+    assert "--baseline-evaluation" in completed.stdout
+    assert "--checkpoint-step" in completed.stdout

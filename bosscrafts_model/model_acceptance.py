@@ -956,6 +956,10 @@ def verify_model_acceptance(
         supporting_metrics = _validated_category_supporting_evidence(
             category,
             payload.get("supporting_evidence"),
+            checkpoint_sha256=payload.get("checkpoint_sha256"),
+            checkpoint_step=payload.get("checkpoint_step"),
+            expected_example_ids=heldout_suite.category_example_ids[category],
+            expected_records=payload.get("records"),
         )
         recomputed_metrics = recompute_category_metrics(
             category,
@@ -974,6 +978,22 @@ def verify_model_acceptance(
         category_by_name[category] = payload
     if set(category_by_name) != set(ACCEPTANCE_CATEGORIES):
         raise ValueError("acceptance requires every independent category")
+
+    ordinary_support = category_by_name["ordinary_instruction"][
+        "supporting_evidence"
+    ]
+    if type(ordinary_support) is not dict:
+        raise ValueError("ordinary_instruction supporting evidence is incomplete")
+    ordinary_receipt = ordinary_support.get("ifeval_batch_receipt")
+    test_evaluation = evaluation_by_split["test"]
+    if (
+        type(ordinary_receipt) is not dict
+        or ordinary_receipt.get("baseline_source")
+        != test_evaluation.get("baseline_source")
+        or ordinary_receipt.get("baseline_evaluation_sha256")
+        != test_evaluation.get("baseline_evaluation_sha256")
+    ):
+        raise ValueError("ordinary instruction baseline lineage mismatch")
 
     all_payloads = [
         *evaluation_by_split.values(),
@@ -1123,7 +1143,34 @@ def _language_passes(metrics: dict[str, object]) -> None:
 def _validated_category_supporting_evidence(
     category: str,
     value: object,
+    *,
+    checkpoint_sha256: object,
+    checkpoint_step: object,
+    expected_example_ids: Sequence[str],
+    expected_records: object,
 ) -> dict[str, object]:
+    if category == "ordinary_instruction":
+        # Imported here to keep the frozen category-inventory loader acyclic:
+        # that loader imports this acceptance schema during its own startup.
+        from .ifeval_case_runner import validate_ifeval_batch_receipt
+
+        if (
+            type(value) is not dict
+            or set(value) != {"ifeval_batch_receipt"}
+            or type(checkpoint_sha256) is not str
+            or type(checkpoint_step) is not int
+            or type(expected_records) is not list
+        ):
+            raise ValueError("ordinary_instruction supporting evidence is incomplete")
+        raw_receipt = value.get("ifeval_batch_receipt")
+        validate_ifeval_batch_receipt(
+            raw_receipt,
+            expected_checkpoint_sha256=checkpoint_sha256,
+            expected_checkpoint_step=checkpoint_step,
+            expected_example_ids=expected_example_ids,
+            expected_records=expected_records,
+        )
+        return {}
     if category != "semantic_fidelity":
         if value != {}:
             raise ValueError(f"{category} supporting evidence must be empty")

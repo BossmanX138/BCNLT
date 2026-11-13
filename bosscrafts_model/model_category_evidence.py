@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .artifact_schemas import MODEL_CATEGORY_EVIDENCE_SCHEMA
 from .bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
+from .ifeval_case_runner import validate_ifeval_batch_receipt
 from .immutable_artifacts import publish_new_files
 from .model_acceptance import (
     ACCEPTANCE_CATEGORIES,
@@ -73,6 +74,7 @@ def compile_model_category_evidence(
     checkpoint_sha256: str,
     checkpoint_step: int,
     strict_uncertainty_receipt: dict[str, object] | None = None,
+    ifeval_batch_receipt: dict[str, object] | None = None,
 ) -> dict[str, object]:
     if category not in ACCEPTANCE_CATEGORIES:
         raise ValueError("model acceptance category is invalid")
@@ -93,6 +95,8 @@ def compile_model_category_evidence(
     declared_metrics: dict[str, object] = {}
     supporting_evidence: dict[str, object] = {}
     if category == "semantic_fidelity":
+        if ifeval_batch_receipt is not None:
+            raise ValueError("IFEval receipt is only valid for ordinary instruction")
         if type(strict_uncertainty_receipt) is not dict:
             raise ValueError("semantic fidelity requires a strict uncertainty receipt")
         receipt = validate_strict_uncertainty_receipt(strict_uncertainty_receipt)
@@ -101,8 +105,23 @@ def compile_model_category_evidence(
             "strict_uncertainty_receipt_sha256": receipt.receipt_sha256,
         }
         supporting_evidence = {"strict_uncertainty_receipt": receipt.to_dict()}
+    elif category == "ordinary_instruction":
+        if strict_uncertainty_receipt is not None:
+            raise ValueError("strict uncertainty receipt is only valid for semantic fidelity")
+        if type(ifeval_batch_receipt) is not dict:
+            raise ValueError("ordinary instruction requires an IFEval batch receipt")
+        receipt_payload = validate_ifeval_batch_receipt(
+            ifeval_batch_receipt,
+            expected_checkpoint_sha256=checkpoint_sha256,
+            expected_checkpoint_step=checkpoint_step,
+            expected_example_ids=suite.category_example_ids[category],
+            expected_records=records,
+        )
+        supporting_evidence = {"ifeval_batch_receipt": receipt_payload}
     elif strict_uncertainty_receipt is not None:
         raise ValueError("strict uncertainty receipt is only valid for semantic fidelity")
+    elif ifeval_batch_receipt is not None:
+        raise ValueError("IFEval receipt is only valid for ordinary instruction")
     metrics = recompute_category_metrics(
         category,
         list(records),

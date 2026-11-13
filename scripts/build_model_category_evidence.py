@@ -77,7 +77,7 @@ def _read_records(path: Path) -> list[dict[str, object]]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--category", choices=ACCEPTANCE_CATEGORIES, required=True)
-    parser.add_argument("--records", type=Path, required=True)
+    parser.add_argument("--records", type=Path)
     parser.add_argument("--heldout-manifest", type=Path, required=True)
     parser.add_argument("--task-database", type=Path)
     parser.add_argument("--validation-database", type=Path)
@@ -85,6 +85,7 @@ def main() -> int:
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--checkpoint-step", type=int, required=True)
     parser.add_argument("--strict-uncertainty-receipt", type=Path)
+    parser.add_argument("--ifeval-batch-receipt", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
     plural_databases = (
@@ -94,6 +95,13 @@ def main() -> int:
         parser.error("validation-database and test-database must be supplied together")
     if (arguments.task_database is None) == (not plural_databases):
         parser.error("supply either task-database or both split databases")
+    if arguments.category == "ordinary_instruction":
+        if arguments.ifeval_batch_receipt is None:
+            parser.error("ordinary_instruction requires --ifeval-batch-receipt")
+        if arguments.records is not None:
+            parser.error("ordinary_instruction records come from the IFEval receipt")
+    elif arguments.records is None:
+        parser.error("all other categories require --records")
 
     binding = NativeTokenizerBinding.load()
     database_identity: str | None = None
@@ -121,9 +129,27 @@ def main() -> int:
         if arguments.strict_uncertainty_receipt is not None
         else None
     )
+    ifeval_receipt = (
+        _read_object(arguments.ifeval_batch_receipt, "IFEval batch receipt")
+        if arguments.ifeval_batch_receipt is not None
+        else None
+    )
+    if arguments.category == "ordinary_instruction":
+        raw_records = (
+            ifeval_receipt.get("records") if ifeval_receipt is not None else None
+        )
+        if type(raw_records) is not list or any(
+            type(record) is not dict for record in raw_records
+        ):
+            raise ValueError("IFEval batch receipt records are invalid")
+        records = raw_records
+    else:
+        if arguments.records is None:
+            raise RuntimeError("validated category records path is missing")
+        records = _read_records(arguments.records)
     payload = compile_model_category_evidence(
         category=arguments.category,
-        records=_read_records(arguments.records),
+        records=records,
         heldout_manifest=_read_object(
             arguments.heldout_manifest,
             "held-out manifest",
@@ -133,6 +159,7 @@ def main() -> int:
         checkpoint_sha256=checkpoint_sha256(arguments.checkpoint),
         checkpoint_step=arguments.checkpoint_step,
         strict_uncertainty_receipt=receipt,
+        ifeval_batch_receipt=ifeval_receipt,
     )
     publish_model_category_evidence(arguments.output, payload)
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
