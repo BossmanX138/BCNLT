@@ -16,7 +16,8 @@ sys.path.insert(0, str(RUNTIME_ROOT / "site-packages"))
 sys.path.insert(0, str(RUNTIME_ROOT / "source"))
 os.environ["BCNLT_PARSER_CACHE"] = str(RUNTIME_ROOT / "grammars")
 
-PROTOCOL = "bosscrafts-raw-ast-witness-v1"
+PROTOCOL = "bosscrafts-raw-ast-witness-v2"
+SIDECAR_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 PARSER_RUNTIME_IDENTITY_SHA256 = (
     "014a5bbc567fcce87e448a58b41b301ffce4bd91210adb009abdc3eb9ab30a2c"
 )
@@ -507,6 +508,7 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
         )
     return {
         "protocol": PROTOCOL,
+        "sidecar_source_sha256": SIDECAR_SOURCE_SHA256,
         "parser_runtime_identity_sha256": PARSER_RUNTIME_IDENTITY_SHA256,
         "source_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
         "language": language,

@@ -12,12 +12,14 @@ from pathlib import Path
 
 from .bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
 
-PROTOCOL = "bosscrafts-raw-ast-witness-v1"
+PROTOCOL = "bosscrafts-raw-ast-witness-v2"
 MAX_RESPONSE_BYTES = 32 * 1024 * 1024
 _SIDECAR = Path(__file__).with_name("raw_ast_witness_sidecar.py")
 _PYTHON_313 = Path(r"C:\ProgramData\anaconda3\python.exe")
+SIDECAR_SOURCE_SHA256 = hashlib.sha256(_SIDECAR.read_bytes()).hexdigest()
 _RESPONSE_KEYS = {
     "protocol",
+    "sidecar_source_sha256",
     "parser_runtime_identity_sha256",
     "source_sha256",
     "language",
@@ -101,10 +103,29 @@ def _close_process_streams(process: subprocess.Popen[bytes]) -> None:
 class RawAstWitnessClient:
     """Obtain raw syntax evidence without invoking semantic extraction."""
 
-    def __init__(self, *, timeout_seconds: float = 60.0) -> None:
+    def __init__(
+        self,
+        *,
+        timeout_seconds: float = 60.0,
+        expected_sidecar_sha256: str | None = None,
+    ) -> None:
         if type(timeout_seconds) not in {int, float} or not 1 <= timeout_seconds <= 300:
             raise ValueError("timeout_seconds must be between 1 and 300")
+        expected = (
+            SIDECAR_SOURCE_SHA256
+            if expected_sidecar_sha256 is None
+            else expected_sidecar_sha256
+        )
+        if (
+            type(expected) is not str
+            or len(expected) != 64
+            or any(character not in "0123456789abcdef" for character in expected)
+        ):
+            raise ValueError("expected_sidecar_sha256 must be a lowercase SHA-256")
+        if hashlib.sha256(_SIDECAR.read_bytes()).hexdigest() != expected:
+            raise ValueError("raw AST witness sidecar source SHA-256 mismatch")
         self._timeout_seconds = float(timeout_seconds)
+        self._expected_sidecar_sha256 = expected
         self._process: subprocess.Popen[bytes] | None = None
         self._reader = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="raw-ast-witness-reader"
@@ -121,6 +142,11 @@ class RawAstWitnessClient:
         if process is not None:
             _close_process_streams(process)
             self._process = None
+        if (
+            hashlib.sha256(_SIDECAR.read_bytes()).hexdigest()
+            != self._expected_sidecar_sha256
+        ):
+            raise ValueError("raw AST witness sidecar source SHA-256 mismatch")
         process = subprocess.Popen(
             [str(_PYTHON_313), "-I", str(_SIDECAR), "--serve"],
             stdin=subprocess.PIPE,
@@ -258,6 +284,8 @@ class RawAstWitnessClient:
             raise ValueError("raw AST witness response keys mismatch")
         if (
             response["protocol"] != PROTOCOL
+            or response["sidecar_source_sha256"]
+            != self._expected_sidecar_sha256
             or response["parser_runtime_identity_sha256"]
             != PARSER_RUNTIME_IDENTITY_SHA256
             or response["source_sha256"]

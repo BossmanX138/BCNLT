@@ -89,6 +89,18 @@ def audit_host_code_identity(
     return hashlib.sha256(_canonical(inventory).encode("utf-8")).hexdigest()
 
 
+def _inventory_sha256(records: list[dict[str, object]], relative_path: str) -> str:
+    matches = [record.get("sha256") for record in records if record.get("path") == relative_path]
+    if (
+        len(matches) != 1
+        or type(matches[0]) is not str
+        or len(matches[0]) != 64
+        or any(character not in "0123456789abcdef" for character in matches[0])
+    ):
+        raise ValueError("audit host code inventory is incomplete")
+    return matches[0]
+
+
 def _freeze_code_manifest(
     path: Path, records: list[dict[str, object]], identity: str
 ) -> str:
@@ -144,6 +156,9 @@ def main() -> int:
         expected_admission_host_code_identity_sha256=admission_host_code_identity(),
         audit_host_code_identity_sha256=identity,
         source_split="train",
+        expected_raw_ast_sidecar_sha256=_inventory_sha256(
+            inventory, "bosscrafts_model/raw_ast_witness_sidecar.py"
+        ),
     )
     code_manifest = arguments.audit.resolve().with_name("host-code-manifest.json")
     code_manifest_sha256 = _freeze_code_manifest(code_manifest, inventory, identity)

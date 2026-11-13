@@ -35,7 +35,8 @@ def test_raw_ast_witness_anchors_claimed_relation_without_semantic_extraction():
         ),
     )
 
-    assert response["protocol"] == "bosscrafts-raw-ast-witness-v1"
+    assert response["protocol"] == "bosscrafts-raw-ast-witness-v2"
+    assert response["sidecar_source_sha256"] == _feature().SIDECAR_SOURCE_SHA256
     assert response["language"] == "python"
     assert response["path"] == "sample.py"
     assert response["root_node_type"] == "module"
@@ -344,3 +345,8 @@ def test_raw_ast_witness_rejects_mismatched_response_rows():
         malformed[field] = replacement
         with pytest.raises(ValueError, match="raw AST witness response"):
             feature._validate_witness_rows([malformed], (query,))
+
+
+def test_raw_ast_witness_refuses_unexpected_sidecar_source() -> None:
+    with pytest.raises(ValueError, match="sidecar source SHA-256 mismatch"):
+        _feature().RawAstWitnessClient(expected_sidecar_sha256="0" * 64)

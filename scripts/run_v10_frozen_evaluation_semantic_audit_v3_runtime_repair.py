@@ -29,6 +29,7 @@ from scripts.run_v10_training_semantic_audit_v3_runtime_repair import (  # noqa:
     SOURCE_CATALOG_SHA256,
     _canonical,
     _freeze_code_manifest,
+    _inventory_sha256,
     _sha256_file,
     _verify_host_code_inventory_unchanged,
 )
@@ -114,6 +115,9 @@ def main() -> int:
         ),
         audit_host_code_identity_sha256=identity,
         source_split=arguments.split,
+        expected_raw_ast_sidecar_sha256=_inventory_sha256(
+            inventory, "bosscrafts_model/raw_ast_witness_sidecar.py"
+        ),
     )
     manifest_path = audit_path.with_name("host-code-manifest.json")
     manifest_sha256 = _freeze_code_manifest(manifest_path, inventory, identity)

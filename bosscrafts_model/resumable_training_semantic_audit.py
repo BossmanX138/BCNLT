@@ -93,6 +93,7 @@ class ResumableTrainingSemanticAudit:
         audit_host_code_identity_sha256: str,
         source_split: str = "train",
         witness_client: object | None = None,
+        expected_raw_ast_sidecar_sha256: str | None = None,
     ) -> None:
         hashes = {
             "expected_source_catalog_sha256": expected_source_catalog_sha256,
@@ -131,9 +132,19 @@ class ResumableTrainingSemanticAudit:
             getattr(witness_client, "inspect", None)
         ):
             raise TypeError("witness_client must provide an inspect method")
+        if witness_client is not None and expected_raw_ast_sidecar_sha256 is not None:
+            raise ValueError(
+                "expected_raw_ast_sidecar_sha256 cannot accompany a custom witness client"
+            )
         self._witness_client: _WitnessClient = cast(
             _WitnessClient,
-            witness_client if witness_client is not None else RawAstWitnessClient(),
+            (
+                witness_client
+                if witness_client is not None
+                else RawAstWitnessClient(
+                    expected_sidecar_sha256=expected_raw_ast_sidecar_sha256
+                )
+            ),
         )
         self._deterministic = DeterministicSemanticAuditor()
 
