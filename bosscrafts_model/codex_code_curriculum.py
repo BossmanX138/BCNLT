@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sqlite3
+import tempfile
 import zlib
 from collections import Counter
 from collections.abc import Mapping
@@ -635,9 +636,14 @@ def _merge_shards(
         "instruction_family": INSTRUCTION_FAMILY,
     }
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f".{destination.name}.tmp")
-    if temporary.exists():
-        temporary.unlink()
+    temporary_handle = tempfile.NamedTemporaryFile(
+        dir=destination.parent,
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+        delete=False,
+    )
+    temporary = Path(temporary_handle.name)
+    temporary_handle.close()
     output = sqlite3.connect(temporary)
     output.execute("PRAGMA journal_mode=DELETE")
     output.execute("PRAGMA synchronous=FULL")
@@ -740,20 +746,35 @@ def _merge_shards(
         raise
     else:
         output.close()
-    temporary.replace(destination)
-    audit = audit_task_database(binding, destination)
-    connection = sqlite3.connect(
-        f"{destination.as_uri()}?mode=ro", uri=True, timeout=30
-    )
-    connection.execute("PRAGMA query_only=ON")
     try:
-        target_tokens = int(
-            connection.execute(
-                "SELECT COALESCE(SUM(token_count-loss_start_index),0) FROM tasks"
-            ).fetchone()[0]
+        audit = audit_task_database(binding, temporary)
+        connection = sqlite3.connect(
+            f"{temporary.as_uri()}?mode=ro", uri=True, timeout=30
         )
-    finally:
-        connection.close()
+        connection.execute("PRAGMA query_only=ON")
+        try:
+            target_tokens = int(
+                connection.execute(
+                    "SELECT COALESCE(SUM(token_count-loss_start_index),0) FROM tasks"
+                ).fetchone()[0]
+            )
+        finally:
+            connection.close()
+        with temporary.open("r+b") as stream:
+            os.fsync(stream.fileno())
+        if destination.exists():
+            raise ValueError("CodeX curriculum output database already exists")
+        try:
+            os.link(temporary, destination)
+        except FileExistsError as error:
+            raise ValueError(
+                "CodeX curriculum output database already exists"
+            ) from error
+    except BaseException:
+        if temporary.exists():
+            temporary.unlink()
+        raise
+    temporary.unlink()
     return CurriculumBuildStatus(
         database_path=destination,
         database_identity_sha256=audit.database_identity_sha256,
