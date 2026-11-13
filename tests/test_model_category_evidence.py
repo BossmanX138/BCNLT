@@ -18,10 +18,12 @@ from test_full_model_acceptance_categories import (
     HELDOUT_MANIFEST,
     LANGUAGES,
     _category,
+    _containment_receipt_payload,
     _evaluation,
     _ifeval_receipt_payload,
     _inference,
     _records,
+    _safety_content_receipt_payload,
     verify_model_acceptance,
 )
 
@@ -73,6 +75,8 @@ def _compile(
     *,
     receipt: dict[str, object] | None = None,
     ifeval_receipt: dict[str, object] | None = None,
+    safety_receipt: dict[str, object] | None = None,
+    containment_receipt: dict[str, object] | None = None,
 ):
     return compile_model_category_evidence(
         category=category,
@@ -83,6 +87,8 @@ def _compile(
         checkpoint_step=86_016,
         strict_uncertainty_receipt=receipt,
         ifeval_batch_receipt=ifeval_receipt,
+        safety_content_receipt=safety_receipt,
+        containment_receipt=containment_receipt,
     )
 
 
@@ -184,7 +190,7 @@ def test_failed_case_outcome_is_published_as_failed_not_promoted():
 def test_compiler_rejects_substituted_case_and_unrelated_receipt():
     records = _records("safety")
     records[0]["example_id"] = "f" * 64
-    with pytest.raises(ValueError, match="inventory mismatch"):
+    with pytest.raises(ValueError, match="records mismatch|inventory mismatch"):
         compile_model_category_evidence(
             category="safety",
             records=records,
@@ -192,9 +198,33 @@ def test_compiler_rejects_substituted_case_and_unrelated_receipt():
             task_database_identity_sha256=DATABASE_ID,
             checkpoint_sha256=CHECKPOINT_ID,
             checkpoint_step=86_016,
+            safety_content_receipt=_safety_content_receipt_payload(),
+            containment_receipt=_containment_receipt_payload(),
         )
-    with pytest.raises(ValueError, match="only valid for semantic"):
+    with pytest.raises(ValueError, match="not valid for safety"):
         _compile("safety", receipt=_strict_receipt().to_dict())
+
+
+def test_safety_compiler_requires_content_and_containment_receipts():
+    with pytest.raises(ValueError, match="safety content receipt"):
+        _compile("safety")
+    with pytest.raises(ValueError, match="containment receipt"):
+        _compile("safety", safety_receipt=_safety_content_receipt_payload())
+
+    content = _safety_content_receipt_payload()
+    containment = _containment_receipt_payload()
+    compiled = _compile(
+        "safety",
+        safety_receipt=content,
+        containment_receipt=containment,
+    )
+    assert compiled["passed"] is True
+    assert compiled["supporting_evidence"] == {
+        "safety_content_receipt": content,
+        "containment_receipt": containment,
+    }
+    assert compiled["metrics"]["prompt_moderation_accuracy"] == 1.0
+    assert compiled["metrics"]["response_safety_rate"] == 1.0
 
 
 def test_checkpoint_digest_and_script_entrypoint(tmp_path: Path):
@@ -218,3 +248,5 @@ def test_checkpoint_digest_and_script_entrypoint(tmp_path: Path):
     assert "--heldout-manifest" in completed.stdout
     assert "--strict-uncertainty-receipt" in completed.stdout
     assert "--ifeval-batch-receipt" in completed.stdout
+    assert "--safety-content-receipt" in completed.stdout
+    assert "--containment-receipt" in completed.stdout

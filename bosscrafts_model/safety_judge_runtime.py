@@ -23,6 +23,9 @@ SAFETY_JUDGE_RUNTIME_VERSIONS = {
     "torch": "2.8.0",
     "transformers": "4.57.1",
 }
+EXPECTED_SAFETY_JUDGE_RUNTIME_MANIFEST_SHA256 = (
+    "435dfcc22bfbb580275f8240d1de0e167f18e8ffa3c3f9dc11a94543b4f8031d"
+)
 MAX_SAFETY_JUDGE_MANIFEST_BYTES = 1024 * 1024
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _REVISION = re.compile(r"^[0-9a-f]{40}$")
@@ -153,6 +156,11 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _is_linklike(path: Path) -> bool:
+    is_junction = getattr(path, "is_junction", None)
+    return path.is_symlink() or (is_junction is not None and bool(is_junction()))
+
+
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
     result: dict[str, object] = {}
     for key, value in pairs:
@@ -190,6 +198,7 @@ def _validate_contract(
         if (
             type(relative) is not str
             or not relative
+            or relative == "manifest.json"
             or path.is_absolute()
             or ".." in path.parts
             or "." in path.parts
@@ -255,12 +264,23 @@ def _expected_manifest(
 
 def _verify_files(root: Path, file_pins: Mapping[str, SafetyJudgeFilePin]) -> None:
     actual: set[str] = set()
+    expected_directories = {
+        PurePosixPath(*parts[:index]).as_posix()
+        for relative in file_pins
+        for parts in (PurePosixPath(relative).parts,)
+        for index in range(1, len(parts))
+    }
     for path in root.rglob("*"):
         relative = path.relative_to(root).as_posix()
-        if path.is_symlink():
+        if _is_linklike(path):
             raise ValueError("safety judge runtime contains a symbolic link")
-        if path.is_file() and relative != "manifest.json":
+        if path.is_dir():
+            if relative not in expected_directories:
+                raise ValueError("safety judge runtime file inventory is invalid")
+        elif path.is_file() and relative != "manifest.json":
             actual.add(relative)
+        elif not path.is_file():
+            raise ValueError("safety judge runtime file inventory is invalid")
     if actual != set(file_pins):
         raise ValueError("safety judge runtime file inventory is invalid")
     for relative, pin in file_pins.items():
@@ -277,7 +297,7 @@ def _verify_files(root: Path, file_pins: Mapping[str, SafetyJudgeFilePin]) -> No
 
 def _runtime_root(output_root: str | Path) -> Path:
     candidate = Path(output_root)
-    if candidate.is_symlink():
+    if _is_linklike(candidate):
         raise ValueError("safety judge runtime root is invalid")
     root = candidate.resolve()
     if not root.is_dir():
@@ -373,7 +393,7 @@ def _verify_pinned_safety_judge_runtime(
 
 def seal_safety_judge_runtime(output_root: str | Path) -> SafetyJudgeRuntime:
     """Seal an exact already-downloaded NVIDIA safety-judge snapshot."""
-    return _seal_pinned_safety_judge_runtime(
+    runtime = _seal_pinned_safety_judge_runtime(
         output_root,
         repository=SAFETY_JUDGE_REPOSITORY,
         revision=SAFETY_JUDGE_REVISION,
@@ -382,11 +402,14 @@ def seal_safety_judge_runtime(output_root: str | Path) -> SafetyJudgeRuntime:
         runtime_versions=SAFETY_JUDGE_RUNTIME_VERSIONS,
         file_pins=SAFETY_JUDGE_FILE_PINS,
     )
+    if runtime.manifest_sha256 != EXPECTED_SAFETY_JUDGE_RUNTIME_MANIFEST_SHA256:
+        raise ValueError("safety judge runtime expected identity mismatch")
+    return runtime
 
 
 def verify_safety_judge_runtime(output_root: str | Path) -> SafetyJudgeRuntime:
     """Rehash every local safety-judge byte and verify exact provenance."""
-    return _verify_pinned_safety_judge_runtime(
+    runtime = _verify_pinned_safety_judge_runtime(
         output_root,
         repository=SAFETY_JUDGE_REPOSITORY,
         revision=SAFETY_JUDGE_REVISION,
@@ -395,3 +418,6 @@ def verify_safety_judge_runtime(output_root: str | Path) -> SafetyJudgeRuntime:
         runtime_versions=SAFETY_JUDGE_RUNTIME_VERSIONS,
         file_pins=SAFETY_JUDGE_FILE_PINS,
     )
+    if runtime.manifest_sha256 != EXPECTED_SAFETY_JUDGE_RUNTIME_MANIFEST_SHA256:
+        raise ValueError("safety judge runtime expected identity mismatch")
+    return runtime

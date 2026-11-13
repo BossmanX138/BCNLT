@@ -20,12 +20,12 @@ actionable defect after the repairs and gates below.
 - The resulting parser runtime identity is
   `c1ca753bf4d1dbabf841fdcd120e5c3eec026b7211ca5c0f08d066074acee938`.
 - Ruff passed every changed Python file.
-- Mypy passed all 71 configured core source files and the changed orchestration
+- Mypy passed all 74 configured core source files and the changed orchestration
   scripts in strict mode.
-- The latest complete combined regression passed 586 tests and 195 subtests
+- The latest complete combined regression passed 599 tests and 195 subtests
   with warnings treated as errors.
-- The complementary Docker containment slice passed all 13 Docker-only tests
-  and 13 subtests; 560 other tests were explicitly deselected.
+- The focused scientific-sandbox slice passed 9 tests and 13 subtests against
+  live Docker, and the new four-probe containment receipt passed independently.
 - The exact Google IFEval revision
   `966cd89545d6b6acfd7638bc708b98261ca58e84` froze 541 executable-constraint
   cases from source SHA-256
@@ -41,6 +41,14 @@ actionable defect after the repairs and gates below.
   held-out prompt-label cases from test-source SHA-256
   `b0a6d602260524866053cb34105194f074f2c2906e3691b68d43b9e6e9318f35`;
   36 externally redacted prompts were deliberately excluded.
+- The safety-judge contract pins the public merged
+  `nvidia/Nemotron-3-Content-Safety` checkpoint at exact revision
+  `b47f6f6c18dc7d11a786abbbca2510cba58ede20`: 21 files,
+  8,639,634,690 bytes and manifest
+  `435dfcc22bfbb580275f8240d1de0e167f18e8ffa3c3f9dc11a94543b4f8031d`.
+  Every expected file size and SHA-256 is frozen. The checkpoint bytes have not
+  yet been installed or executed on this machine, so this is provenance and
+  executable-source evidence rather than a completed judge run.
 - The earlier semantic-integrity baseline measured 74.5463% branch coverage:
   17,861 covered and 4,539 missing lines; 3,252 covered and 2,670 missing
   branches. That measurement predates the later exhaustive hardening and is not
@@ -159,6 +167,22 @@ actionable defect after the repairs and gates below.
     acceptance independently revalidates the receipt and requires its baseline
     to match the frozen test evaluation. Category Evidence Schema V6 makes the
     stronger supporting-evidence contract explicit.
+20. Safety evidence conflated human Aegis prompt labels, generated-response
+    moderation and machine containment into caller-asserted booleans. The
+    content runner now requires the exact locally pinned Nemotron checkpoint,
+    rechecks every checkpoint byte before and after evaluation, launches an
+    offline isolated worker with a secret-filtered environment, parses the
+    documented user/response labels fail-closed, and publishes a checkpoint-
+    bound receipt containing the raw bounded judgments and derived records.
+    Containment is a separate receipt built from fixed live Docker probes for
+    network isolation, read-only storage, privilege isolation and host-secret
+    absence. Final acceptance independently revalidates both receipts,
+    calibrates prompt moderation at an explicit 80% minimum, requires every
+    candidate response to be nonempty and judged safe, and requires zero
+    containment or PII-leakage findings. Category Evidence Schema V7 makes the
+    separation mandatory. The live containment probe set passed with zero
+    counted violations; the pinned Nemotron weights still require installation
+    and a real run before safety acceptance can be claimed.
 
 ## Boundaries
 
@@ -182,9 +206,11 @@ actionable defect after the repairs and gates below.
 The latest repair batch has no regression in the executed source and integration
 gates, but the exhaustive review remains active and CodeRabbit review remains
 pending authentication. The ordinary-instruction runner is executable and
-audited, publishes an immutable self-verifying receipt, and is required by both
-the category compiler and final acceptance. The safety and other remaining
-category runners are still incomplete. Training and meaningful model insertion
-stay held; a read-only diagnostic Mk10 smoke would be permissible but would not
-be promotion evidence. This record is not evidence that a model has been
-trained, promoted, or improved.
+audited. The safety content runner, runtime sealer and separate containment
+runner are implemented and mandatory at both category compilation and final
+acceptance; the live containment probes pass, while the 8.64 GB pinned safety
+judge has not yet been installed or executed. Other remaining category runners
+also require completion. Training and meaningful model insertion stay held; a
+read-only diagnostic Mk10 smoke would be permissible but would not be promotion
+evidence. This record is not evidence that a model has been trained, promoted,
+or improved.

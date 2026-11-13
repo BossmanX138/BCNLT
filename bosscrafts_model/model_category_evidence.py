@@ -9,6 +9,10 @@ from pathlib import Path
 
 from .artifact_schemas import MODEL_CATEGORY_EVIDENCE_SCHEMA
 from .bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
+from .containment_acceptance import (
+    containment_receipt_metrics,
+    validate_containment_receipt,
+)
 from .ifeval_case_runner import validate_ifeval_batch_receipt
 from .immutable_artifacts import publish_new_files
 from .model_acceptance import (
@@ -18,6 +22,10 @@ from .model_acceptance import (
     recompute_category_metrics,
     verify_category_metrics,
     verify_heldout_suite_manifest,
+)
+from .safety_judge_case_runner import (
+    safety_content_receipt_metrics,
+    validate_safety_content_receipt,
 )
 from .strict_uncertainty_acceptance import (
     StrictUncertaintyAcceptanceReceipt,
@@ -75,6 +83,8 @@ def compile_model_category_evidence(
     checkpoint_step: int,
     strict_uncertainty_receipt: dict[str, object] | None = None,
     ifeval_batch_receipt: dict[str, object] | None = None,
+    safety_content_receipt: dict[str, object] | None = None,
+    containment_receipt: dict[str, object] | None = None,
 ) -> dict[str, object]:
     if category not in ACCEPTANCE_CATEGORIES:
         raise ValueError("model acceptance category is invalid")
@@ -95,8 +105,15 @@ def compile_model_category_evidence(
     declared_metrics: dict[str, object] = {}
     supporting_evidence: dict[str, object] = {}
     if category == "semantic_fidelity":
-        if ifeval_batch_receipt is not None:
-            raise ValueError("IFEval receipt is only valid for ordinary instruction")
+        if any(
+            receipt is not None
+            for receipt in (
+                ifeval_batch_receipt,
+                safety_content_receipt,
+                containment_receipt,
+            )
+        ):
+            raise ValueError("category receipt is not valid for semantic fidelity")
         if type(strict_uncertainty_receipt) is not dict:
             raise ValueError("semantic fidelity requires a strict uncertainty receipt")
         receipt = validate_strict_uncertainty_receipt(strict_uncertainty_receipt)
@@ -106,8 +123,15 @@ def compile_model_category_evidence(
         }
         supporting_evidence = {"strict_uncertainty_receipt": receipt.to_dict()}
     elif category == "ordinary_instruction":
-        if strict_uncertainty_receipt is not None:
-            raise ValueError("strict uncertainty receipt is only valid for semantic fidelity")
+        if any(
+            receipt is not None
+            for receipt in (
+                strict_uncertainty_receipt,
+                safety_content_receipt,
+                containment_receipt,
+            )
+        ):
+            raise ValueError("category receipt is not valid for ordinary instruction")
         if type(ifeval_batch_receipt) is not dict:
             raise ValueError("ordinary instruction requires an IFEval batch receipt")
         receipt_payload = validate_ifeval_batch_receipt(
@@ -118,10 +142,66 @@ def compile_model_category_evidence(
             expected_records=records,
         )
         supporting_evidence = {"ifeval_batch_receipt": receipt_payload}
-    elif strict_uncertainty_receipt is not None:
-        raise ValueError("strict uncertainty receipt is only valid for semantic fidelity")
-    elif ifeval_batch_receipt is not None:
-        raise ValueError("IFEval receipt is only valid for ordinary instruction")
+    elif category == "safety":
+        if strict_uncertainty_receipt is not None or ifeval_batch_receipt is not None:
+            raise ValueError("category receipt is not valid for safety")
+        if type(safety_content_receipt) is not dict:
+            raise ValueError("safety requires a safety content receipt")
+        if type(containment_receipt) is not dict:
+            raise ValueError("safety requires a containment receipt")
+        content_payload = validate_safety_content_receipt(
+            safety_content_receipt,
+            expected_checkpoint_sha256=checkpoint_sha256,
+            expected_checkpoint_step=checkpoint_step,
+            expected_example_ids=suite.category_example_ids[category],
+            expected_records=records,
+        )
+        containment_payload = validate_containment_receipt(
+            containment_receipt,
+            expected_checkpoint_sha256=checkpoint_sha256,
+            expected_checkpoint_step=checkpoint_step,
+        )
+        content_metrics = safety_content_receipt_metrics(content_payload)
+        containment_metrics = containment_receipt_metrics(containment_payload)
+        content_secret_count = content_metrics.get("secret_leakage_count")
+        host_secret_count = containment_metrics.get("host_secret_exposure_count")
+        if type(content_secret_count) is not int or type(host_secret_count) is not int:
+            raise ValueError("safety receipt metrics are invalid")
+        declared_metrics = {
+            "safety_content_receipt_sha256": content_metrics.get(
+                "safety_content_receipt_sha256"
+            ),
+            "containment_acceptance_passed": containment_metrics.get(
+                "containment_acceptance_passed"
+            ),
+            "containment_receipt_sha256": containment_metrics.get(
+                "containment_receipt_sha256"
+            ),
+            "sandbox_escape_count": containment_metrics.get(
+                "sandbox_escape_count"
+            ),
+            "network_violation_count": containment_metrics.get(
+                "network_violation_count"
+            ),
+            "secret_leakage_count": content_secret_count + host_secret_count,
+            "unauthorized_file_write_count": containment_metrics.get(
+                "unauthorized_file_write_count"
+            ),
+        }
+        supporting_evidence = {
+            "safety_content_receipt": content_payload,
+            "containment_receipt": containment_payload,
+        }
+    elif any(
+        receipt is not None
+        for receipt in (
+            strict_uncertainty_receipt,
+            ifeval_batch_receipt,
+            safety_content_receipt,
+            containment_receipt,
+        )
+    ):
+        raise ValueError("category receipt is not valid for this category")
     metrics = recompute_category_metrics(
         category,
         list(records),

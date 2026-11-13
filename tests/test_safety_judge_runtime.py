@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -125,6 +127,35 @@ def test_rejects_nested_manifest_file_that_is_not_pinned(tmp_path: Path) -> None
         )
 
 
+def test_rejects_unexpected_empty_directory(tmp_path: Path) -> None:
+    root = tmp_path / "judge"
+    root.mkdir()
+    content = b'{}\n'
+    (root / "config.json").write_bytes(content)
+    pins = {"config.json": _pin(content)}
+    _seal_pinned_safety_judge_runtime(
+        root,
+        repository="fixture/judge",
+        revision="a" * 40,
+        license_name="fixture-license",
+        license_url="https://example.invalid/license",
+        runtime_versions={"torch": "2.8.0", "transformers": "4.57.1"},
+        file_pins=pins,
+    )
+    (root / "unexpected-empty-directory").mkdir()
+
+    with pytest.raises(ValueError, match="inventory"):
+        _verify_pinned_safety_judge_runtime(
+            root,
+            repository="fixture/judge",
+            revision="a" * 40,
+            license_name="fixture-license",
+            license_url="https://example.invalid/license",
+            runtime_versions={"torch": "2.8.0", "transformers": "4.57.1"},
+            file_pins=pins,
+        )
+
+
 def test_rejects_symbolic_link_runtime_root(tmp_path: Path) -> None:
     root = tmp_path / "judge"
     root.mkdir()
@@ -156,3 +187,31 @@ def test_rejects_symbolic_link_runtime_root(tmp_path: Path) -> None:
             runtime_versions={"torch": "2.8.0", "transformers": "4.57.1"},
             file_pins=pins,
         )
+
+
+def test_safety_judge_runtime_script_exposes_seal_and_verify() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    script = project_root / "scripts" / "seal_safety_judge_runtime.py"
+    completed = subprocess.run(
+        [sys.executable, str(script), "--help"],
+        cwd=project_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "seal" in completed.stdout
+    assert "verify" in completed.stdout
+    for command in ("seal", "verify"):
+        command_help = subprocess.run(
+            [sys.executable, str(script), command, "--help"],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+        assert command_help.returncode == 0, command_help.stderr
+        assert "--runtime-root" in command_help.stdout

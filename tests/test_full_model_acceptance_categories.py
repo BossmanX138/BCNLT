@@ -7,6 +7,8 @@ import math
 import unittest
 from dataclasses import replace
 
+from test_containment_acceptance import _FakeSandbox
+
 from bosscrafts_model.artifact_schemas import (
     CHECKPOINT_EVALUATION_SCHEMA,
     CHECKPOINT_INFERENCE_SCHEMA,
@@ -16,6 +18,10 @@ from bosscrafts_model.artifact_schemas import (
 from bosscrafts_model.bcnlt_source_pipeline import (
     CURRENT_RUNTIME_SPEC_SHA256,
     PARSER_RUNTIME_IDENTITY_SHA256,
+)
+from bosscrafts_model.containment_acceptance import (
+    build_containment_receipt,
+    run_containment_probes,
 )
 from bosscrafts_model.ifeval_case_runner import (
     IfevalBatchResult,
@@ -32,6 +38,13 @@ from bosscrafts_model.model_acceptance import (
 )
 from bosscrafts_model.model_acceptance import (
     verify_model_acceptance as _verify_model_acceptance,
+)
+from bosscrafts_model.safety_judge_case_runner import (
+    SafetyJudgeBatchResult,
+    build_safety_content_receipt,
+)
+from bosscrafts_model.safety_judge_runtime import (
+    EXPECTED_SAFETY_JUDGE_RUNTIME_MANIFEST_SHA256,
 )
 from bosscrafts_model.strict_uncertainty_acceptance import (
     StrictUncertaintyAcceptanceReceipt,
@@ -294,6 +307,8 @@ def _strict_receipt_payload() -> dict[str, object]:
 def _metrics(category: str) -> dict[str, object]:
     language_passes = {language: True for language in LANGUAGES}
     strict_receipt = _strict_receipt_payload()
+    safety_content = _safety_content_receipt_payload()
+    containment = _containment_receipt_payload()
     return {
         "tokenizer_fidelity": {
             "exact_roundtrip_rate": 1.0,
@@ -328,7 +343,12 @@ def _metrics(category: str) -> dict[str, object]:
             "language_passes": language_passes,
         },
         "safety": {
-            "security_test_pass_rate": 1.0,
+            "prompt_moderation_accuracy": 1.0,
+            "response_safety_rate": 1.0,
+            "empty_response_rate": 0.0,
+            "safety_content_receipt_sha256": safety_content["receipt_sha256"],
+            "containment_acceptance_passed": True,
+            "containment_receipt_sha256": containment["receipt_sha256"],
             "sandbox_escape_count": 0,
             "network_violation_count": 0,
             "secret_leakage_count": 0,
@@ -395,11 +415,9 @@ def _records(category: str) -> list[dict[str, object]]:
             },
             "safety": {
                 "example_id": example_id,
-                "security_test_passed": True,
-                "sandbox_escape": False,
-                "network_violation": False,
-                "secret_leakage": False,
-                "unauthorized_file_write": False,
+                "prompt_moderation_correct": True,
+                "response_safe": True,
+                "response_nonempty": True,
             },
             "regression": {
                 "example_id": example_id,
@@ -420,6 +438,48 @@ def _records(category: str) -> list[dict[str, object]]:
         }[category]
         records.append(record)
     return records
+
+
+def _safety_content_receipt_payload() -> dict[str, object]:
+    records = _records("safety")
+    example_ids = tuple(str(record["example_id"]) for record in records)
+    raw_output = "User Safety: safe\nResponse Safety: safe"
+    details = tuple(
+        {
+            "example_id": example_id,
+            "expected_prompt_label": "safe",
+            "observed_prompt_label": "safe",
+            "observed_response_label": "safe",
+            "safety_categories": [],
+            "raw_output": raw_output,
+            "raw_output_sha256": hashlib.sha256(
+                raw_output.encode("utf-8")
+            ).hexdigest(),
+        }
+        for example_id in example_ids
+    )
+    responses = {example_id: "safe candidate" for example_id in example_ids}
+    return build_safety_content_receipt(
+        SafetyJudgeBatchResult(
+            runtime_manifest_sha256=(
+                EXPECTED_SAFETY_JUDGE_RUNTIME_MANIFEST_SHA256
+            ),
+            case_example_ids=example_ids,
+            records=tuple(records),
+            details=details,
+        ),
+        responses,
+        checkpoint_sha256=CHECKPOINT_ID,
+        checkpoint_step=86_016,
+    )
+
+
+def _containment_receipt_payload() -> dict[str, object]:
+    return build_containment_receipt(
+        run_containment_probes(_FakeSandbox()),
+        checkpoint_sha256=CHECKPOINT_ID,
+        checkpoint_step=86_016,
+    )
 
 
 def _ifeval_receipt_payload() -> dict[str, object]:
@@ -460,6 +520,11 @@ def _category(category: str) -> dict[str, object]:
         }
     elif category == "ordinary_instruction":
         supporting_evidence = {"ifeval_batch_receipt": _ifeval_receipt_payload()}
+    elif category == "safety":
+        supporting_evidence = {
+            "safety_content_receipt": _safety_content_receipt_payload(),
+            "containment_receipt": _containment_receipt_payload(),
+        }
     else:
         supporting_evidence = {}
     payload: dict[str, object] = {

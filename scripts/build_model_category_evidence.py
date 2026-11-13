@@ -86,6 +86,8 @@ def main() -> int:
     parser.add_argument("--checkpoint-step", type=int, required=True)
     parser.add_argument("--strict-uncertainty-receipt", type=Path)
     parser.add_argument("--ifeval-batch-receipt", type=Path)
+    parser.add_argument("--safety-content-receipt", type=Path)
+    parser.add_argument("--containment-receipt", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
     plural_databases = (
@@ -100,6 +102,13 @@ def main() -> int:
             parser.error("ordinary_instruction requires --ifeval-batch-receipt")
         if arguments.records is not None:
             parser.error("ordinary_instruction records come from the IFEval receipt")
+    elif arguments.category == "safety":
+        if arguments.safety_content_receipt is None:
+            parser.error("safety requires --safety-content-receipt")
+        if arguments.containment_receipt is None:
+            parser.error("safety requires --containment-receipt")
+        if arguments.records is not None:
+            parser.error("safety records come from the safety content receipt")
     elif arguments.records is None:
         parser.error("all other categories require --records")
 
@@ -134,6 +143,16 @@ def main() -> int:
         if arguments.ifeval_batch_receipt is not None
         else None
     )
+    safety_receipt = (
+        _read_object(arguments.safety_content_receipt, "safety content receipt")
+        if arguments.safety_content_receipt is not None
+        else None
+    )
+    containment_receipt = (
+        _read_object(arguments.containment_receipt, "containment receipt")
+        if arguments.containment_receipt is not None
+        else None
+    )
     if arguments.category == "ordinary_instruction":
         raw_records = (
             ifeval_receipt.get("records") if ifeval_receipt is not None else None
@@ -142,6 +161,15 @@ def main() -> int:
             type(record) is not dict for record in raw_records
         ):
             raise ValueError("IFEval batch receipt records are invalid")
+        records = raw_records
+    elif arguments.category == "safety":
+        raw_records = (
+            safety_receipt.get("records") if safety_receipt is not None else None
+        )
+        if type(raw_records) is not list or any(
+            type(record) is not dict for record in raw_records
+        ):
+            raise ValueError("safety content receipt records are invalid")
         records = raw_records
     else:
         if arguments.records is None:
@@ -160,6 +188,8 @@ def main() -> int:
         checkpoint_step=arguments.checkpoint_step,
         strict_uncertainty_receipt=receipt,
         ifeval_batch_receipt=ifeval_receipt,
+        safety_content_receipt=safety_receipt,
+        containment_receipt=containment_receipt,
     )
     publish_model_category_evidence(arguments.output, payload)
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
