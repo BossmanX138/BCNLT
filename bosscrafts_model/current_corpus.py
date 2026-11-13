@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
+import tempfile
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -265,6 +267,8 @@ class CurrentCorpusAdmission:
         ]
         root = Path(output_root).resolve()
         root.mkdir(parents=True, exist_ok=True)
+        if any(root.iterdir()):
+            raise ValueError("current corpus output already contains files")
         records: list[dict[str, object]] = []
         rejections: list[dict[str, object]] = []
         seen_document_ids: set[str] = set()
@@ -413,9 +417,13 @@ class CurrentCorpusAdmission:
             unsigned_manifest["source_catalog_sha256"] = self._source_catalog_sha256
         manifest_sha256 = _sha256_text(_canonical_json(unsigned_manifest))
         manifest = {**unsigned_manifest, "manifest_sha256": manifest_sha256}
-        self._replace_text(root / "admitted.jsonl", records_text)
-        self._replace_text(root / "rejected.jsonl", rejections_text)
-        self._replace_text(root / "manifest.json", f"{_canonical_json(manifest)}\n")
+        self._publish_new_files(
+            (
+                (root / "admitted.jsonl", records_text),
+                (root / "rejected.jsonl", rejections_text),
+                (root / "manifest.json", f"{_canonical_json(manifest)}\n"),
+            )
+        )
         return CurrentCorpusResult(
             output_root=root,
             admitted_count=len(records),
@@ -447,7 +455,44 @@ class CurrentCorpusAdmission:
         }
 
     @staticmethod
-    def _replace_text(path: Path, content: str) -> None:
-        temporary = path.with_name(f".{path.name}.tmp")
-        temporary.write_text(content, encoding="utf-8", newline="\n")
-        temporary.replace(path)
+    def _publish_new_files(files: tuple[tuple[Path, str], ...]) -> None:
+        staged: list[tuple[Path, Path]] = []
+        published: list[tuple[Path, Path]] = []
+        try:
+            for path, content in files:
+                temporary_handle = tempfile.NamedTemporaryFile(
+                    mode="w",
+                    encoding="utf-8",
+                    newline="\n",
+                    dir=path.parent,
+                    prefix=f".{path.name}.",
+                    suffix=".tmp",
+                    delete=False,
+                )
+                temporary = Path(temporary_handle.name)
+                try:
+                    temporary_handle.write(content)
+                    temporary_handle.flush()
+                    os.fsync(temporary_handle.fileno())
+                finally:
+                    temporary_handle.close()
+                staged.append((path, temporary))
+            for path, temporary in staged:
+                if path.exists():
+                    raise ValueError("current corpus output file already exists")
+                try:
+                    os.link(temporary, path)
+                except FileExistsError as error:
+                    raise ValueError(
+                        "current corpus output file already exists"
+                    ) from error
+                published.append((path, temporary))
+        except BaseException:
+            for path, temporary in reversed(published):
+                if path.exists() and path.samefile(temporary):
+                    path.unlink()
+            raise
+        finally:
+            for _, temporary in staged:
+                if temporary.exists():
+                    temporary.unlink()

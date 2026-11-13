@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -191,6 +192,65 @@ class CurrentCorpusAdmissionTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(ValueError, "ResumableCurrentCorpusAdmission"):
                 CurrentCorpusAdmission(self.pipeline).materialize(candidates, output_dir)
+
+    def test_existing_corpus_generation_is_never_overwritten(self):
+        first_candidates = (
+            _candidate("doc-first", "python", "first = 1\n", "first.py"),
+        )
+        second_candidates = (
+            _candidate("doc-second", "python", "second = 2\n", "second.py"),
+        )
+        with tempfile.TemporaryDirectory() as output_dir:
+            root = Path(output_dir)
+            CurrentCorpusAdmission(self.pipeline).materialize(
+                first_candidates, root
+            )
+            original = {
+                path.name: path.read_bytes()
+                for path in root.iterdir()
+                if path.is_file()
+            }
+
+            with self.assertRaisesRegex(ValueError, "already contains"):
+                CurrentCorpusAdmission(self.pipeline).materialize(
+                    second_candidates, root
+                )
+
+            self.assertEqual(
+                {
+                    path.name: path.read_bytes()
+                    for path in root.iterdir()
+                    if path.is_file()
+                },
+                original,
+            )
+
+    def test_mid_publication_failure_rolls_back_owned_files(self):
+        candidates = (
+            _candidate("doc-first", "python", "first = 1\n", "first.py"),
+        )
+        with tempfile.TemporaryDirectory() as output_dir:
+            root = Path(output_dir)
+            real_link = os.link
+            link_calls = 0
+
+            def fail_second_link(source: str | Path, destination: str | Path) -> None:
+                nonlocal link_calls
+                link_calls += 1
+                if link_calls == 2:
+                    raise OSError("deliberate publication failure")
+                real_link(source, destination)
+
+            with (
+                mock.patch(
+                    "bosscrafts_model.current_corpus.os.link",
+                    side_effect=fail_second_link,
+                ),
+                self.assertRaisesRegex(OSError, "deliberate publication failure"),
+            ):
+                CurrentCorpusAdmission(self.pipeline).materialize(candidates, root)
+
+            self.assertEqual(list(root.iterdir()), [])
 
     def test_sqlite_catalog_is_read_only_and_selects_each_language_deterministically(self):
         with tempfile.TemporaryDirectory() as directory:
