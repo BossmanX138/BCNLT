@@ -1,4 +1,5 @@
 """Crash-resumable current-lineage task packing backed by committed SQLite rows."""
+
 from __future__ import annotations
 
 import hashlib
@@ -173,7 +174,9 @@ class ResumableTaskDataset:
             try:
                 parsed_multipliers = json.loads(raw_multipliers)
             except json.JSONDecodeError as error:
-                raise ValueError("task database cell weight multipliers are invalid") from error
+                raise ValueError(
+                    "task database cell weight multipliers are invalid"
+                ) from error
             if type(parsed_multipliers) is not dict:
                 raise ValueError("task database cell weight multipliers are invalid")
             for key, value in parsed_multipliers.items():
@@ -185,7 +188,9 @@ class ResumableTaskDataset:
                     or not math.isfinite(float(value))
                     or float(value) <= 0
                 ):
-                    raise ValueError("task database cell weight multipliers are invalid")
+                    raise ValueError(
+                        "task database cell weight multipliers are invalid"
+                    )
                 multipliers[(parts[0], parts[1], parts[2])] = float(value)
         observed_cells = {
             (split, language, family)
@@ -193,7 +198,9 @@ class ResumableTaskDataset:
             for split, language, family, _ in rows
         }
         if not set(multipliers).issubset(observed_cells):
-            raise ValueError("task database cell weight multiplier names an absent cell")
+            raise ValueError(
+                "task database cell weight multiplier names an absent cell"
+            )
 
         self._weights: dict[tuple[str, str, str], float] = {}
         self._split_counts: Counter[str] = Counter()
@@ -202,9 +209,7 @@ class ResumableTaskDataset:
             unnormalized: dict[tuple[str, str, str], float] = {}
             for split, language, family, count in split_rows:
                 cell = (split, language, family)
-                unnormalized[cell] = (
-                    mean_count / count * multipliers.get(cell, 1.0)
-                )
+                unnormalized[cell] = mean_count / count * multipliers.get(cell, 1.0)
                 self._split_counts[split] += count
             total_examples = sum(row[3] for row in split_rows)
             total_weight = sum(
@@ -232,7 +237,9 @@ class ResumableTaskDataset:
             raise ValueError("split must be train, validation, test or None")
         if after_example_id is not None and (
             len(after_example_id) != 64
-            or any(character not in "0123456789abcdef" for character in after_example_id)
+            or any(
+                character not in "0123456789abcdef" for character in after_example_id
+            )
         ):
             raise ValueError("after_example_id must be a lowercase SHA-256 or None")
         connection = ResumableCurrentTaskPacking._ro_connect(self.database_path)
@@ -260,12 +267,16 @@ class ResumableTaskDataset:
                     if family == "instruction_to_code"
                     else PARSER_RUNTIME_IDENTITY_SHA256
                 )
-                if family not in {
-                    "instruction_to_code",
-                    "code_to_semantic",
-                    "semantic_continuation",
-                    "semantic_to_code",
-                } or str(row[10]) != expected_runtime:
+                if (
+                    family
+                    not in {
+                        "instruction_to_code",
+                        "code_to_semantic",
+                        "semantic_continuation",
+                        "semantic_to_code",
+                    }
+                    or str(row[10]) != expected_runtime
+                ):
                     raise ValueError("task row parser runtime lineage mismatch")
                 expected_input_bytes = int(row[7]) * 2
                 input_ids = _decode_u16(
@@ -310,7 +321,9 @@ def audit_task_database(
     try:
         maximum_allowed = int(dataset.metadata["maximum_sequence_tokens"])
     except (KeyError, ValueError) as error:
-        raise ValueError("task database maximum sequence metadata is invalid") from error
+        raise ValueError(
+            "task database maximum sequence metadata is invalid"
+        ) from error
     example_id_policy = dataset.metadata.get("training_example_id_policy")
     source_identities: dict[str, tuple[str, str]] | None = None
     if example_id_policy is not None:
@@ -349,10 +362,8 @@ def audit_task_database(
                     }
                 ).encode("utf-8")
             )
-        if (
-            not source_identities
-            or mapping_digest.hexdigest()
-            != dataset.metadata.get("source_example_identity_map_sha256")
+        if not source_identities or mapping_digest.hexdigest() != dataset.metadata.get(
+            "source_example_identity_map_sha256"
         ):
             raise ValueError("task database source identity map hash mismatch")
     split_counts: Counter[str] = Counter()
@@ -364,7 +375,7 @@ def audit_task_database(
     total_sequence_tokens = 0
     maximum_sequence_tokens = 0
     for row in dataset.iter_examples():
-        input_ids = cast(list[int], row["input_ids"])
+        input_ids = row["input_ids"]
         input_ids_sha256 = hashlib.sha256(
             _canonical_json(input_ids).encode("utf-8")
         ).hexdigest()
@@ -383,9 +394,7 @@ def audit_task_database(
         else:
             mapped = source_identities.get(str(row["example_id"]))
             expected_kind = (
-                "instruction"
-                if row["family"] == "instruction_to_code"
-                else "replay"
+                "instruction" if row["family"] == "instruction_to_code" else "replay"
             )
             if mapped != (expected_id, expected_kind):
                 raise ValueError("task source example identity mismatch")
@@ -474,9 +483,7 @@ class ResumableCurrentTaskPacking:
             raise ValueError("semantic_wire must be full_v3 or compact_v2")
         if forced_split not in {None, "train", "validation", "test"}:
             raise ValueError("forced_split must be train, validation, test or None")
-        if (eligibility_root is None) != (
-            expected_eligibility_manifest_sha256 is None
-        ):
+        if (eligibility_root is None) != (expected_eligibility_manifest_sha256 is None):
             raise ValueError(
                 "eligibility_root and expected eligibility manifest SHA-256 must be supplied together"
             )
@@ -503,7 +510,9 @@ class ResumableCurrentTaskPacking:
             if semantic_wire == "compact_v2"
             else CurrentCorpusTaskPacker(binding, max_sequence=max_sequence)
         )
-        self._admission_metadata, admitted_count, rejected_count = self._admission_identity()
+        self._admission_metadata, admitted_count, rejected_count = (
+            self._admission_identity()
+        )
         if self._admission_metadata.get("catalog_exhausted") != "true":
             raise ValueError("full admission is not complete")
         expected_catalog_sha256 = self._admission_metadata.get("source_catalog_sha256")
@@ -518,14 +527,12 @@ class ResumableCurrentTaskPacking:
                 str(expected_catalog_sha256),
             )
             eligibility_source_split = str(eligibility_manifest["source_split"])
-            if (
-                forced_split is None
-                and eligibility_source_split != "train"
-            ) or (
-                forced_split is not None
-                and eligibility_source_split == "train"
+            if (forced_split is None and eligibility_source_split != "train") or (
+                forced_split is not None and eligibility_source_split == "train"
             ):
-                raise ValueError("eligibility source split and task split policy mismatch")
+                raise ValueError(
+                    "eligibility source split and task split policy mismatch"
+                )
         identity_payload = {
             "metadata": self._admission_metadata,
             "admitted_count": admitted_count,
@@ -542,7 +549,9 @@ class ResumableCurrentTaskPacking:
             "maximum_sequence_tokens": str(max_sequence),
             "source_admission_identity_sha256": admission_identity,
             "source_catalog_sha256": str(expected_catalog_sha256),
-            "review_manifest_sha256": self._admission_metadata["review_manifest_sha256"],
+            "review_manifest_sha256": self._admission_metadata[
+                "review_manifest_sha256"
+            ],
             "semantic_spec_sha256": self._admission_metadata["semantic_spec_sha256"],
             "parser_runtime_identity_sha256": self._admission_metadata[
                 "parser_runtime_identity_sha256"
@@ -659,10 +668,9 @@ class ResumableCurrentTaskPacking:
             }
         finally:
             admission.close()
-        if (
-            manifest.get("source_admission_identity_sha256") != identity
-            or not eligible_ids.issubset(admitted_ids)
-        ):
+        if manifest.get(
+            "source_admission_identity_sha256"
+        ) != identity or not eligible_ids.issubset(admitted_ids):
             raise ValueError("training eligibility admission lineage mismatch")
         return eligible_ids, manifest
 
@@ -802,7 +810,8 @@ class ResumableCurrentTaskPacking:
         processed = 0
         try:
             completed_ids = {
-                row[0] for row in task_connection.execute("SELECT document_id FROM documents")
+                row[0]
+                for row in task_connection.execute("SELECT document_id FROM documents")
             }
             rows = admission.execute(
                 """SELECT document_id, content_sha256, language, relative_path,
@@ -837,7 +846,8 @@ class ResumableCurrentTaskPacking:
                     language != admission_row[2]
                     or relative_path != admission_row[3]
                     or source_sha256 != admission_row[1]
-                    or hashlib.sha256(source.encode("utf-8")).hexdigest() != source_sha256
+                    or hashlib.sha256(source.encode("utf-8")).hexdigest()
+                    != source_sha256
                 ):
                     raise ValueError("source catalog document identity mismatch")
                 if str(admission_row[5]) != PARSER_RUNTIME_IDENTITY_SHA256:
@@ -846,7 +856,10 @@ class ResumableCurrentTaskPacking:
                     admission_row[7],
                     maximum_output_bytes=MAX_CANONICAL_OUTPUT_BYTES,
                 ).decode("utf-8")
-                if hashlib.sha256(canonical_jsonl.encode("utf-8")).hexdigest() != admission_row[6]:
+                if (
+                    hashlib.sha256(canonical_jsonl.encode("utf-8")).hexdigest()
+                    != admission_row[6]
+                ):
                     raise ValueError("admission canonical JSONL SHA-256 mismatch")
                 expected_semantic_bytes = int(admission_row[10]) * 2
                 semantic_ids = _decode_u16(

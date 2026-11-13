@@ -1,13 +1,14 @@
 """Isolated raw Tree-sitter witness sidecar; semantic extraction is not invoked."""
+
 from __future__ import annotations
 
 import hashlib
 import json
 import os
-from pathlib import Path
 import sys
-from typing import Protocol, Sequence, cast
-
+from collections.abc import Sequence
+from pathlib import Path
+from typing import Protocol, cast
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_ROOT = PROJECT_ROOT / "vendor" / "bcnlt_runtime_v10_learning_candidate"
@@ -26,7 +27,7 @@ MAX_REQUEST_BYTES = MAX_SOURCE_BYTES * 6 + 4 * 1024 * 1024
 
 class _Node(Protocol):
     @property
-    def children(self) -> Sequence["_Node"]: ...
+    def children(self) -> Sequence[_Node]: ...
 
     @property
     def start_point(self) -> tuple[int, int]: ...
@@ -47,9 +48,9 @@ class _Node(Protocol):
     def is_named(self) -> bool: ...
 
     @property
-    def parent(self) -> "_Node | None": ...
+    def parent(self) -> _Node | None: ...
 
-    def child_by_field_name(self, name: str) -> "_Node | None": ...
+    def child_by_field_name(self, name: str) -> _Node | None: ...
 
 
 class _ScopeRule(Protocol):
@@ -74,9 +75,7 @@ def _load_request(raw: bytes | None = None) -> dict[str, object]:
         raw = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
     if len(raw) > MAX_REQUEST_BYTES:
         raise ValueError("request exceeds bounded transport")
-    payload = json.loads(
-        raw.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys
-    )
+    payload = json.loads(raw.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys)
     if type(payload) is not dict or set(payload) != {
         "protocol",
         "source",
@@ -136,11 +135,11 @@ def _load_request(raw: bytes | None = None) -> dict[str, object]:
 
 
 def _run(payload: dict[str, object]) -> dict[str, object]:
-    from bcnlt.adapters import (  # type: ignore[import-not-found]
+    from bcnlt.adapters import (
         BCNLTMultilingualAdapter,
         LanguageCarousel,
     )
-    from bcnlt.adapters.tree_sitter import (  # type: ignore[import-not-found]
+    from bcnlt.adapters.tree_sitter import (
         TreeSitterSemanticEngine,
     )
 
@@ -171,9 +170,7 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
     adapter = BCNLTMultilingualAdapter(
         engine=TreeSitterSemanticEngine(), carousel=carousel
     )
-    document = adapter.parse(
-        source, language=language, path=path, dialect=dialect
-    )
+    document = adapter.parse(source, language=language, path=path, dialect=dialect)
 
     exact: dict[tuple[int, int, int, int], set[str]] = {}
     starts: dict[tuple[int, int], set[str]] = {}
@@ -221,7 +218,7 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
                     and binding is not None
                     and str(binding.type) == "identifier"
                 ):
-                    return binding
+                    return cast(_Node, binding)
         for alternative in field_path.split("|"):
             current: _Node | None = node
             for segment in alternative.split("."):
@@ -302,9 +299,7 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
             "required_parameter.binding",
             "optional_parameter.binding",
         }:
-            field_name = (
-                "name" if owner_type == "variable_declarator" else "pattern"
-            )
+            field_name = "name" if owner_type == "variable_declarator" else "pattern"
             binding = owner.child_by_field_name(field_name)
             return (
                 binding is not None
@@ -313,11 +308,10 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
                 and is_within(target, binding)
             )
         if relation == "formal_parameters.binding":
-            return (
-                target_type
-                in {"identifier", "shorthand_property_identifier_pattern"}
-                and is_within(target, owner)
-            )
+            return target_type in {
+                "identifier",
+                "shorthand_property_identifier_pattern",
+            } and is_within(target, owner)
         if relation == "catch_clause.parameter":
             parameter = owner.child_by_field_name("parameter")
             return parameter is not None and is_within(target, parameter)
@@ -454,7 +448,10 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
                 node
                 for node in named_nodes
                 if str(node.type) == owner_type
-                and (node_span(node)[0:2] == span[0:2] or node_span(node)[2:4] == span[0:2])
+                and (
+                    node_span(node)[0:2] == span[0:2]
+                    or node_span(node)[2:4] == span[0:2]
+                )
             ]
         else:
             for node in named_nodes:
@@ -482,10 +479,7 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
         relation_match = bool(matching_owners)
         claimed_scope = query.get("scope")
         derived_scopes = sorted(
-            {
-                derived_scope(owner, relation, span)
-                for owner in matching_owners
-            }
+            {derived_scope(owner, relation, span) for owner in matching_owners}
         )
         unique_scope = derived_scopes[0] if len(derived_scopes) == 1 else None
         witnesses.append(

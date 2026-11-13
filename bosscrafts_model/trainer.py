@@ -1,8 +1,9 @@
 """Deterministic batch-one training primitives for verified task rows."""
+
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 from typing import Callable, Iterable
 
 import torch
@@ -86,15 +87,15 @@ def run_training_steps(
                 if current.grad is not None:
                     current.grad.mul_(correction)
         for current in model.parameters():
-            if current.grad is not None and not bool(torch.isfinite(current.grad).all()):
+            if current.grad is not None and not bool(
+                torch.isfinite(current.grad).all()
+            ):
                 gradients_finite = False
                 break
         if not gradients_finite:
             raise RuntimeError("training produced a non-finite gradient")
         if learning_rate_schedule is not None:
-            learning_rate = float(
-                learning_rate_schedule(step_offset + optimizer_steps)
-            )
+            learning_rate = float(learning_rate_schedule(step_offset + optimizer_steps))
             if not math.isfinite(learning_rate) or learning_rate <= 0:
                 raise RuntimeError("learning-rate schedule produced an invalid value")
             for group in optimizer.param_groups:
@@ -114,8 +115,10 @@ def run_training_steps(
         sampling_weight = example.get("sampling_weight")
         if not _is_sha256(example_id):
             raise ValueError("training example_id is invalid")
-        if type(input_ids) is not list or len(input_ids) < 2 or any(
-            type(token_id) is not int for token_id in input_ids
+        if (
+            type(input_ids) is not list
+            or len(input_ids) < 2
+            or any(type(token_id) is not int for token_id in input_ids)
         ):
             raise ValueError("training input_ids are invalid")
         if type(loss_start) is not int or not 0 < loss_start < len(input_ids):
@@ -133,7 +136,7 @@ def run_training_steps(
         weighted_loss = loss * weight
         if not bool(torch.isfinite(weighted_loss)):
             raise RuntimeError("training produced a non-finite loss")
-        (weighted_loss / gradient_accumulation).backward()
+        torch.autograd.backward(weighted_loss / gradient_accumulation)
         loss_sum += float(weighted_loss.detach().float().item())
         examples_seen += 1
         sequence_tokens_seen += len(input_ids)
