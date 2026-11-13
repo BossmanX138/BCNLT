@@ -226,5 +226,9 @@ acceptance; the live containment probes pass, while the 8.64 GB pinned safety
 judge has not yet been installed or executed. Other remaining category runners
 also require completion. Training and meaningful model insertion stay held; a
 read-only diagnostic Mk10 smoke would be permissible but would not be promotion
-evidence. This record is not evidence that a model has been trained, promoted,
-or improved.
+evidence. That smoke has now executed against the preserved incomplete V8
+checkpoint: the current runtime loaded its verified real weights on the RTX
+3070, generated a correctly framed native BCNLT response, and used about 1.10
+GB of allocated VRAM, but its decoded instruction response was invalid. The
+result is recorded in `docs/mk10-v8-readonly-smoke-20261113.md`. This record is
+not evidence that a model has been trained, promoted, or improved.
