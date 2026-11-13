@@ -64,6 +64,24 @@ class CodeXCodeCurriculumTests(unittest.TestCase):
                 )
         return dataset, humaneval
 
+    def test_progress_write_preserves_unrelated_predictable_temp(self) -> None:
+        from bosscrafts_model import codex_code_curriculum as module
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            destination = root / "progress.json"
+            stale = root / ".progress.json.tmp"
+            stale.write_bytes(b"unrelated sentinel")
+
+            module._write_progress(destination, {"complete": False})
+
+            self.assertEqual(stale.read_bytes(), b"unrelated sentinel")
+            self.assertEqual(
+                json.loads(destination.read_text(encoding="utf-8")),
+                {"complete": False},
+            )
+            self.assertEqual(list(root.glob(".progress.json.*.tmp")), [])
+
     def test_language_aliases_are_canonical(self) -> None:
         self.assertEqual(normalize_language("C++"), "cpp")
         self.assertEqual(normalize_language("python3"), "python")
