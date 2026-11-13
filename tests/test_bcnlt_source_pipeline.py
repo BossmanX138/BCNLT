@@ -13,6 +13,7 @@ import torch
 
 from bosscrafts_model.bcnlt_source_pipeline import (
     _DEFAULT_PYTHON_313,
+    _EXPECTED_RUNTIME_IDENTITY,
     CURRENT_RUNTIME_SPEC_SHA256,
     BCNLTPreprocessingError,
     BCNLTSourcePipeline,
@@ -115,6 +116,31 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
         self.assertTrue(
             all(0 <= token_id < self.binding.vocab_size for token_id in first.token_ids)
         )
+
+    def test_sidecar_response_attests_frozen_executable_source(self):
+        source = "x = 1\n"
+        response = self.pipeline._invoke_sidecar(
+            source,
+            language="python",
+            path="attested.py",
+            dialect=None,
+        )
+        self.assertEqual(
+            response["sidecar_source_sha256"],
+            _EXPECTED_RUNTIME_IDENTITY["sidecar"],
+        )
+
+        tampered = dict(response)
+        tampered["sidecar_source_sha256"] = "0" * 64
+        with patch.object(self.pipeline, "_invoke_sidecar", return_value=tampered):
+            with self.assertRaisesRegex(
+                BCNLTPreprocessingError, "sidecar provenance mismatch"
+            ):
+                self.pipeline.prepare_semantic(
+                    source,
+                    language="python",
+                    path="attested.py",
+                )
 
     def test_semantic_decoder_rejects_null_in_required_surface_field(self):
         prepared = self.pipeline.prepare_semantic(

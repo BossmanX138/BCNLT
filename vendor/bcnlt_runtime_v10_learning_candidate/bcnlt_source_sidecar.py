@@ -10,10 +10,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from pathlib import Path
 import sys
 import traceback
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 SOURCE_ROOT = ROOT / "source"
@@ -28,7 +27,13 @@ MAX_REQUEST_BYTES = MAX_SOURCE_BYTES * 6 + 16 * 1024
 MAX_CANONICAL_OUTPUT_BYTES = 16 * 1024 * 1024
 MAX_CANONICAL_RECORDS = 16_384
 MAX_RESPONSE_BYTES = MAX_CANONICAL_OUTPUT_BYTES * 6 + 64 * 1024
-PROTOCOL = "bosscrafts-bcnlt-source-sidecar-v2"
+PROTOCOL = "bosscrafts-bcnlt-source-sidecar-v3"
+SIDECAR_SOURCE_SHA256 = hashlib.sha256(
+    Path(__file__)
+    .read_bytes()
+    .replace(b"\r\n", b"\n")
+    .replace(b"\r", b"\n")
+).hexdigest()
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -172,6 +177,7 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
             extended_core_entry_count = len(memory.validated_extended_core())
     return {
         "protocol": PROTOCOL,
+        "sidecar_source_sha256": SIDECAR_SOURCE_SHA256,
         "language": language,
         "path": path,
         "dialect": dialect,

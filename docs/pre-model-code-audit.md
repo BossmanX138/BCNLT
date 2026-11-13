@@ -2,7 +2,7 @@
 
 Date: 2026-11-13
 
-Branch: `audit/v10-semantic-integrity`
+Branch: `audit/v10-exhaustive-code-review`
 
 This record covers the isolated BossCrafts model candidate and its contained
 BCNLT v10 learning runtime. Model insertion and training remained held during
@@ -18,12 +18,16 @@ actionable defect after the repairs and gates below.
 - The contained runtime is sealed by the normalized Python-source aggregate
   `c5623e97f3f1e1e884e1d54a316d174292fbcbf61da3ddfdbf3b432418e0450a`.
 - The resulting parser runtime identity is
-  `014a5bbc567fcce87e448a58b41b301ffce4bd91210adb009abdc3eb9ab30a2c`.
+  `6b4eb852950ad425f804905468339e0188e0d539353186afc031c86a6adb0393`.
 - Ruff passed every changed Python file.
-- Mypy passed all 58 configured source files in strict mode.
-- The complete regression passed: 393 tests and 144 subtests, no failures.
-- Branch coverage measured 74.5463%: 17,861 covered and 4,539 missing lines;
-  3,252 covered and 2,670 missing branches.
+- Mypy passed all 64 configured core source files and the changed orchestration
+  scripts in strict mode.
+- The latest complete regression passed: 507 tests and 186 subtests, with
+  warnings treated as errors.
+- The earlier semantic-integrity baseline measured 74.5463% branch coverage:
+  17,861 covered and 4,539 missing lines; 3,252 covered and 2,670 missing
+  branches. That measurement predates the later exhaustive hardening and is not
+  presented as current coverage.
 - `pip-audit` reported no known dependency vulnerabilities after upgrading the
   pinned PyTorch and setuptools chain.
 - Bandit reported no medium- or high-severity findings. The remaining 82 low
@@ -66,6 +70,11 @@ than a hidden functional failure.
 8. Locked PyTorch and setuptools versions had published advisories. The lock is
    upgraded to PyTorch 2.13.0 and setuptools 84.2.1, and the resulting complete
    dependency export passes `pip-audit`.
+9. The parser subprocess could be replaced after the runtime inventory check
+   without attesting the executable sidecar bytes in its response. Sidecar
+   protocol V3 now reports its normalized source hash, launch paths recheck the
+   frozen hash immediately before execution, and the host rejects any response
+   that does not match the frozen runtime identity.
 
 ## Boundaries
 

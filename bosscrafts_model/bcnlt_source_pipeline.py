@@ -52,7 +52,7 @@ from .runtime_identity import (
 from .semantic import NativeSemanticRecordCodec
 from .tokenizer import NativeTokenizerBinding
 
-SIDECAR_PROTOCOL = "bosscrafts-bcnlt-source-sidecar-v2"
+SIDECAR_PROTOCOL = "bosscrafts-bcnlt-source-sidecar-v3"
 CURRENT_RUNTIME_SPEC_SHA256 = {
     "bash": "da1bb0468fb23c5a6eaa8af1eb0e9eeea4b9e295e7ffbc0d4aeb073c671810ca",
     "c": "f3765a6dd8687810a0d51f0ea9067af9bbee6642b98f23419168cd34d75e37f5",
@@ -77,17 +77,17 @@ _DEFAULT_PYTHON_313 = Path(sys.executable).resolve()
 _RUNTIME_MANIFEST = _RUNTIME_ROOT / "runtime-manifest.json"
 _EXPECTED_RUNTIME_IDENTITY = {
     "source": "c5623e97f3f1e1e884e1d54a316d174292fbcbf61da3ddfdbf3b432418e0450a",
-    "sidecar": "c86f40828c0303adad2cbf05eb25b5c358ff88ffc1bb9ebcbd39d9de75b158cc",
+    "sidecar": "457b068eb34b92c495cb31cb37e906284f069383058fbf9e0f5920679666066e",
     "tree_sitter": "d8efa5533a1c79cc404df3a0ff03d76626ad50d54b74d97e4cf6e30ab85bebe4",
     "language_pack": "18fda57fbe2f52f85cf09fd1fc5af6509bfe0a8c6d3d425cafe3d7b63f8dca6e",
     "grammars": "19fc42827e8ab3b37282c0666caa1ddd8abcd3708298fb1665c10df440c3d090",
     "site_packages": "2bd3e047b78621d289a443a50264c2413f740279f33f41176f3a46848d0c536c",
 }
 _EXPECTED_RUNTIME_MANIFEST_SHA256 = (
-    "981ab89adf804b809147cdb022e5408d53dfa65163d949b36c41022141bf0c3b"
+    "370ed148915e45b9c7264a1006e97b54876f43ba825e160be0b2f45582dee634"
 )
 PARSER_RUNTIME_IDENTITY_SHA256 = (
-    "014a5bbc567fcce87e448a58b41b301ffce4bd91210adb009abdc3eb9ab30a2c"
+    "6b4eb852950ad425f804905468339e0188e0d539353186afc031c86a6adb0393"
 )
 PARSER_RUNTIME_NOT_APPLICABLE = "not_applicable"
 _FIELD_ORDER = (
@@ -109,6 +109,7 @@ _SEMANTIC_RECORD_BATCH_SIZE = 128
 _RESPONSE_KEYS = frozenset(
     (
         "protocol",
+        "sidecar_source_sha256",
         "language",
         "path",
         "dialect",
@@ -209,6 +210,10 @@ class _PersistentSidecarWorker:
             return process
         if process is not None:
             self._close_streams(process)
+        if _sha256(_SIDECAR) != _EXPECTED_RUNTIME_IDENTITY["sidecar"]:
+            raise BCNLTPreprocessingError(
+                "BCNLT persistent parser sidecar source identity changed"
+            )
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
             process = subprocess.Popen(
@@ -787,6 +792,10 @@ class BCNLTSourcePipeline:
             stdout_bytes = self._persistent_worker().request(request_bytes)
         else:
             creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            if _sha256(_SIDECAR) != _EXPECTED_RUNTIME_IDENTITY["sidecar"]:
+                raise BCNLTPreprocessingError(
+                    "BCNLT parser sidecar source identity changed"
+                )
             try:
                 completed = subprocess.run(
                     [str(self._python), "-I", str(_SIDECAR)],
@@ -873,6 +882,8 @@ class BCNLTSourcePipeline:
             ).hexdigest()
             if (
                 response["protocol"] != SIDECAR_PROTOCOL
+                or response["sidecar_source_sha256"]
+                != _EXPECTED_RUNTIME_IDENTITY["sidecar"]
                 or response["language"] != language
                 or response["path"] != path
                 or response["dialect"] != dialect
