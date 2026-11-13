@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import sqlite3
-import tempfile
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -19,6 +17,7 @@ from .bcnlt_source_pipeline import (
     PARSER_RUNTIME_IDENTITY_SHA256,
 )
 from .compression import decompress_bounded
+from .immutable_artifacts import publish_new_files
 from .jsonl import split_jsonl_records
 from .resumable_training_semantic_audit import (
     AUDIT_SCHEMA,
@@ -59,23 +58,6 @@ def _is_sha256(value: object) -> bool:
         and len(value) == 64
         and all(character in "0123456789abcdef" for character in value)
     )
-
-
-def _atomic_write(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,16 +220,26 @@ class AuditedSemanticCalibrationDatasetBuilder:
         }
         manifest_sha256 = _sha256_text(_canonical(unsigned))
         manifest = {**unsigned, "manifest_sha256": manifest_sha256}
-        _atomic_write(
-            output / "calibration_observations.jsonl",
-            calibration_text.encode("utf-8"),
-        )
-        _atomic_write(
-            output / "heldout_observations.jsonl", heldout_text.encode("utf-8")
-        )
-        _atomic_write(output / "manual_decisions.jsonl", manual_text.encode("utf-8"))
-        _atomic_write(
-            output / "manifest.json", f"{_canonical(manifest)}\n".encode("utf-8")
+        publish_new_files(
+            (
+                (
+                    output / "calibration_observations.jsonl",
+                    calibration_text.encode("utf-8"),
+                ),
+                (
+                    output / "heldout_observations.jsonl",
+                    heldout_text.encode("utf-8"),
+                ),
+                (
+                    output / "manual_decisions.jsonl",
+                    manual_text.encode("utf-8"),
+                ),
+                (
+                    output / "manifest.json",
+                    f"{_canonical(manifest)}\n".encode("utf-8"),
+                ),
+            ),
+            artifact_label="audited semantic calibration dataset",
         )
         return AuditedSemanticCalibrationDatasetResult(
             output_root=output,

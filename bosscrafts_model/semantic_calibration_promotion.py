@@ -5,14 +5,13 @@ import hashlib
 import importlib
 import importlib.util
 import json
-import os
 import sys
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 from typing import Protocol
 
+from .immutable_artifacts import publish_new_files
 from .runtime_identity import aggregate_sha256
 from .strict_uncertainty_acceptance import (
     StrictUncertaintyPolicy,
@@ -85,7 +84,6 @@ evaluate_uncertainty_calibration = (
     _CALIBRATION_RUNTIME.evaluate_uncertainty_calibration
 )
 fit_uncertainty_calibrator = _CALIBRATION_RUNTIME.fit_uncertainty_calibrator
-write_calibration_artifact = _CALIBRATION_RUNTIME.write_calibration_artifact
 
 
 class _CalibrationThresholdsContract(Protocol):
@@ -121,23 +119,6 @@ def _digest_bytes(value: bytes) -> str:
 def _digest(value: object) -> str:
     canonical = _canonical(value)
     return _digest_bytes(canonical[:-1])
-
-
-def _atomic_write(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
 
 
 @dataclass(frozen=True, slots=True)
@@ -277,10 +258,7 @@ def promote_semantic_uncertainty(
         artifact,
         policy.strict_policy,
     )
-    write_calibration_artifact(
-        output_path / "uncertainty-calibration.json",
-        artifact,
-    )
+    artifact.validate()
     calibrator_payload = {
         "schema_version": calibrator.schema_version,
         "parser_runtime_identity_sha256": calibrator.parser_runtime_identity_sha256,
@@ -289,11 +267,6 @@ def promote_semantic_uncertainty(
         "points": [point.to_dict() for point in calibrator.points],
         "calibrator_sha256": calibrator.calibrator_sha256,
     }
-    _atomic_write(output_path / "uncertainty-calibrator.json", _canonical(calibrator_payload))
-    _atomic_write(
-        output_path / "strict-uncertainty-acceptance.json",
-        _canonical(strict_receipt.to_dict()),
-    )
 
     failures = [f"contained:{code}" for code in artifact.failure_codes]
     failures.extend(strict_receipt.failure_codes)
@@ -320,7 +293,24 @@ def promote_semantic_uncertainty(
     }
     manifest_sha256 = _digest(unsigned)
     promotion_manifest = {**unsigned, "manifest_sha256": manifest_sha256}
-    _atomic_write(output_path / "manifest.json", _canonical(promotion_manifest))
+    publish_new_files(
+        (
+            (
+                output_path / "uncertainty-calibration.json",
+                _canonical(artifact.to_dict()),
+            ),
+            (
+                output_path / "uncertainty-calibrator.json",
+                _canonical(calibrator_payload),
+            ),
+            (
+                output_path / "strict-uncertainty-acceptance.json",
+                _canonical(strict_receipt.to_dict()),
+            ),
+            (output_path / "manifest.json", _canonical(promotion_manifest)),
+        ),
+        artifact_label="semantic calibration promotion",
+    )
     return SemanticCalibrationPromotionResult(
         output_root=output_path,
         promoted=promoted,
