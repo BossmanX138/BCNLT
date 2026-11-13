@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import subprocess
 import sys
@@ -80,9 +81,13 @@ _EXPECTED_RUNTIME_IDENTITY = {
     "tree_sitter": "d8efa5533a1c79cc404df3a0ff03d76626ad50d54b74d97e4cf6e30ab85bebe4",
     "language_pack": "18fda57fbe2f52f85cf09fd1fc5af6509bfe0a8c6d3d425cafe3d7b63f8dca6e",
     "grammars": "19fc42827e8ab3b37282c0666caa1ddd8abcd3708298fb1665c10df440c3d090",
+    "site_packages": "2bd3e047b78621d289a443a50264c2413f740279f33f41176f3a46848d0c536c",
 }
+_EXPECTED_RUNTIME_MANIFEST_SHA256 = (
+    "981ab89adf804b809147cdb022e5408d53dfa65163d949b36c41022141bf0c3b"
+)
 PARSER_RUNTIME_IDENTITY_SHA256 = (
-    "98d8a4f36757491e6b96e533732180fdb2bddb693756289f0a21337bb4bfa80a"
+    "014a5bbc567fcce87e448a58b41b301ffce4bd91210adb009abdc3eb9ab30a2c"
 )
 PARSER_RUNTIME_NOT_APPLICABLE = "not_applicable"
 _FIELD_ORDER = (
@@ -490,10 +495,18 @@ class BCNLTSourcePipeline:
     ) -> None:
         if type(binding) is not NativeTokenizerBinding:
             raise TypeError("binding must be a verified NativeTokenizerBinding")
-        if timeout_seconds <= 0 or timeout_seconds > 60:
+        if type(timeout_seconds) not in (int, float):
+            raise TypeError("sidecar timeout must be a finite number")
+        if (
+            not math.isfinite(timeout_seconds)
+            or timeout_seconds <= 0
+            or timeout_seconds > 60
+        ):
             raise ValueError("sidecar timeout must be in (0, 60] seconds")
         if type(persistent_sidecars) is not bool:
             raise TypeError("persistent_sidecars must be a boolean")
+        if type(learning_mode) is not str:
+            raise TypeError("learning_mode must be a string")
         if learning_mode not in {"ephemeral", "observe", "read_only"}:
             raise ValueError("learning_mode must be ephemeral, observe, or read_only")
         if learning_mode == "ephemeral":
@@ -514,7 +527,7 @@ class BCNLTSourcePipeline:
                 raise ValueError("learned-memory root must be a directory")
         configured = sidecar_python or os.environ.get("BCNLT_SIDECAR_PYTHON")
         self._python = Path(configured) if configured else _DEFAULT_PYTHON_313
-        self._timeout_seconds = timeout_seconds
+        self._timeout_seconds = float(timeout_seconds)
         self._persistent_sidecars = persistent_sidecars
         self._learning_mode = learning_mode
         self._learned_memory_root = resolved_memory_root
@@ -637,8 +650,14 @@ class BCNLTSourcePipeline:
             for name in grammar_names
         ):
             raise ValueError("project-contained BCNLT grammar set is incomplete")
+        if _sha256(_RUNTIME_MANIFEST) != _EXPECTED_RUNTIME_MANIFEST_SHA256:
+            raise ValueError("project-contained BCNLT runtime manifest identity mismatch")
         try:
-            manifest = json.loads(_RUNTIME_MANIFEST.read_text(encoding="utf-8"))
+            manifest = json.loads(
+                _RUNTIME_MANIFEST.read_text(encoding="utf-8"),
+                object_pairs_hook=_reject_duplicate_keys,
+                parse_constant=_reject_nonfinite,
+            )
         except (OSError, json.JSONDecodeError) as error:
             raise ValueError(
                 "project-contained BCNLT runtime manifest is invalid"
@@ -654,6 +673,9 @@ class BCNLTSourcePipeline:
         grammar_hash, grammar_count, grammar_bytes = _aggregate_sha256(
             _RUNTIME_ROOT / "grammars", "*.dll"
         )
+        site_packages_hash, site_packages_count, site_packages_bytes = (
+            _aggregate_sha256(_RUNTIME_ROOT / "site-packages", "*")
+        )
         source_manifest = manifest.get("source", {})
         runtime_manifest = manifest.get("runtime", {})
         actual = {
@@ -662,6 +684,7 @@ class BCNLTSourcePipeline:
             "tree_sitter": _sha256(required[2]),
             "language_pack": _sha256(required[3]),
             "grammars": grammar_hash,
+            "site_packages": site_packages_hash,
         }
         if actual != _EXPECTED_RUNTIME_IDENTITY:
             raise ValueError("project-contained BCNLT runtime identity mismatch")
@@ -683,6 +706,11 @@ class BCNLTSourcePipeline:
             != actual["tree_sitter"]
             or runtime_manifest.get("language_pack_binding_sha256")
             != actual["language_pack"]
+            or runtime_manifest.get("site_packages_aggregate_sha256")
+            != site_packages_hash
+            or runtime_manifest.get("site_packages_file_count")
+            != site_packages_count
+            or runtime_manifest.get("site_packages_bytes") != site_packages_bytes
             or runtime_manifest.get("grammar_aggregate_sha256") != grammar_hash
             or runtime_manifest.get("grammar_count") != grammar_count
             or runtime_manifest.get("grammar_bytes") != grammar_bytes
@@ -819,6 +847,8 @@ class BCNLTSourcePipeline:
         dialect: str | None = None,
         allow_raw_fallback: bool = False,
     ) -> PreparedBCNLTInput:
+        if type(allow_raw_fallback) is not bool:
+            raise TypeError("allow_raw_fallback must be a boolean")
         if type(source) is not str:
             raise TypeError("source must be a string")
         if language not in CURRENT_RUNTIME_SPEC_SHA256:

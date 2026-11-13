@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 from bosscrafts_model import bcnlt_source_pipeline as source_pipeline
 from bosscrafts_model import raw_ast_witness_sidecar
@@ -35,6 +38,39 @@ def test_contained_runtime_lineage_accepts_current_runtime_bytes() -> None:
     assert raw_ast_witness_sidecar.PARSER_RUNTIME_IDENTITY_SHA256 == (
         pipeline.parser_runtime_identity_sha256
     )
+
+
+def test_contained_runtime_identity_covers_executable_site_packages() -> None:
+    aggregate = source_pipeline._aggregate_sha256
+
+    def changed_site_packages(root: Path, pattern: str) -> tuple[str, int, int]:
+        identity, count, size = aggregate(root, pattern)
+        if root.name == "site-packages":
+            return "0" * 64, count, size
+        return identity, count, size
+
+    with patch(
+        "bosscrafts_model.bcnlt_source_pipeline._aggregate_sha256",
+        side_effect=changed_site_packages,
+    ):
+        with pytest.raises(ValueError, match="runtime identity mismatch"):
+            source_pipeline.BCNLTSourcePipeline(NativeTokenizerBinding.load())
+
+
+def test_contained_runtime_manifest_bytes_are_pinned() -> None:
+    sha256 = source_pipeline._sha256
+
+    def changed_manifest(path: Path) -> str:
+        if path == source_pipeline._RUNTIME_MANIFEST:
+            return "0" * 64
+        return sha256(path)
+
+    with patch(
+        "bosscrafts_model.bcnlt_source_pipeline._sha256",
+        side_effect=changed_manifest,
+    ):
+        with pytest.raises(ValueError, match="runtime manifest identity mismatch"):
+            source_pipeline.BCNLTSourcePipeline(NativeTokenizerBinding.load())
 
 
 def test_calibration_runtime_accepts_current_contained_source() -> None:

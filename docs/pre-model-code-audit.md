@@ -18,7 +18,7 @@ actionable defect after the repairs and gates below.
 - The contained runtime is sealed by the normalized Python-source aggregate
   `c5623e97f3f1e1e884e1d54a316d174292fbcbf61da3ddfdbf3b432418e0450a`.
 - The resulting parser runtime identity is
-  `98d8a4f36757491e6b96e533732180fdb2bddb693756289f0a21337bb4bfa80a`.
+  `014a5bbc567fcce87e448a58b41b301ffce4bd91210adb009abdc3eb9ab30a2c`.
 - Ruff passed every changed Python file.
 - Mypy passed all 58 configured source files in strict mode.
 - The complete regression passed: 393 tests and 144 subtests, no failures.

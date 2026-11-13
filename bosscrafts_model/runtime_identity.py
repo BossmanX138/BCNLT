@@ -21,7 +21,10 @@ def sha256_file(path: Path) -> str:
 
 
 def aggregate_sha256(root: Path, pattern: str) -> tuple[str, int, int]:
-    paths = sorted(root.rglob(pattern), key=lambda item: item.relative_to(root).as_posix())
+    paths = sorted(
+        (path for path in root.rglob(pattern) if path.is_file()),
+        key=lambda item: item.relative_to(root).as_posix(),
+    )
     digest = hashlib.sha256()
     total_bytes = 0
     for path in paths:

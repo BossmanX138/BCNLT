@@ -18,7 +18,7 @@ os.environ["BCNLT_PARSER_CACHE"] = str(RUNTIME_ROOT / "grammars")
 
 PROTOCOL = "bosscrafts-raw-ast-witness-v1"
 PARSER_RUNTIME_IDENTITY_SHA256 = (
-    "98d8a4f36757491e6b96e533732180fdb2bddb693756289f0a21337bb4bfa80a"
+    "014a5bbc567fcce87e448a58b41b301ffce4bd91210adb009abdc3eb9ab30a2c"
 )
 MAX_SOURCE_BYTES = 200 * 1024
 MAX_QUERIES = 16_384

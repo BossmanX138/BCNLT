@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import sys
 import unittest
 from pathlib import Path
@@ -178,6 +179,22 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
     def test_unsupported_language_fails_closed(self):
         with self.assertRaisesRegex(ValueError, "unsupported BCNLT language"):
             self.pipeline.prepare_semantic("+", language="brainfuck", path="x.bf")
+
+    def test_pipeline_control_arguments_require_exact_types_and_finite_timeout(self):
+        for invalid_timeout in (True, False, math.nan, math.inf, "30"):
+            with self.subTest(timeout=invalid_timeout):
+                with self.assertRaises((TypeError, ValueError)):
+                    BCNLTSourcePipeline(
+                        self.binding,
+                        timeout_seconds=invalid_timeout,
+                    )
+
+        with self.assertRaises(TypeError):
+            self.pipeline.prepare_semantic(
+                "function {",
+                language="javascript",
+                allow_raw_fallback="yes",
+            )
 
     def test_sidecar_transport_captures_binary_output_before_decoding(self):
         completed = SimpleNamespace(

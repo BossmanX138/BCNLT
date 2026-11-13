@@ -24,13 +24,16 @@
     "language_pack_version": "1.22.1",
     "language_pack_binding_bytes": 5549568,
     "language_pack_binding_sha256": "18fda57fbe2f52f85cf09fd1fc5af6509bfe0a8c6d3d425cafe3d7b63f8dca6e",
+    "site_packages_file_count": 13,
+    "site_packages_bytes": 5864249,
+    "site_packages_aggregate_sha256": "2bd3e047b78621d289a443a50264c2413f740279f33f41176f3a46848d0c536c",
     "grammar_count": 14,
     "grammar_bytes": 34186752,
     "grammar_aggregate_sha256": "19fc42827e8ab3b37282c0666caa1ddd8abcd3708298fb1665c10df440c3d090",
     "sidecar_bytes": 9541,
     "sidecar_sha256": "c86f40828c0303adad2cbf05eb25b5c358ff88ffc1bb9ebcbd39d9de75b158cc",
     "python_source_identity_policy": "python-source-bytes-crlf-cr-to-lf-v1",
-    "parser_runtime_identity_sha256": "98d8a4f36757491e6b96e533732180fdb2bddb693756289f0a21337bb4bfa80a"
+    "parser_runtime_identity_sha256": "014a5bbc567fcce87e448a58b41b301ffce4bd91210adb009abdc3eb9ab30a2c"
   },
   "execution_policy": {
     "downloads": false,
