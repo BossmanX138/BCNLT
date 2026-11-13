@@ -3,11 +3,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from .bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
+from .bcnlt_source_pipeline import (
+    CURRENT_RUNTIME_SPEC_SHA256,
+    PARSER_RUNTIME_IDENTITY_SHA256,
+)
 from .current_corpus import MANIFEST_SCHEMA, RECORD_SCHEMA
 from .jsonl import split_jsonl_records
 from .tokenizer import NativeTokenizerBinding
@@ -64,27 +69,41 @@ class CurrentCorpusTaskPacker:
     def _load_admission(self, root: Path) -> tuple[dict[str, object], list[dict[str, object]]]:
         manifest_path = root / "manifest.json"
         records_path = root / "admitted.jsonl"
+        rejections_path = root / "rejected.jsonl"
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
             raise ValueError("admission manifest is invalid") from error
+        if type(manifest) is not dict:
+            raise ValueError("admission manifest is invalid")
         if manifest.get("schema_version") != MANIFEST_SCHEMA:
             raise ValueError("admission manifest schema mismatch")
-        claimed_manifest_hash = manifest.pop("manifest_sha256", None)
-        if claimed_manifest_hash != _sha256_text(_canonical_json(manifest)):
+        claimed_manifest_hash = manifest.get("manifest_sha256")
+        unsigned_manifest = {
+            key: value for key, value in manifest.items() if key != "manifest_sha256"
+        }
+        if claimed_manifest_hash != _sha256_text(_canonical_json(unsigned_manifest)):
             raise ValueError("admission manifest SHA-256 mismatch")
+        if (
+            manifest.get("records_file") != "admitted.jsonl"
+            or manifest.get("rejections_file") != "rejected.jsonl"
+        ):
+            raise ValueError("admission manifest file inventory mismatch")
         try:
-            records_size = records_path.stat().st_size
+            admission_size = records_path.stat().st_size + rejections_path.stat().st_size
         except OSError as error:
             raise ValueError("admission records cannot be read") from error
-        if records_size > MAX_PILOT_ADMISSION_BYTES:
+        if admission_size > MAX_PILOT_ADMISSION_BYTES:
             raise ValueError(
                 "non-resumable task packer exceeds its admission byte limit; "
                 "use ResumableCurrentTaskPacking for full corpora"
             )
         records_text = records_path.read_text(encoding="utf-8")
+        rejections_text = rejections_path.read_text(encoding="utf-8")
         if _sha256_text(records_text) != manifest.get("records_sha256"):
             raise ValueError("admission records SHA-256 mismatch")
+        if _sha256_text(rejections_text) != manifest.get("rejections_sha256"):
+            raise ValueError("admission rejections SHA-256 mismatch")
         if (
             manifest.get("binding_sha256") != self._binding.binding_sha256
             or manifest.get("tokenizer_sha256") != self._binding.tokenizer_sha256
@@ -93,7 +112,23 @@ class CurrentCorpusTaskPacker:
             != PARSER_RUNTIME_IDENTITY_SHA256
         ):
             raise ValueError("admission tokenizer lineage mismatch")
+        rejection_lines = split_jsonl_records(rejections_text)
+        if len(rejection_lines) != manifest.get("rejected_count"):
+            raise ValueError("admission rejection count mismatch")
+        for line in rejection_lines:
+            try:
+                rejection = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise ValueError("admission rejection JSON is invalid") from error
+            if (
+                type(rejection) is not dict
+                or rejection.get("schema_version")
+                != "bosscrafts-current-corpus-rejection-v1"
+            ):
+                raise ValueError("admission rejection schema mismatch")
         rows: list[dict[str, object]] = []
+        seen_document_ids: set[str] = set()
+        seen_source_hashes: set[str] = set()
         for line in split_jsonl_records(records_text):
             try:
                 row = json.loads(line)
@@ -108,6 +143,61 @@ class CurrentCorpusTaskPacker:
                 != PARSER_RUNTIME_IDENTITY_SHA256
             ):
                 raise ValueError("admission record tokenizer lineage mismatch")
+            document_id = row.get("document_id")
+            language = row.get("language")
+            source = row.get("source")
+            source_sha256 = row.get("source_sha256")
+            canonical_jsonl = row.get("canonical_jsonl")
+            canonical_sha256 = row.get("canonical_sha256")
+            if (
+                type(document_id) is not str
+                or not document_id
+                or type(language) is not str
+                or language not in CURRENT_RUNTIME_SPEC_SHA256
+                or type(source) is not str
+                or not source
+                or type(source_sha256) is not str
+                or type(canonical_jsonl) is not str
+                or type(canonical_sha256) is not str
+                or row.get("semantic_spec_sha256")
+                != CURRENT_RUNTIME_SPEC_SHA256[language]
+            ):
+                raise ValueError("admission record semantic lineage is invalid")
+            try:
+                observed_source_sha256 = hashlib.sha256(
+                    source.encode("utf-8")
+                ).hexdigest()
+            except UnicodeEncodeError as error:
+                raise ValueError("admission record source SHA-256 mismatch") from error
+            if observed_source_sha256 != source_sha256:
+                raise ValueError("admission record source SHA-256 mismatch")
+            if _sha256_text(canonical_jsonl) != canonical_sha256:
+                raise ValueError("admission record canonical SHA-256 mismatch")
+            if document_id in seen_document_ids or source_sha256 in seen_source_hashes:
+                raise ValueError("admission records contain duplicate source identity")
+            seen_document_ids.add(document_id)
+            seen_source_hashes.add(source_sha256)
+            raw_ids = row.get("raw_token_ids")
+            if (
+                type(raw_ids) is not list
+                or any(type(value) is not int for value in raw_ids)
+                or any(not 0 <= value < self._binding.vocab_size for value in raw_ids)
+                or raw_ids[:2]
+                != [self._id("stream:begin"), self._id("mode:raw_code")]
+                or raw_ids[-1:] != [self._id("stream:end")]
+            ):
+                raise ValueError("admission raw token stream is invalid")
+            fragments = self._semantic_record_fragments(row)
+            canonical_records = split_jsonl_records(canonical_jsonl)
+            if len(canonical_records) != len(fragments):
+                raise ValueError("admission canonical record count mismatch")
+            for canonical_line in canonical_records:
+                try:
+                    canonical_record = json.loads(canonical_line)
+                except json.JSONDecodeError as error:
+                    raise ValueError("admission canonical JSON is invalid") from error
+                if type(canonical_record) is not dict:
+                    raise ValueError("admission canonical JSON is invalid")
             rows.append(row)
             if len(rows) > MAX_PILOT_DOCUMENTS:
                 raise ValueError(
@@ -116,7 +206,7 @@ class CurrentCorpusTaskPacker:
                 )
         if len(rows) != manifest.get("admitted_count"):
             raise ValueError("admission record count mismatch")
-        return {**manifest, "manifest_sha256": claimed_manifest_hash}, rows
+        return dict(manifest), rows
 
     def _semantic_record_fragments(self, row: dict[str, object]) -> list[list[int]]:
         ids = row.get("semantic_token_ids")
@@ -338,6 +428,8 @@ class CurrentCorpusTaskPacker:
         output_path = Path(output_root).resolve()
         output_path.mkdir(parents=True, exist_ok=True)
         admission_manifest, rows = self._load_admission(admission_path)
+        if any(output_path.iterdir()):
+            raise ValueError("current task output already contains files")
         examples: list[dict[str, object]] = []
         rejections: list[dict[str, object]] = []
 
@@ -418,9 +510,13 @@ class CurrentCorpusTaskPacker:
         }
         manifest_sha256 = _sha256_text(_canonical_json(unsigned_manifest))
         manifest = {**unsigned_manifest, "manifest_sha256": manifest_sha256}
-        self._replace_text(output_path / "examples.jsonl", examples_text)
-        self._replace_text(output_path / "rejected.jsonl", rejections_text)
-        self._replace_text(output_path / "manifest.json", f"{_canonical_json(manifest)}\n")
+        self._publish_new_files(
+            (
+                (output_path / "examples.jsonl", examples_text),
+                (output_path / "rejected.jsonl", rejections_text),
+                (output_path / "manifest.json", f"{_canonical_json(manifest)}\n"),
+            )
+        )
         return CurrentTaskPackingResult(
             output_root=output_path,
             example_count=len(examples),
@@ -481,7 +577,44 @@ class CurrentCorpusTaskPacker:
         }
 
     @staticmethod
-    def _replace_text(path: Path, content: str) -> None:
-        temporary = path.with_name(f".{path.name}.tmp")
-        temporary.write_text(content, encoding="utf-8", newline="\n")
-        temporary.replace(path)
+    def _publish_new_files(files: tuple[tuple[Path, str], ...]) -> None:
+        staged: list[tuple[Path, Path]] = []
+        published: list[tuple[Path, Path]] = []
+        try:
+            for path, content in files:
+                temporary_handle = tempfile.NamedTemporaryFile(
+                    mode="w",
+                    encoding="utf-8",
+                    newline="\n",
+                    dir=path.parent,
+                    prefix=f".{path.name}.",
+                    suffix=".tmp",
+                    delete=False,
+                )
+                temporary = Path(temporary_handle.name)
+                try:
+                    temporary_handle.write(content)
+                    temporary_handle.flush()
+                    os.fsync(temporary_handle.fileno())
+                finally:
+                    temporary_handle.close()
+                staged.append((path, temporary))
+            for path, temporary in staged:
+                if path.exists():
+                    raise ValueError("current task output file already exists")
+                try:
+                    os.link(temporary, path)
+                except FileExistsError as error:
+                    raise ValueError(
+                        "current task output file already exists"
+                    ) from error
+                published.append((path, temporary))
+        except BaseException:
+            for path, temporary in reversed(published):
+                if path.exists() and path.samefile(temporary):
+                    path.unlink()
+            raise
+        finally:
+            for _, temporary in staged:
+                if temporary.exists():
+                    temporary.unlink()
