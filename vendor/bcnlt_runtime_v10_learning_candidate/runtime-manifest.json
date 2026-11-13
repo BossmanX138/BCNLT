@@ -1,0 +1,40 @@
+{
+  "schema_version": "bosscrafts-bcnlt-contained-runtime-v10-learning-candidate",
+  "parent_runtime": {
+    "candidate": "bosscrafts-bcnlt-contained-runtime-v6-candidate",
+    "parser_runtime_identity_sha256": "bfdaa8f9250f7dadb01ef3eaa4d5078a3c105f61147babfafb2e1992849a7a74",
+    "source_aggregate_sha256": "3f22cc7526e5f185170c71eeb5e240c44cd40f35d62c6d33bbe0dd9e9f6e4edd"
+  },
+  "source": {
+    "origin": "preserved verified V6 candidate plus persistent-learning transport, sandbox-attested scientific promotion, immutable Extended Core version control, and held-out uncertainty calibration",
+    "git_head": "27521f4bce5426712edc5ed92adca961dfa9ae28",
+    "working_tree_was_dirty": true,
+    "copy_policy": "preserved verified V6 runtime copy; added an explicit immutable-mode learning boundary without changing Common Core or tokenizer IDs",
+    "contained_patch": "The Tree-sitter engine accepts a read-only learned-memory policy; the sidecar has explicit ephemeral, observe and read-only modes; learned state remains per-language append-only Wildcard Memory and validated entries remain outside immutable Common Core in Extended Core; scientific promotion requires independent sandbox-attested executions with negative controls; Extended Core versions use immutable content-addressed artifacts, separate validation receipts, atomic activation, append-only activation events, and rollback; uncertainty calibration uses disjoint calibration and held-out identities, Brier and ECE gates, per-language coverage, and integrity-pinned promoted artifacts",
+    "file_count": 79,
+    "bytes": 705094,
+    "aggregate_sha256": "8f7f820ba20206a61ddc3509dd8c2a7564954bb3197de118fdc373a2fffc7c66"
+  },
+  "runtime": {
+    "python_requirement": "CPython 3.13.x Windows x86_64",
+    "tree_sitter_version": "0.26.0",
+    "tree_sitter_binding_bytes": 239616,
+    "tree_sitter_binding_sha256": "d8efa5533a1c79cc404df3a0ff03d76626ad50d54b74d97e4cf6e30ab85bebe4",
+    "language_pack_version": "1.22.1",
+    "language_pack_binding_bytes": 5549568,
+    "language_pack_binding_sha256": "18fda57fbe2f52f85cf09fd1fc5af6509bfe0a8c6d3d425cafe3d7b63f8dca6e",
+    "grammar_count": 14,
+    "grammar_bytes": 34186752,
+    "grammar_aggregate_sha256": "19fc42827e8ab3b37282c0666caa1ddd8abcd3708298fb1665c10df440c3d090",
+    "sidecar_bytes": 9541,
+    "sidecar_sha256": "c86f40828c0303adad2cbf05eb25b5c358ff88ffc1bb9ebcbd39d9de75b158cc"
+  },
+  "execution_policy": {
+    "downloads": false,
+    "source_execution": false,
+    "learning_memory": "ephemeral_by_default_explicit_observe_or_read_only_persistent",
+    "common_core_mutation": false,
+    "extended_core_storage": "versioned_external_append_only",
+    "raw_fallback": "explicit_opt_in_only"
+  }
+}

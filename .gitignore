@@ -1,0 +1,58 @@
+# Python caches and local test state
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.tmp-*/
+.venv*/
+venv/
+
+# Generated corpus, audit, evaluation, and model artifacts
+artifacts/
+*.sqlite
+*.sqlite-*
+*.db
+*.jsonl
+*.log
+*.tmp
+*.part
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.gguf
+*.onnx
+
+# Imported evidence and immutable upstream snapshots remain on disk, but are
+# represented in Git by the candidate lineage manifests rather than duplicated.
+imports/
+
+# Native/runtime payloads are reproducible dependencies, not source. Keep only
+# the V10 runtime's Python source, sidecar, and manifest reviewable in Git.
+vendor/*
+!vendor/bcnlt_runtime_v10_learning_candidate/
+vendor/bcnlt_runtime_v10_learning_candidate/*
+!vendor/bcnlt_runtime_v10_learning_candidate/source/
+!vendor/bcnlt_runtime_v10_learning_candidate/source/**
+!vendor/bcnlt_runtime_v10_learning_candidate/bcnlt_source_sidecar.py
+!vendor/bcnlt_runtime_v10_learning_candidate/runtime-manifest.json
+
+# Native and packaged dependency payloads
+*.dll
+*.pyd
+*.so
+*.dylib
+*.zip
+*.tar
+*.tar.gz
+*.7z
+
+# Editors and operating-system metadata
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Re-apply cache exclusions after the selectively unignored vendor source tree.
+**/__pycache__/
+**/*.py[cod]

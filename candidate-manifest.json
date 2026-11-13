@@ -1,0 +1,87 @@
+{
+  "schema_version": "bosscrafts-engineering-v9-model-candidate-manifest-v1",
+  "status": "post_runtime_validated_waiting_for_v8_training_not_promoted",
+  "created_at": "2026-11-12T10:12:00-05:00",
+  "lineage": {
+    "parent": "candidate-manifest.v8-parent.json",
+    "parent_sha256": "09b816c13b14c2f5ceab489e7c863866a8fe640583cddd31e7551b300be314e4",
+    "v8_candidate_modified_by_v9": false,
+    "training_runtime": "../.codex_staging_bosscrafts_model_v8_candidate",
+    "training_checkpoint": "../.codex_staging_bosscrafts_model_v8_candidate/artifacts/checkpoints/bosscrafts-engineering-v8/checkpoint.pt",
+    "training_database": "../.codex_staging_bosscrafts_model_v7_candidate/artifacts/corpora/bcnlt-v7-65536-deterministic-clean-v1/tasks.sqlite",
+    "training_database_identity_sha256": "f66255dbee97826a604819f8db2f71ec971c521a8d232887e02703fc9e626c52"
+  },
+  "tokenizer": {
+    "binding_sha256": "6bdcf5df4e5f16b79ee8de6eea9b86194c1e9909ef8e8545e28d5847ab031268",
+    "tokenizer_sha256": "e1930449f3efe99bbb3f63730f75f71788d4ff21928bcae4d3ee2a520d30d407",
+    "vocabulary_size": 65536,
+    "runtime_tree_sha256": "8debceae31cb21378fb540a16987905c81095cfc8c8fd1f10a67175820480d8e",
+    "runtime_provenance_sha256": "5ec01ac2e8884a06a3c77d274a968ad400dcf8db3ef26644ed06c68e2412f0ca",
+    "runtime_version": "0.23.2",
+    "vocabulary_changed_from_v8": false
+  },
+  "runtime_code": {
+    "checkpoint_state_compatible_with_v8": true,
+    "identity_sha256": "2394d962d00e464bbb8d6d3a64fbc69fc324e965150db9c05b711ebffed1327e",
+    "complete_inventory_file_count": 43,
+    "inventory_policy": "all bosscrafts_model top-level Python modules plus the seven frozen post-training executables",
+    "files": {
+      "bosscrafts_model/tokenizer.py": "6ba9e4f62a56e1dceeeac303caf1eb9d78bf13c39fd8c8a47d070541d2a0a39a",
+      "bosscrafts_model/config.py": "fbba766bffa4a8320142551964106bf58f7fb1e6e25db9289898605c18e3f252",
+      "bosscrafts_model/model.py": "00454ee8af988753cfe2b42d421e016c76f34efd837ec4e08a65e6abf0f53a2a",
+      "bosscrafts_model/trainer.py": "4686b0b14df21740285bed39647c561b348d5c72901b134c64e2839976654eae",
+      "bosscrafts_model/training_checkpoint.py": "7b6c138e0c97ed2341b0bf381c7c950bb995fa091ddc290684f83579c68abea6",
+      "bosscrafts_model/evaluation.py": "778faab6d59355817bdcd65005003fff15b0e590e9d1cfc9b2bd4787cdc58d8d",
+      "bosscrafts_model/inference_protocol.py": "013dd670e4499ce6551977b41e093001ad731fc297074ca0cdce4719577fbda2",
+      "bosscrafts_model/inference_bundle.py": "4c7d300a4fe5686ba6e71bb86bb20ae4285755acdb26d5bf5568e32233ac401a"
+    }
+  },
+  "repairs": {
+    "owned_runtime_namespace_isolation": "snapshot, clear, privately load and exactly restore the complete public tokenizers module namespace",
+    "runtime_provenance_integrity": "pin and verify the previously excluded PROVENANCE.json SHA-256",
+    "bundle_load_efficiency": "reuse verified tokenizer digest and batch structural atomicity checks",
+    "generation_kv_cache": "cache per-layer keys and values, preserve rotary offsets and project only the newest position",
+    "evaluation_target_projection": "project only causal positions that predict target tokens while preserving identical hidden-state computation"
+  },
+  "audit": {
+    "report": "docs/tokenizer-code-audit-v9.md",
+    "report_sha256": "702dfff9839522a8eee51a0e6b970474ec4722ee4889b7bfb30565b1252c0fcd",
+    "randomized_unicode_payload_roundtrips": 507,
+    "reserved_id_violations": 0,
+    "public_tokenizers_namespace_leaks_after_import": 0
+  },
+  "verification": {
+    "pre_optimization_complete_suite_tests_passed": 221,
+    "pre_optimization_complete_suite_subtests_passed": 120,
+    "pre_optimization_complete_suite_seconds": 77.89,
+    "post_optimization_focused_tests_passed": 40,
+    "post_optimization_complete_suite_tests_passed": 229,
+    "post_optimization_complete_suite_subtests_passed": 120,
+    "post_optimization_complete_suite_seconds": 77.85,
+    "ruff": "passed on every changed V9 Python file",
+    "mypy": "strict isolated checks passed for tokenizer and post-training controller",
+    "cached_generation_matches_uncached_reference": true,
+    "target_projection_matches_full_projection": true
+  },
+  "post_training_controller": {
+    "script": "scripts/run_v9_post_training_until_ready.py",
+    "script_sha256": "b947e497455f5bc6bcb6343c616d5d235f75447c2f4cf84ff6e25e21e08a37bc",
+    "contract_test_sha256": "47dc00327d1b8d6bcf2fd81076d674ad311ca24aaf9bc40399f15c351920ecea",
+    "runtime_verifier_sha256": "cfaf67560f67fd5d210d3b7f14b170979623c48558fd946288351ccacdd68f83",
+    "status": "waiting_for_v8_training",
+    "launcher_pid": 55288,
+    "full_validation_examples": 5376,
+    "full_test_examples": 5376,
+    "strict_generation_cases": 48,
+    "formal_model_acceptance_required": true,
+    "runtime_identity_reverified_after_wait": true,
+    "stdout_log": "artifacts/evaluations/v9-post-training/controller-v4.stdout.log",
+    "stderr_log": "artifacts/evaluations/v9-post-training/controller-v4.stderr.log"
+  },
+  "promotion_blockers": [
+    "V8 one-epoch full-model training is still running",
+    "full validation and test evaluation have not run on completed weights",
+    "strict held-out generation has not passed",
+    "an immutable inference bundle has not been exported and smoke tested"
+  ]
+}

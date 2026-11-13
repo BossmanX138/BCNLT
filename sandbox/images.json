@@ -1,0 +1,36 @@
+{
+  "schema": "bosscrafts-bcnlt-sandbox-images-v1",
+  "protocol": "bosscrafts-bcnlt-sandbox-v1",
+  "images": [
+    {
+      "name": "general",
+      "image_id": "sha256:153a93c2ca76aacacdbdb7d84d4e1e63767c46ddd7e42f9957e9fe7f7c782f32",
+      "repo_digest": "bosscrafts/bcnlt-sandbox-general@sha256:153a93c2ca76aacacdbdb7d84d4e1e63767c46ddd7e42f9957e9fe7f7c782f32",
+      "runner_sha256": "76cdd2dba32896c6c8219288a98f646ece919c56384ea47e75303dc3b38700ac",
+      "languages": [
+        "bash",
+        "c",
+        "c_sharp",
+        "cpp",
+        "go",
+        "java",
+        "javascript",
+        "kotlin",
+        "php",
+        "python",
+        "ruby",
+        "rust",
+        "typescript"
+      ]
+    },
+    {
+      "name": "swift",
+      "image_id": "sha256:7d9e1ed132050ad8f3e2aa0c6537f1609cf5b90532e273689c676d4fafec6262",
+      "repo_digest": "bosscrafts/bcnlt-sandbox-swift@sha256:7d9e1ed132050ad8f3e2aa0c6537f1609cf5b90532e273689c676d4fafec6262",
+      "runner_sha256": "76cdd2dba32896c6c8219288a98f646ece919c56384ea47e75303dc3b38700ac",
+      "languages": [
+        "swift"
+      ]
+    }
+  ]
+}

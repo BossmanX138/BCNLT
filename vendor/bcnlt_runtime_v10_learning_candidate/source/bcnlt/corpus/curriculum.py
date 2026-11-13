@@ -1,0 +1,202 @@
+from __future__ import annotations
+
+import ast
+import hashlib
+import json
+from dataclasses import dataclass
+from typing import Iterable, Sequence
+
+from bcnlt.canonical import canonical_record_bytes
+from bcnlt.core import ContextualUnit
+from bcnlt.semantic_record import SemanticTokenRecord
+
+from .database import SourceDocumentRecord
+
+
+MAX_CURRICULUM_PAIR_CHARACTERS = 16_000
+MAX_CONTINUATION_CONTEXT_RECORDS = 8
+
+
+@dataclass(frozen=True)
+class SemanticCodeWindow:
+    source: str
+    records: tuple[SemanticTokenRecord, ...]
+    provenance: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True)
+class CurriculumRecord:
+    record_id: str
+    family: str
+    template_id: str
+    source_document_ids: tuple[str, ...]
+    prompt_mode: str
+    target_mode: str
+    prompt: str
+    target: str
+    provenance: tuple[tuple[str, str], ...]
+    split: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "record_id": self.record_id,
+            "family": self.family,
+            "template_id": self.template_id,
+            "source_document_ids": list(self.source_document_ids),
+            "prompt_mode": self.prompt_mode,
+            "target_mode": self.target_mode,
+            "prompt": self.prompt,
+            "target": self.target,
+            "provenance": dict(self.provenance),
+            "split": self.split,
+        }
+
+
+def canonical_record_stream(records: Sequence[SemanticTokenRecord]) -> str:
+    return b"".join(canonical_record_bytes(record) for record in records).decode("utf-8")
+
+
+def pair_within_character_budget(*parts: str) -> bool:
+    return sum(len(part) for part in parts) <= MAX_CURRICULUM_PAIR_CHARACTERS
+
+
+def semantic_code_windows(
+    document: SourceDocumentRecord,
+    units: Sequence[ContextualUnit],
+    records: Sequence[SemanticTokenRecord],
+    *,
+    instruction: str,
+) -> tuple[SemanticCodeWindow, ...]:
+    """Return full-document or top-level parseable semantic/code pairs."""
+
+    semantic = canonical_record_stream(records)
+    if pair_within_character_budget(instruction, document.content, semantic):
+        return (SemanticCodeWindow(document.content, tuple(records)),)
+    try:
+        module = ast.parse(document.content, filename=document.relative_path)
+    except SyntaxError:
+        return ()
+    lines = document.content.splitlines(keepends=True)
+    windows: list[SemanticCodeWindow] = []
+    for node in module.body:
+        start = int(getattr(node, "lineno", 0) or 0)
+        decorators = tuple(getattr(node, "decorator_list", ()))
+        if decorators:
+            start = min(start, *(int(item.lineno) for item in decorators))
+        end = int(getattr(node, "end_lineno", 0) or 0)
+        if start <= 0 or end < start:
+            continue
+        source = "".join(lines[start - 1 : end])
+        try:
+            ast.parse(source)
+        except SyntaxError:
+            continue
+        window_records = tuple(
+            record
+            for unit, record in zip(units, records, strict=True)
+            if unit.span[0] >= start and unit.span[2] <= end
+        )
+        if not window_records:
+            continue
+        window_semantic = canonical_record_stream(window_records)
+        if not pair_within_character_budget(instruction, source, window_semantic):
+            continue
+        windows.append(
+            SemanticCodeWindow(
+                source=source,
+                records=window_records,
+                provenance=(
+                    ("source_line_start", str(start)),
+                    ("source_line_end", str(end)),
+                ),
+            )
+        )
+    return tuple(windows)
+
+
+def make_curriculum_record(
+    document: SourceDocumentRecord,
+    *,
+    family: str,
+    template_id: str,
+    prompt_mode: str,
+    target_mode: str,
+    prompt: str,
+    target: str,
+    split: str,
+    extra_provenance: dict[str, str] | None = None,
+) -> CurriculumRecord:
+    provenance = {
+        "source_provider": document.source_provider,
+        "source_name": document.source_name,
+        "source_revision": document.source_revision,
+        "canonical_language": document.canonical_language,
+        "repository_identity": document.repository_identity,
+        "relative_path": document.relative_path,
+        "content_sha256": document.content_sha256,
+        "license_spdx": document.license_spdx,
+        "ownership": document.ownership,
+        "attribution": document.attribution,
+        "upstream_url": document.upstream_url,
+    }
+    if extra_provenance:
+        provenance.update(extra_provenance)
+    normalized_prompt = _normalize(prompt)
+    normalized_target = _normalize(target)
+    body = {
+        "family": family,
+        "template_id": template_id,
+        "source_document_ids": [document.document_id],
+        "prompt_mode": prompt_mode,
+        "target_mode": target_mode,
+        "prompt": normalized_prompt,
+        "target": normalized_target,
+        "provenance": provenance,
+        "split": split,
+    }
+    record_id = hashlib.sha256(
+        json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    return CurriculumRecord(
+        record_id=record_id,
+        family=family,
+        template_id=template_id,
+        source_document_ids=(document.document_id,),
+        prompt_mode=prompt_mode,
+        target_mode=target_mode,
+        prompt=normalized_prompt,
+        target=normalized_target,
+        provenance=tuple(sorted(provenance.items())),
+        split=split,
+    )
+
+
+def generate_document_curriculum(
+    document: SourceDocumentRecord,
+    units: Sequence[ContextualUnit],
+    records: Sequence[SemanticTokenRecord],
+    *,
+    split: str = "unassigned",
+) -> Iterable[CurriculumRecord]:
+    from .tasks.code_to_semantic import generate as code_to_semantic
+    from .tasks.mixed_instruction import generate as mixed_instruction
+    from .tasks.semantic_continuation import generate as semantic_continuation
+    from .tasks.semantic_to_code import generate as semantic_to_code
+    from .tasks.structural_reasoning import generate as structural_reasoning
+
+    if len(units) != len(records):
+        raise ValueError("Contextual units and canonical records must have equal length")
+    for generator in (
+        semantic_continuation,
+        semantic_to_code,
+        code_to_semantic,
+        structural_reasoning,
+        mixed_instruction,
+    ):
+        yield from generator(document, units, records, split=split)
+
+
+def _normalize(value: str) -> str:
+    return value.replace("\r\n", "\n").replace("\r", "\n")

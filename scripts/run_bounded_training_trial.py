@@ -1,0 +1,447 @@
+"""Run at most 100 verified training steps and write an atomic resumable checkpoint."""
+from __future__ import annotations
+
+import argparse
+import hashlib
+from itertools import chain
+import json
+import math
+import os
+from pathlib import Path
+import sys
+import tempfile
+import time
+
+import torch
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from bosscrafts_model.config import ModelConfig  # noqa: E402
+from bosscrafts_model.model import EngineeringModel  # noqa: E402
+from bosscrafts_model.resumable_task_packing import (  # noqa: E402
+    ResumableTaskDataset,
+    audit_task_database,
+)
+from bosscrafts_model.tokenizer import (  # noqa: E402
+    EXPECTED_RUNTIME_VERSION,
+    NativeTokenizerBinding,
+    bound_native_65k_config,
+)
+from bosscrafts_model.trainer import run_training_steps  # noqa: E402
+from bosscrafts_model.training_schedule import cosine_learning_rate  # noqa: E402
+from bosscrafts_model.training_checkpoint import (  # noqa: E402
+    load_model_checkpoint_for_inference,
+    load_training_checkpoint,
+    save_training_checkpoint,
+)
+
+
+DEFAULT_DATABASE = (
+    PROJECT_ROOT
+    / "artifacts"
+    / "corpora"
+    / "bcnlt-v7-65536-deterministic-clean-v1"
+    / "tasks.sqlite"
+)
+DEFAULT_CHECKPOINT = (
+    PROJECT_ROOT
+    / "artifacts"
+    / "checkpoints"
+    / "bcnlt-v7-bounded-training-trial-v1"
+    / "checkpoint.pt"
+)
+
+
+def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
+    """Publish a complete UTF-8 JSON document without exposing partial writes."""
+    path = path.resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--database", type=Path, default=DEFAULT_DATABASE)
+    parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT)
+    parser.add_argument("--status-output", type=Path)
+    parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
+    parser.add_argument("--dtype", choices=("float32", "bfloat16"), default="float32")
+    parser.add_argument("--full-model", action="store_true")
+    parser.add_argument("--gradient-checkpointing", action="store_true")
+    parser.add_argument("--gradient-accumulation", type=int, default=1)
+    parser.add_argument("--learning-rate", type=float, default=0.0002)
+    parser.add_argument("--warmup-ratio", type=float, default=0.03)
+    parser.add_argument("--minimum-learning-rate-ratio", type=float, default=0.1)
+    parser.add_argument("--max-steps", type=int, required=True)
+    parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--initial-model-checkpoint", type=Path)
+    parser.add_argument("--initial-checkpoint-database", type=Path)
+    parser.add_argument("--initialization-checkpoint-sha256")
+    parser.add_argument("--initialization-database-identity-sha256")
+    arguments = parser.parse_args()
+    if not 1 <= arguments.max_steps <= 100:
+        parser.error("bounded trial max-steps must be between 1 and 100")
+    if arguments.gradient_accumulation < 1:
+        parser.error("gradient accumulation must be positive")
+    if not 1 <= arguments.epochs <= 100:
+        parser.error("epochs must be between 1 and 100")
+    if not math.isfinite(arguments.learning_rate) or arguments.learning_rate <= 0:
+        parser.error("learning rate must be finite and positive")
+    if not math.isfinite(arguments.warmup_ratio) or not 0 <= arguments.warmup_ratio < 1:
+        parser.error("warmup ratio must be in [0, 1)")
+    if (
+        not math.isfinite(arguments.minimum_learning_rate_ratio)
+        or not 0 < arguments.minimum_learning_rate_ratio <= 1
+    ):
+        parser.error("minimum learning-rate ratio must be in (0, 1]")
+    if arguments.device == "cuda" and not torch.cuda.is_available():
+        parser.error("CUDA was requested but is unavailable")
+    if arguments.dtype == "bfloat16" and arguments.device == "cuda" and not torch.cuda.is_bf16_supported():
+        parser.error("CUDA bfloat16 was requested but is unsupported")
+    if (arguments.initial_model_checkpoint is None) != (
+        arguments.initial_checkpoint_database is None
+    ):
+        parser.error(
+            "initial-model-checkpoint and initial-checkpoint-database must be supplied together"
+        )
+    if (arguments.initialization_checkpoint_sha256 is None) != (
+        arguments.initialization_database_identity_sha256 is None
+    ):
+        parser.error("both initialization SHA-256 identities must be supplied together")
+    for name, value in (
+        ("initialization-checkpoint-sha256", arguments.initialization_checkpoint_sha256),
+        (
+            "initialization-database-identity-sha256",
+            arguments.initialization_database_identity_sha256,
+        ),
+    ):
+        if value is not None and (
+            len(value) != 64
+            or any(character not in "0123456789abcdef" for character in value)
+        ):
+            parser.error(f"{name} must be a lowercase SHA-256 digest")
+    if (
+        arguments.initial_model_checkpoint is None
+        and arguments.initialization_checkpoint_sha256 is not None
+        and not arguments.resume
+    ):
+        parser.error("fingerprint-only initialization is allowed only when resuming")
+    if (
+        not arguments.resume
+        and arguments.checkpoint.exists()
+    ):
+        parser.error("checkpoint already exists; use --resume or a new destination")
+    if (
+        arguments.initial_model_checkpoint is not None
+        and arguments.initial_model_checkpoint.resolve() == arguments.checkpoint.resolve()
+    ):
+        parser.error("initial checkpoint and destination checkpoint must differ")
+
+    torch.manual_seed(7)
+    torch.set_num_threads(2)
+    device = torch.device(arguments.device)
+    dtype = torch.float32 if arguments.dtype == "float32" else torch.bfloat16
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(device)
+    binding = NativeTokenizerBinding.load()
+    task_audit = audit_task_database(binding, arguments.database)
+    dataset = ResumableTaskDataset(binding, arguments.database)
+    train_example_count = dataset.example_count(split="train")
+    if train_example_count < 1:
+        raise ValueError("training database contains no train examples")
+    optimizer_steps_per_epoch = math.ceil(
+        train_example_count / arguments.gradient_accumulation
+    )
+    planned_optimizer_steps = optimizer_steps_per_epoch * arguments.epochs
+    warmup_steps = min(
+        planned_optimizer_steps - 1,
+        int(planned_optimizer_steps * arguments.warmup_ratio),
+    )
+    if arguments.full_model:
+        config = bound_native_65k_config(binding)
+    else:
+        config = ModelConfig.tiny(
+            vocab_size=binding.vocab_size,
+            tokenizer_manifest=binding.binding_sha256,
+        )
+    config.check_manifest(binding.binding_sha256)
+    initialization: dict[str, object] = {"type": "random_seed_7"}
+    initial_task_audit = None
+    initial_checkpoint_path = None
+    if arguments.initial_model_checkpoint is not None:
+        initial_checkpoint_path = arguments.initial_model_checkpoint.resolve()
+        if not initial_checkpoint_path.is_file():
+            parser.error("initial model checkpoint does not exist")
+        assert arguments.initial_checkpoint_database is not None
+        initial_task_audit = audit_task_database(
+            binding, arguments.initial_checkpoint_database.resolve()
+        )
+        observed_checkpoint_sha256 = _sha256_file(initial_checkpoint_path)
+        if (
+            arguments.initialization_checkpoint_sha256 is not None
+            and arguments.initialization_checkpoint_sha256
+            != observed_checkpoint_sha256
+        ):
+            raise ValueError("initial checkpoint SHA-256 mismatch")
+        if (
+            arguments.initialization_database_identity_sha256 is not None
+            and arguments.initialization_database_identity_sha256
+            != initial_task_audit.database_identity_sha256
+        ):
+            raise ValueError("initial checkpoint database identity mismatch")
+        initialization = {
+            "type": "verified_completed_checkpoint",
+            "checkpoint_sha256": observed_checkpoint_sha256,
+            "task_database_identity_sha256": (
+                initial_task_audit.database_identity_sha256
+            ),
+        }
+    elif arguments.initialization_checkpoint_sha256 is not None:
+        initialization = {
+            "type": "verified_completed_checkpoint",
+            "checkpoint_sha256": arguments.initialization_checkpoint_sha256,
+            "task_database_identity_sha256": (
+                arguments.initialization_database_identity_sha256
+            ),
+        }
+    training_plan = {
+        "dtype": arguments.dtype,
+        "epochs": arguments.epochs,
+        "full_model": arguments.full_model,
+        "gradient_accumulation": arguments.gradient_accumulation,
+        "gradient_checkpointing": arguments.gradient_checkpointing,
+        "optimizer": {
+            "amsgrad": False,
+            "betas": [0.9, 0.999],
+            "eps": 1e-8,
+            "learning_rate": arguments.learning_rate,
+            "name": "AdamW",
+            "weight_decay": 0.01,
+        },
+        "schedule": {
+            "minimum_learning_rate_ratio": arguments.minimum_learning_rate_ratio,
+            "name": "linear_warmup_cosine_decay",
+            "planned_optimizer_steps": planned_optimizer_steps,
+            "warmup_ratio": arguments.warmup_ratio,
+            "warmup_steps": warmup_steps,
+        },
+        "schema_version": "bosscrafts-training-plan-v2",
+        "seed": 7,
+        "split": "train",
+        "initialization": initialization,
+    }
+    training_plan_sha256 = hashlib.sha256(
+        json.dumps(training_plan, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    model = EngineeringModel(config).to(device=device, dtype=dtype)
+    if arguments.gradient_checkpointing:
+        model.gradient_checkpointing_enable()
+    def scheduled_learning_rate(step_index: int) -> float:
+        return cosine_learning_rate(
+            step_index,
+            total_steps=planned_optimizer_steps,
+            peak_learning_rate=arguments.learning_rate,
+            warmup_steps=warmup_steps,
+            minimum_ratio=arguments.minimum_learning_rate_ratio,
+        )
+
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=scheduled_learning_rate(0),
+        betas=(0.9, 0.999),
+        eps=1e-8,
+        weight_decay=0.01,
+        amsgrad=False,
+    )
+
+    initial_steps = 0
+    initial_examples = 0
+    epoch_index = 0
+    cursor: str | None = None
+    last_example_id: str | None = None
+    if arguments.resume:
+        state = load_training_checkpoint(
+            arguments.checkpoint,
+            model,
+            optimizer,
+            expected_task_database_identity_sha256=task_audit.database_identity_sha256,
+            expected_binding_sha256=binding.binding_sha256,
+            expected_model_fingerprint=config.fingerprint(),
+            expected_target_epochs=arguments.epochs,
+            expected_training_plan_sha256=training_plan_sha256,
+        )
+        initial_steps = state.step
+        initial_examples = state.examples_seen
+        epoch_index = state.epoch_index
+        cursor = state.cursor_after_example_id
+        last_example_id = state.last_example_id
+    elif initial_checkpoint_path is not None:
+        assert initial_task_audit is not None
+        initial_state = load_model_checkpoint_for_inference(
+            initial_checkpoint_path,
+            model,
+            expected_task_database_identity_sha256=(
+                initial_task_audit.database_identity_sha256
+            ),
+            expected_binding_sha256=binding.binding_sha256,
+            expected_model_fingerprint=config.fingerprint(),
+        )
+        if not (
+            initial_state.epoch_index >= initial_state.target_epochs
+            and initial_state.cursor_after_example_id is None
+        ):
+            raise ValueError("initial model checkpoint training is incomplete")
+
+    remaining_steps = arguments.max_steps
+    invocation_steps = 0
+    invocation_examples = 0
+    invocation_sequence_tokens = 0
+    invocation_target_tokens = 0
+    invocation_weighted_loss = 0.0
+    gradients_finite = True
+    last_learning_rate = float(optimizer.param_groups[0]["lr"])
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+    training_started = time.perf_counter()
+    while remaining_steps and epoch_index < arguments.epochs:
+        examples = dataset.iter_examples(split="train", after_example_id=cursor)
+        first = next(examples, None)
+        if first is None:
+            epoch_index += 1
+            cursor = None
+            continue
+        requested_steps = remaining_steps
+        result = run_training_steps(
+            model,
+            optimizer,
+            chain((first,), examples),
+            device=device,
+            max_steps=requested_steps,
+            gradient_accumulation=arguments.gradient_accumulation,
+            step_offset=initial_steps + invocation_steps,
+            learning_rate_schedule=scheduled_learning_rate,
+        )
+        invocation_steps += result.optimizer_steps
+        invocation_examples += result.examples_seen
+        invocation_sequence_tokens += result.sequence_tokens_seen
+        invocation_target_tokens += result.target_tokens_seen
+        invocation_weighted_loss += result.mean_loss * result.examples_seen
+        gradients_finite = gradients_finite and result.gradients_finite
+        last_learning_rate = result.last_learning_rate
+        remaining_steps -= result.optimizer_steps
+        cursor = result.last_example_id
+        last_example_id = result.last_example_id
+        if result.optimizer_steps < requested_steps or next(examples, None) is None:
+            epoch_index += 1
+            cursor = None
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+    training_seconds = time.perf_counter() - training_started
+    if last_example_id is None:
+        raise ValueError("training database contains no train examples")
+    total_steps = initial_steps + invocation_steps
+    total_examples = initial_examples + invocation_examples
+    mean_loss = (
+        invocation_weighted_loss / invocation_examples
+        if invocation_examples
+        else 0.0
+    )
+    checkpoint_started = time.perf_counter()
+    save_training_checkpoint(
+        arguments.checkpoint,
+        model,
+        optimizer,
+        step=total_steps,
+        examples_seen=total_examples,
+        epoch_index=epoch_index,
+        target_epochs=arguments.epochs,
+        last_example_id=last_example_id,
+        cursor_after_example_id=cursor,
+        task_database_identity_sha256=task_audit.database_identity_sha256,
+        binding_sha256=binding.binding_sha256,
+        model_fingerprint=config.fingerprint(),
+        training_plan_sha256=training_plan_sha256,
+    )
+    checkpoint_write_seconds = time.perf_counter() - checkpoint_started
+    payload = {
+        "schema_version": "bosscrafts-training-progress-v1",
+        "binding_sha256": binding.binding_sha256,
+        "checkpoint": str(arguments.checkpoint.resolve()),
+        "checkpoint_size_bytes": arguments.checkpoint.stat().st_size,
+        "checkpoint_written": True,
+        "device": device.type,
+        "dtype": str(dtype).removeprefix("torch."),
+        "full_model": arguments.full_model,
+        "gradient_checkpointing": model.gradient_checkpointing,
+        "epoch_index": epoch_index,
+        "target_epochs": arguments.epochs,
+        "gradients_finite": gradients_finite,
+        "invocation_examples_seen": invocation_examples,
+        "invocation_optimizer_steps": invocation_steps,
+        "invocation_sequence_tokens_seen": invocation_sequence_tokens,
+        "invocation_target_tokens_seen": invocation_target_tokens,
+        "last_example_id": last_example_id,
+        "learning_rate": last_learning_rate,
+        "max_cuda_memory_bytes": (
+            int(torch.cuda.max_memory_allocated(device)) if device.type == "cuda" else 0
+        ),
+        "mean_loss": mean_loss,
+        "model_fingerprint": config.fingerprint(),
+        "planned_optimizer_steps": planned_optimizer_steps,
+        "optimizer_steps_remaining": max(0, planned_optimizer_steps - total_steps),
+        "optimizer_step_fraction": min(1.0, total_steps / planned_optimizer_steps),
+        "task_database_identity_sha256": task_audit.database_identity_sha256,
+        "training_seconds": training_seconds,
+        "sequence_tokens_per_second": (
+            invocation_sequence_tokens / training_seconds if training_seconds > 0 else 0.0
+        ),
+        "target_tokens_per_second": (
+            invocation_target_tokens / training_seconds if training_seconds > 0 else 0.0
+        ),
+        "checkpoint_write_seconds": checkpoint_write_seconds,
+        "tokenizer_sha256": binding.tokenizer_sha256,
+        "tokenizers_version": EXPECTED_RUNTIME_VERSION,
+        "training_plan_sha256": training_plan_sha256,
+        "initialization": initialization,
+        "total_examples_seen": total_examples,
+        "total_optimizer_steps": total_steps,
+        "training_complete": epoch_index >= arguments.epochs,
+    }
+    if arguments.status_output is not None:
+        _write_json_atomic(arguments.status_output, payload)
+    print(json.dumps(payload, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

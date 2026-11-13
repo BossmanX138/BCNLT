@@ -1,0 +1,165 @@
+{
+  "schema_version": "bosscrafts-engineering-v7-candidate-manifest-v1",
+  "status": "clean_cuda_validated_full_admission_running_not_promoted",
+  "created_at": "2026-11-12T09:14:50.7551579-05:00",
+  "preservation_policy": {
+    "v3_candidate_modified": false,
+    "v4_candidate_modified": false,
+    "v5_candidate_modified": false,
+    "v6_candidate_modified_by_v7": false,
+    "v6_parent_manifest": "candidate-manifest.v6-parent.json",
+    "v6_parent_manifest_sha256": "50d16daf3e002dae2f34903885cf6ea98fa8d00e1522f9200844a38303bfa078",
+    "v5_parent_manifest": "candidate-manifest.v5-parent.json",
+    "v5_parent_manifest_sha256": "e39a90f0f50aea877d98253aabf1cda5675eca2b1a095f268a09b24d911ac5b1",
+    "v7_change_scope": "owned tokenizers clean-import portability and isolated CUDA environment"
+  },
+  "tokenizer": {
+    "binding_sha256": "6bdcf5df4e5f16b79ee8de6eea9b86194c1e9909ef8e8545e28d5847ab031268",
+    "tokenizer_sha256": "e1930449f3efe99bbb3f63730f75f71788d4ff21928bcae4d3ee2a520d30d407",
+    "vocabulary_size": 65536,
+    "runtime_tree_sha256": "8debceae31cb21378fb540a16987905c81095cfc8c8fd1f10a67175820480d8e",
+    "runtime_version": "0.23.2",
+    "vocabulary_or_model_changed": false
+  },
+  "parser_runtime": {
+    "identity_sha256": "bfdaa8f9250f7dadb01ef3eaa4d5078a3c105f61147babfafb2e1992849a7a74",
+    "source_aggregate_sha256": "3f22cc7526e5f185170c71eeb5e240c44cd40f35d62c6d33bbe0dd9e9f6e4edd",
+    "runtime_manifest_file_sha256": "9c9dd5e560649f9a4c76ff24a6e13854bc627c14acfc867a2d2ca334623a1fb9",
+    "changed_from_v6": false
+  },
+  "v7_repair": {
+    "defect": "the private owned-tokenizers loader did not temporarily provide the public package name required by upstream absolute imports",
+    "impact": "clean direct library imports failed unless a standalone script had already prepended the vendor runtime",
+    "repair": "temporarily alias the verified owned module during wrapper execution and restore the caller's prior public-module state",
+    "tokenizer_module_sha256": "846fecabb18381785d3213fb5a7e73b94d9f60947b27027c6a3de983c138d9ac",
+    "regression_test_sha256": "45c82a106f28331beb28379ffede9e643e2f44532d2a3b892dba64828fb1ac6d",
+    "clean_import_test_passed": true,
+    "preexisting_module_restoration_test_passed": true
+  },
+  "clean_cuda_environment": {
+    "python": "3.11",
+    "torch": "2.11.0+cu130",
+    "cuda_runtime": "13.0",
+    "gpu": "NVIDIA GeForce RTX 3070",
+    "gpu_memory_mib": 8192,
+    "driver": "617.14",
+    "requirements": "environments/torch-cu130/requirements.lock.txt",
+    "requirements_sha256": "1c272669637ba0d81805b2d0cc8f887129e36833da11309cdee4a678d9556cf0",
+    "tls_policy": "Windows trust store; certificate verification retained",
+    "pip_check": "passed",
+    "cuda_smoke": {
+      "trained_steps": 1,
+      "loss": 11.099173545837402,
+      "loss_finite": true,
+      "gradients_finite": true,
+      "gradient_norm": 4.3250017166137695,
+      "parameter_changed": true,
+      "maximum_cuda_memory_bytes": 66895360,
+      "checkpoint_written": false
+    },
+    "production_architecture_smoke": {
+      "model_fingerprint": "383bc3acb9bea01ed9a40fb6293a5ac81ee7ffb27ffbc4fdcfeafd96358b3bca",
+      "parameter_count": 540094726,
+      "dtype": "bfloat16",
+      "optimizer": "AdamW",
+      "gradient_checkpointing": true,
+      "sequence_length": 2048,
+      "trained_steps": 1,
+      "loss": 11.3125,
+      "loss_finite": true,
+      "gradients_finite": true,
+      "gradient_norm": 79.6894302368164,
+      "parameter_changed": true,
+      "maximum_cuda_memory_bytes": 5703012352,
+      "checkpoint_written": false,
+      "fits_eight_gib_gpu": true
+    }
+  },
+  "verification": {
+    "complete_suite_tests_passed": 214,
+    "complete_suite_subtests_passed": 116,
+    "complete_suite_seconds": 102.55,
+    "targeted_training_tests_passed": 18,
+    "targeted_training_subtests_passed": 2,
+    "tokenizer_runtime_integrity_tests_passed": 5,
+    "openmp_abort_observed": false,
+    "resumable_smoke": {
+      "database": "artifacts/corpora/bcnlt-v7-65536-full-resumable-smoke-v1/admission.sqlite",
+      "database_bytes": 204800,
+      "database_sha256": "8d1f1c96306fd36ece5e1e563aed6b522985c16b10ac083b64a09195592a4687",
+      "processed": 20,
+      "admitted": 20,
+      "rejected": 0,
+      "semantic_token_count": 409627,
+      "raw_token_count": 8449,
+      "integrity_check": "ok",
+      "quick_check": "ok",
+      "rows_identical_to_v6_smoke": true,
+      "metadata_host_code_identity_sha256": "5737ddb2c961478e0bab1d3fdcf141bf94d619159f65e7ae960902a136e13c62"
+    }
+  },
+  "downstream_pipeline": {
+    "oversampled_compact_curriculum_database": "artifacts/corpora/bcnlt-v7-65536-balanced-oversampled-compact-v2-v1/tasks.sqlite",
+    "deterministic_curriculum_database": "artifacts/corpora/bcnlt-v7-65536-deterministic-clean-v1/tasks.sqlite",
+    "determinism_audit": "artifacts/evaluations/task-prompt-determinism-v7.json",
+    "bounded_training_checkpoint": "artifacts/checkpoints/bcnlt-v7-bounded-training-trial-v1/checkpoint.pt",
+    "materialization_policy": "build an exact two-times oversampled language-family-split curriculum directly from admission, then remove conflicting, cross-split and duplicate prompts before selecting the final exact quotas",
+    "oversampled_quotas_per_language_family": {
+      "train": 4096,
+      "validation": 256,
+      "test": 256
+    },
+    "final_quotas_per_language_family": {
+      "train": 2048,
+      "validation": 128,
+      "test": 128
+    },
+    "script_sha256": {
+      "scripts/pack_full_resumable_tasks.py": "17fe11ef16ef620cbee06923f0213aa47a535022512b0f83e737e6b42c16bd4d",
+      "scripts/build_balanced_curriculum.py": "e0d65d4511f558c3d4192af1bbde239f237b08d3edc1833766d268e79a018a05",
+      "scripts/derive_deterministic_curriculum.py": "ece75baaa8c2e3e7354294e7ca6382ea0eac2452d12eca500e693060ac9cc6c6",
+      "scripts/analyze_task_prompt_determinism.py": "fbb66fa66bb66119c13fb1e32fda15908c949c06ebb50a4f9cfe41ec6362486c",
+      "scripts/run_bounded_training_trial.py": "8c7f5f2520a8e18f13e10202b6cacd517f01339369305b6b127b7f8dff0c577e",
+      "scripts/run_v7_data_pipeline_until_ready.py": "223ed2f6a240e5258ba31e69f08cc5470230c6a0926b9fbc110fe90eaf61c965",
+      "bosscrafts_model/balanced_curriculum.py": "0d292ff6c29d43dc793730b0a168a74543b009f36f947850e12a77a8830a3828"
+    },
+    "controller": {
+      "status": "running",
+      "launcher_pid": 48260,
+      "status_artifact": "artifacts/pipelines/bcnlt-v7-data-v1/status.json",
+      "stdout_log": "artifacts/pipelines/bcnlt-v7-data-v1/pipeline.stdout.log",
+      "stderr_log": "artifacts/pipelines/bcnlt-v7-data-v1/pipeline.stderr.log"
+    },
+    "ruff": "passed",
+    "current_full_suite": "214 tests and 116 subtests passed"
+  },
+  "full_admission": {
+    "schema_version": "bosscrafts-current-corpus-resumable-v4",
+    "database": "artifacts/corpora/bcnlt-v7-65536-full-resumable-v1/admission.sqlite",
+    "source_catalog_sha256": "286d92f79f84b75049b845be0270e4308f32056421c8dea92d82d41b4e4003e2",
+    "review_manifest_sha256": "ba297e82d707039542804edadfbddaccd473cd359d3482ff35025f9877351149",
+    "host_code_identity_sha256": "5737ddb2c961478e0bab1d3fdcf141bf94d619159f65e7ae960902a136e13c62",
+    "host_code_files": {
+      "scripts/run_full_resumable_admission.py": "e32f5265146e05ac2958dcf449e5fad5d02a7144f1830ed0b1de0890ae6cc320",
+      "bosscrafts_model/resumable_current_corpus.py": "5e7acd5748dda7e04cb3e3b3529eae63a1afe3d0824a92004cfaf5fe6d5dd4d2",
+      "bosscrafts_model/current_corpus.py": "536b44eb59c47cbf4d3c5cacddc315cfc0f17e854ad84a9299c2704aca8e3249",
+      "bosscrafts_model/bcnlt_source_pipeline.py": "99cac469d29679868b4747cf7a50f8d1145be139d6bed48a350de496298e65d3",
+      "bosscrafts_model/tokenizer.py": "846fecabb18381785d3213fb5a7e73b94d9f60947b27027c6a3de983c138d9ac",
+      "bosscrafts_model/bcnlt_adapter.py": "b428bc471220f14f3bc5231b4089d7e7872a6d1b5817970132ad12846a5a4b7c",
+      "bosscrafts_model/semantic.py": "e789569c8707ab2d2a5f205d922834a3c8d8f880d2cd2998960b062a0543a1ef"
+    },
+    "status": "running",
+    "started_at": "2026-11-12T09:17:37.2351457-05:00",
+    "launcher_pid": 6424,
+    "python_environment": "isolated Python 3.11 torch-cu130 environment",
+    "stdout_log": "artifacts/corpora/bcnlt-v7-65536-full-resumable-v1/admission.stdout.log",
+    "stderr_log": "artifacts/corpora/bcnlt-v7-65536-full-resumable-v1/admission.stderr.log"
+  },
+  "promotion_blockers": [
+    "full V7 admission has not completed",
+    "compact V2 oversampled and deterministic curricula have not been built",
+    "full model training and frozen evaluation gates are incomplete",
+    "held-out parser review does not prove complete language syntax coverage",
+    "the V7 loader's saved-module sentinel has one static typing error; runtime and import-order tests pass, and the type-only cleanup is deferred to a separate post-admission copy"
+  ]
+}

@@ -1,0 +1,99 @@
+{
+  "schema_version": "bosscrafts-engineering-v8-model-candidate-manifest-v1",
+  "status": "runtime_validated_waiting_for_v7_curriculum_not_trained_not_promoted",
+  "created_at": "2026-11-12T09:46:00.3178729-05:00",
+  "lineage": {
+    "parent": "candidate-manifest.v7-parent.json",
+    "parent_sha256": "f2ba3a41182cd81cbaeb869eb705f7aa8556ee78776aa139bf9f9a3e0ad2959c",
+    "v7_candidate_modified_by_v8": false,
+    "data_builder_candidate": "../.codex_staging_bosscrafts_model_v7_candidate",
+    "data_builder_host_code_identity_sha256": "5737ddb2c961478e0bab1d3fdcf141bf94d619159f65e7ae960902a136e13c62",
+    "data_pipeline_status": "../.codex_staging_bosscrafts_model_v7_candidate/artifacts/pipelines/bcnlt-v7-data-v1/status.json"
+  },
+  "tokenizer": {
+    "binding_sha256": "6bdcf5df4e5f16b79ee8de6eea9b86194c1e9909ef8e8545e28d5847ab031268",
+    "tokenizer_sha256": "e1930449f3efe99bbb3f63730f75f71788d4ff21928bcae4d3ee2a520d30d407",
+    "vocabulary_size": 65536,
+    "runtime_tree_sha256": "8debceae31cb21378fb540a16987905c81095cfc8c8fd1f10a67175820480d8e",
+    "runtime_version": "0.23.2",
+    "vocabulary_changed_from_v7": false
+  },
+  "parser_runtime": {
+    "identity_sha256": "bfdaa8f9250f7dadb01ef3eaa4d5078a3c105f61147babfafb2e1992849a7a74",
+    "source_aggregate_sha256": "3f22cc7526e5f185170c71eeb5e240c44cd40f35d62c6d33bbe0dd9e9f6e4edd",
+    "changed_from_v7": false
+  },
+  "runtime_code": {
+    "identity_sha256": "c9ac4e1bb3d47e827325560970f333d512467fd4da1c71807ed20d58a320d955",
+    "files": {
+      "bosscrafts_model/tokenizer.py": "009cd597fc385578843590c84081a20c2ee8b2abf8e620b33be36f1963c1ac9c",
+      "bosscrafts_model/config.py": "fbba766bffa4a8320142551964106bf58f7fb1e6e25db9289898605c18e3f252",
+      "bosscrafts_model/model.py": "8910d1c5fafefc343f9dcc0c5535b7b8e31cb8dd2e5b33ab78cec2e247b0f51b",
+      "bosscrafts_model/trainer.py": "4686b0b14df21740285bed39647c561b348d5c72901b134c64e2839976654eae",
+      "bosscrafts_model/training_checkpoint.py": "7b6c138e0c97ed2341b0bf381c7c950bb995fa091ddc290684f83579c68abea6",
+      "bosscrafts_model/evaluation.py": "731cc94598e1e87de50427f138364b864c8436d6acde91e35a207ab4f42e9403",
+      "bosscrafts_model/inference_protocol.py": "013dd670e4499ce6551977b41e093001ad731fc297074ca0cdce4719577fbda2",
+      "bosscrafts_model/inference_bundle.py": "4c7d300a4fe5686ba6e71bb86bb20ae4285755acdb26d5bf5568e32233ac401a"
+    }
+  },
+  "repairs": {
+    "owned_runtime_saved_module_typing": "preserve absent, ModuleType, and None-sentinel public tokenizers states with explicit narrowing",
+    "training_sampling_weight_boundary": "narrow and validate exact integer or float weights once before use",
+    "evaluation_sampling_weight_boundary": "narrow and validate exact integer or float weights once before use",
+    "checkpoint_payload_boundary": "validate model, optimizer, CPU RNG, and CUDA RNG payload structures before state mutation",
+    "inference_bundle_size_boundary": "retain the stat-derived integer rather than re-reading an untyped manifest value"
+  },
+  "verification": {
+    "complete_suite_tests_passed": 219,
+    "complete_suite_subtests_passed": 120,
+    "complete_suite_seconds": 111.01,
+    "ruff": "passed on all changed V8 files",
+    "mypy": "passed on 20 tokenizer, parser, corpus, training, evaluation, inference and controller source files",
+    "tokenizer_import_order_tests_passed": 6,
+    "malformed_checkpoint_cases_rejected": 4,
+    "production_architecture_smoke": {
+      "model_fingerprint": "383bc3acb9bea01ed9a40fb6293a5ac81ee7ffb27ffbc4fdcfeafd96358b3bca",
+      "parameter_count": 540094726,
+      "dtype": "bfloat16",
+      "optimizer": "AdamW",
+      "sequence_length": 2048,
+      "gradient_checkpointing": true,
+      "trained_steps": 1,
+      "loss": 11.3125,
+      "loss_finite": true,
+      "gradients_finite": true,
+      "gradient_norm": 79.68990325927734,
+      "parameter_changed": true,
+      "maximum_cuda_memory_bytes": 5703012352,
+      "fits_eight_gib_gpu": true,
+      "checkpoint_written": false
+    }
+  },
+  "required_training_input": {
+    "database": "../.codex_staging_bosscrafts_model_v7_candidate/artifacts/corpora/bcnlt-v7-65536-deterministic-clean-v1/tasks.sqlite",
+    "determinism_audit": "../.codex_staging_bosscrafts_model_v7_candidate/artifacts/evaluations/task-prompt-determinism-v7.json",
+    "expected_example_count": 96768,
+    "expected_prompt_targets_deterministic": true,
+    "expected_heldout_prompt_isolation": true,
+    "status": "not_yet_built"
+  },
+  "training_controller": {
+    "script": "scripts/run_v8_training_until_complete.py",
+    "script_sha256": "5d4dabe6737b553d542f01e8b5b7c671a1d783546f1f7c8666d2d7a070f3883f",
+    "contract_test_sha256": "70c5a95855dcd6e7f7a14d63aaa7f990cc6b42899941f89747da20207d35d35d",
+    "status": "waiting_for_v7_data_pipeline",
+    "launcher_pid": 72648,
+    "planned_optimizer_steps": 10752,
+    "gradient_accumulation": 8,
+    "maximum_steps_per_atomic_checkpoint": 100,
+    "stdout_log": "artifacts/checkpoints/bosscrafts-engineering-v8/controller.stdout.log",
+    "stderr_log": "artifacts/checkpoints/bosscrafts-engineering-v8/controller.stderr.log"
+  },
+  "promotion_blockers": [
+    "V7 full admission and deterministic curriculum pipeline have not completed",
+    "V8 full model training has not run",
+    "validation and test evaluation gates have not run on trained weights",
+    "an immutable inference bundle has not been exported and smoke tested",
+    "held-out parser review does not prove complete language syntax coverage"
+  ]
+}
