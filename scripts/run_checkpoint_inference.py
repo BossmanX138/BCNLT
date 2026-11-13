@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 import torch
@@ -55,6 +57,34 @@ DEFAULT_CHECKPOINT = (
     / "bounded-training-trial-v1"
     / "checkpoint.pt"
 )
+
+
+def _publish_new_inference(path: Path, rendered: str) -> None:
+    """Publish immutable inference evidence without replacing an earlier run."""
+    destination = path.resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(rendered + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, destination)
+        except FileExistsError as error:
+            raise ValueError("inference output already exists") from error
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
 
 
 def main() -> int:
@@ -207,11 +237,7 @@ def main() -> int:
     }
     rendered = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     if arguments.output is not None:
-        destination = arguments.output.resolve()
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        temporary = destination.with_name(f".{destination.name}.tmp")
-        temporary.write_text(rendered + "\n", encoding="utf-8")
-        temporary.replace(destination)
+        _publish_new_inference(arguments.output, rendered)
     print(rendered)
     return 0
 

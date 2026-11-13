@@ -405,23 +405,24 @@ class TrainerTests(unittest.TestCase):
             self.assertAlmostEqual(completed_payload["learning_rate"], 0.00002)
             self.assertEqual(json.loads(status_output.read_text()), completed_payload)
 
+            inference_command = [
+                sys.executable,
+                str(project_root / "scripts" / "run_checkpoint_inference.py"),
+                "--database",
+                str(database),
+                "--checkpoint",
+                str(checkpoint),
+                "--device",
+                "cpu",
+                "--prompt",
+                "x = 1",
+                "--max-new-tokens",
+                "2",
+                "--output",
+                str(inference_output),
+            ]
             inference = subprocess.run(
-                [
-                    sys.executable,
-                    str(project_root / "scripts" / "run_checkpoint_inference.py"),
-                    "--database",
-                    str(database),
-                    "--checkpoint",
-                    str(checkpoint),
-                    "--device",
-                    "cpu",
-                    "--prompt",
-                    "x = 1",
-                    "--max-new-tokens",
-                    "2",
-                    "--output",
-                    str(inference_output),
-                ],
+                inference_command,
                 cwd=project_root,
                 text=True,
                 encoding="utf-8",
@@ -435,6 +436,18 @@ class TrainerTests(unittest.TestCase):
             self.assertTrue(inference_payload["checkpoint_lineage_verified"])
             self.assertTrue(inference_payload["checkpoint_training_complete"])
             self.assertEqual(json.loads(inference_output.read_text()), inference_payload)
+            original_inference = inference_output.read_bytes()
+            repeated_inference = subprocess.run(
+                inference_command,
+                cwd=project_root,
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(repeated_inference.returncode, 0)
+            self.assertIn("already exists", repeated_inference.stderr)
+            self.assertEqual(inference_output.read_bytes(), original_inference)
 
             heldout_inference = subprocess.run(
                 [
