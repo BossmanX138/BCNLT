@@ -12,7 +12,6 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Protocol
 
-
 PILOT_SCHEMA = "bosscrafts-project-codenet-pilot-v1"
 DATASET_LICENSE = "CDLA-Permissive-2.0"
 _HEX64 = re.compile(r"[0-9a-f]{64}")

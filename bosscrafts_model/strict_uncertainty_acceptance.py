@@ -1,13 +1,12 @@
 """BossCrafts-level selective-risk gate for contained BCNLT calibration."""
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
 import hashlib
 import json
 import math
 import re
+from dataclasses import asdict, dataclass, replace
 from typing import Any
-
 
 _SCHEMA_VERSION = "bosscrafts-strict-uncertainty-acceptance-v1"
 

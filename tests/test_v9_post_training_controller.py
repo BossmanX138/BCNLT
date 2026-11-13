@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
 import unittest
+from pathlib import Path
 
 from scripts.run_v9_post_training_until_ready import (
     EXPECTED_DATABASE_IDENTITY,
@@ -10,8 +10,8 @@ from scripts.run_v9_post_training_until_ready import (
     EXPECTED_SPLIT_COUNT,
     _evaluation_command,
     _inference_command,
-    _verify_runtime_identity,
     _verify_evaluation,
+    _verify_runtime_identity,
 )
 
 

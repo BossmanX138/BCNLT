@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
-
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -15,7 +14,6 @@ from bosscrafts_model.bcnlt_source_pipeline import BCNLTSourcePipeline
 from bosscrafts_model.current_corpus import CurrentCorpusAdmission, SQLiteSourceCatalog
 from bosscrafts_model.heldout_source_admission import select_heldout_candidates
 from bosscrafts_model.tokenizer import NativeTokenizerBinding
-
 
 DEFAULT_DATABASE = PROJECT_ROOT / "artifacts" / "source-catalogs" / "legacy-current-source-v1" / "corpus.sqlite"
 DEFAULT_OUTPUT = PROJECT_ROOT / "artifacts" / "corpora" / "bcnlt-v6-65536-heldout-admission-v2"

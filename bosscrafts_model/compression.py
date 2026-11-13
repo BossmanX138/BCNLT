@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import zlib
 
-
 MAX_DECOMPRESSED_ARTIFACT_BYTES = 64 * 1024 * 1024
 
 

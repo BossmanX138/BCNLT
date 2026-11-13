@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from collections import Counter
 import hashlib
-from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
 import zlib
+from collections import Counter
+from pathlib import Path
 
 from bosscrafts_model.bcnlt_source_pipeline import (
     PARSER_RUNTIME_IDENTITY_SHA256,

@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 from bosscrafts_model import bcnlt_source_pipeline as source_pipeline
 from bosscrafts_model import raw_ast_witness_sidecar
 from bosscrafts_model.tokenizer import NativeTokenizerBinding
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_ROOT = PROJECT_ROOT / "vendor" / "bcnlt_runtime_v10_learning_candidate"

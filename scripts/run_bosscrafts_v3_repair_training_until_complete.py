@@ -3,10 +3,9 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import subprocess
 import sys
-
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -18,7 +17,6 @@ from scripts.run_bosscrafts_v3_repair_training_chunk import (
     PLANNED_OPTIMIZER_STEPS,
     expected_training_plan_sha256,
 )
-
 
 CHECKPOINT_DIR = (
     PROJECT_ROOT / "artifacts" / "checkpoints" / "bosscrafts-engineering-v3-repair"

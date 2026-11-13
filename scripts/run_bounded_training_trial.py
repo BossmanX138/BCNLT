@@ -3,17 +3,16 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-from itertools import chain
 import json
 import math
 import os
-from pathlib import Path
 import sys
 import tempfile
 import time
+from itertools import chain
+from pathlib import Path
 
 import torch
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -31,13 +30,12 @@ from bosscrafts_model.tokenizer import (  # noqa: E402
     bound_native_65k_config,
 )
 from bosscrafts_model.trainer import run_training_steps  # noqa: E402
-from bosscrafts_model.training_schedule import cosine_learning_rate  # noqa: E402
 from bosscrafts_model.training_checkpoint import (  # noqa: E402
     load_model_checkpoint_for_inference,
     load_training_checkpoint,
     save_training_checkpoint,
 )
-
+from bosscrafts_model.training_schedule import cosine_learning_rate  # noqa: E402
 
 DEFAULT_DATABASE = (
     PROJECT_ROOT

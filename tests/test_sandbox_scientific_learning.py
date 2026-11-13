@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from pathlib import Path
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from runtime_import import select_bcnlt_runtime
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_SOURCE = (
@@ -18,6 +17,7 @@ RUNTIME_SOURCE = (
 )
 select_bcnlt_runtime(RUNTIME_SOURCE)
 
+from bcnlt.core import ContextualUnit
 from bcnlt.scientific_learning import (
     CodingExperimentFixture,
     HypothesisProjection,
@@ -25,8 +25,8 @@ from bcnlt.scientific_learning import (
     ScientificExperimentEvidence,
     VerificationStatus,
 )
-from bcnlt.core import ContextualUnit
 from bcnlt.wildcard import DefinitionState, ProvisionalMeaning, WildcardMemory
+
 from bosscrafts_model.scientific_sandbox import DockerScientificSandbox
 
 

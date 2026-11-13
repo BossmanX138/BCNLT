@@ -2,12 +2,11 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter, defaultdict
 import json
-from pathlib import Path
 import sqlite3
 import sys
-
+from collections import Counter, defaultdict
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -24,13 +23,12 @@ import tokenizers
 if tokenizers.__version__ != "0.23.2":
     raise RuntimeError("project-contained tokenizers runtime version mismatch")
 
+from bosscrafts_model.compression import decompress_bounded
 from bosscrafts_model.resumable_task_packing import (
     _decode_u16,
     audit_task_database,
 )
-from bosscrafts_model.compression import decompress_bounded
 from bosscrafts_model.tokenizer import NativeTokenizerBinding
-
 
 DEFAULT_DATABASE = (
     PROJECT_ROOT

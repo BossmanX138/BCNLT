@@ -4,16 +4,15 @@ import hashlib
 import importlib
 import importlib.util
 import json
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from runtime_import import select_bcnlt_runtime
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 select_bcnlt_runtime(
@@ -21,6 +20,7 @@ select_bcnlt_runtime(
 )
 
 from bcnlt.uncertainty_calibration import CalibrationThresholds
+
 from bosscrafts_model.strict_uncertainty_acceptance import StrictUncertaintyPolicy
 
 

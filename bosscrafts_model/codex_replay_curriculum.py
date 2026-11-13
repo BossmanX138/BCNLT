@@ -1,12 +1,12 @@
 """Build a provenance-preserving CodeX plus BCNLT replay curriculum."""
 from __future__ import annotations
 
-from dataclasses import asdict
 import hashlib
 import json
 import math
-from pathlib import Path
 import sqlite3
+from dataclasses import asdict
+from pathlib import Path
 from typing import TypedDict
 
 from .bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
@@ -22,7 +22,6 @@ from .resumable_task_packing import (
     salted_source_example_id,
 )
 from .tokenizer import NativeTokenizerBinding
-
 
 CURRICULUM_SCHEMA = "bosscrafts-codex-bcnlt-replay-curriculum-v1"
 ORDER_AUDIT_SCHEMA = "bosscrafts-codex-bcnlt-order-audit-v1"

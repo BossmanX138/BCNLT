@@ -1,19 +1,18 @@
 """Freeze the zero-finding subset of a completed full training semantic audit."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
 import os
-from pathlib import Path
 import sqlite3
 import tempfile
+from dataclasses import dataclass
+from pathlib import Path
 
 from .resumable_training_semantic_audit import (
     AUDIT_SCHEMA,
     ResumableTrainingSemanticAudit,
 )
-
 
 ELIGIBILITY_MANIFEST_SCHEMA = "bosscrafts-training-eligibility-manifest-v1"
 ELIGIBLE_DOCUMENT_SCHEMA = "bosscrafts-training-eligible-document-v1"

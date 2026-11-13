@@ -1,15 +1,15 @@
 """Build a tiny current-lineage SQLite database for full-model hardware gates."""
 from __future__ import annotations
 
-from array import array
-from dataclasses import dataclass
 import hashlib
 import json
-from pathlib import Path
 import sqlite3
 import sys
-from typing import TypedDict, cast
 import zlib
+from array import array
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TypedDict, cast
 
 from .bcnlt_source_pipeline import (
     CURRENT_RUNTIME_SPEC_SHA256,

@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
-
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -13,7 +12,6 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from bosscrafts_model.task_determinism import audit_task_prompt_determinism  # noqa: E402
 from bosscrafts_model.tokenizer import NativeTokenizerBinding  # noqa: E402
-
 
 DEFAULT_DATABASE = (
     PROJECT_ROOT

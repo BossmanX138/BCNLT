@@ -1,10 +1,10 @@
 """Freeze a committed resumable task prefix into an immutable candidate pool."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
-from pathlib import Path
 import sqlite3
+from dataclasses import dataclass
+from pathlib import Path
 
 from .resumable_task_packing import (
     TASK_DATABASE_SCHEMA,
@@ -12,7 +12,6 @@ from .resumable_task_packing import (
     audit_task_database,
 )
 from .tokenizer import NativeTokenizerBinding
-
 
 CANDIDATE_SNAPSHOT_SCHEMA = "bosscrafts-task-candidate-snapshot-v1"
 

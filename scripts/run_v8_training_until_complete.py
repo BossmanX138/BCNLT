@@ -6,13 +6,12 @@ import hashlib
 import json
 import math
 import os
-from pathlib import Path
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
-
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -27,7 +26,6 @@ from bosscrafts_model.tokenizer import (  # noqa: E402
     NativeTokenizerBinding,
     bound_native_65k_config,
 )
-
 
 V7_ROOT = PROJECT_ROOT.parent / ".codex_staging_bosscrafts_model_v7_candidate"
 V7_PIPELINE_STATUS = (

@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor
 import json
-from pathlib import Path
 import statistics
 import sys
 import time
-
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PINNED_TOKENIZERS_SITE = PROJECT_ROOT / "vendor" / "tokenizers_runtime_0_23"

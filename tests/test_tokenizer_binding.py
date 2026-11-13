@@ -1,10 +1,10 @@
 import io
 import json
-from dataclasses import replace
-from pathlib import Path
 import shutil
 import tempfile
 import unittest
+from dataclasses import replace
+from pathlib import Path
 from unittest.mock import patch
 
 import torch
@@ -17,7 +17,6 @@ from bosscrafts_model.tokenizer import (
     bound_native_65k_config,
     validate_contiguous_vocab,
 )
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BUNDLE = PROJECT_ROOT / "artifacts" / "tokenizers" / "bcnlt-native-foundation-65536-v1"

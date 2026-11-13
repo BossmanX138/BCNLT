@@ -3,21 +3,19 @@ from __future__ import annotations
 
 import argparse
 import ast
-from collections import Counter
 import hashlib
 import json
-from pathlib import Path
 import sys
+from collections import Counter
+from pathlib import Path
 
 import pyarrow.parquet as pq
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bosscrafts_model.codex_code_curriculum import extract_final_code
-
 
 SCHEMA = "bosscrafts-opencodeinstruct-source-audit-v1"
 

@@ -11,7 +11,6 @@ from bosscrafts_model.bcnlt_source_pipeline import (
 )
 from bosscrafts_model.model_acceptance import verify_model_acceptance
 
-
 DATABASE_ID = "a" * 64
 MODEL_ID = "b" * 64
 TOKENIZER_ID = "c" * 64

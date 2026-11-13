@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 from bosscrafts_model.bcnlt_source_pipeline import (
     CURRENT_RUNTIME_SPEC_SHA256,

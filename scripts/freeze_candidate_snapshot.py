@@ -2,11 +2,10 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict
 import json
-from pathlib import Path
 import sys
-
+from dataclasses import asdict
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -25,7 +24,6 @@ if tokenizers.__version__ != "0.23.2":
 
 from bosscrafts_model.candidate_snapshot import freeze_candidate_snapshot
 from bosscrafts_model.tokenizer import NativeTokenizerBinding
-
 
 DEFAULT_SOURCE = (
     PROJECT_ROOT

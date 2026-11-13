@@ -8,7 +8,6 @@ from typing import Any, TypeGuard, cast
 import torch
 from torch import nn
 
-
 CHECKPOINT_SCHEMA = "bosscrafts-training-checkpoint-v4"
 
 

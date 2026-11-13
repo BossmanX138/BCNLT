@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import replace
-from pathlib import Path
 import math
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from runtime_import import select_bcnlt_runtime
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_SOURCE = (

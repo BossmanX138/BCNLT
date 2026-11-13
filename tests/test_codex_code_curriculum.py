@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import gzip
 import json
-from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq

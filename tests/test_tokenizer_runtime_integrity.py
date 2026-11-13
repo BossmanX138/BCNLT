@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -13,11 +13,10 @@ from bosscrafts_model.tokenizer import (
     EXPECTED_RUNTIME_FILE_COUNT,
     EXPECTED_RUNTIME_PROVENANCE_SHA256,
     EXPECTED_RUNTIME_TREE_SHA256,
-    _sha256,
     _runtime_tree_identity,
+    _sha256,
     _verify_owned_tokenizers_runtime,
 )
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_ROOT = PROJECT_ROOT / "vendor" / "tokenizers_runtime_0_23"

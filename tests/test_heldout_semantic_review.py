@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
-from bosscrafts_model.bcnlt_source_pipeline import BCNLTSourcePipeline
-from bosscrafts_model.bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
+from bosscrafts_model.bcnlt_source_pipeline import (
+    PARSER_RUNTIME_IDENTITY_SHA256,
+    BCNLTSourcePipeline,
+)
 from bosscrafts_model.current_corpus import CurrentCorpusAdmission, SourceCandidate
 from bosscrafts_model.current_task_packing import CurrentCorpusTaskPacker
 from bosscrafts_model.heldout_semantic_review import (

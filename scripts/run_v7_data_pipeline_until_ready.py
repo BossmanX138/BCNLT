@@ -5,13 +5,12 @@ import argparse
 import ctypes
 import json
 import os
-from pathlib import Path
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
-
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -22,7 +21,6 @@ from bosscrafts_model.resumable_task_packing import (  # noqa: E402
     audit_task_database,
 )
 from bosscrafts_model.tokenizer import NativeTokenizerBinding  # noqa: E402
-
 
 ADMISSION = (
     PROJECT_ROOT

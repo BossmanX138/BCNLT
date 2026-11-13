@@ -10,13 +10,12 @@ import gzip
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import sys
 import time
+from pathlib import Path
 
 import torch
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -33,17 +32,16 @@ import tokenizers
 if tokenizers.__version__ != "0.23.2":
     raise RuntimeError("project-contained tokenizers runtime version mismatch")
 
-from bosscrafts_model.model import EngineeringModel
 from bosscrafts_model.inference_protocol import (
     build_inference_prompt,
     response_payload_token_ids,
     response_protocol_complete,
     task_end_token_id,
 )
+from bosscrafts_model.model import EngineeringModel
 from bosscrafts_model.resumable_task_packing import audit_task_database
 from bosscrafts_model.tokenizer import NativeTokenizerBinding, bound_native_65k_config
 from bosscrafts_model.training_checkpoint import load_model_checkpoint_for_inference
-
 
 SCHEMA = "bosscrafts-openai-humaneval-generation-v2"
 OPENAI_HUMANEVAL_SHA256 = (

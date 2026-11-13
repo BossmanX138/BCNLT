@@ -1,8 +1,9 @@
 """Inspect committed admission without starting a parser or creating a database."""
 import argparse
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from bosscrafts_model.admission_progress import read_admission_progress

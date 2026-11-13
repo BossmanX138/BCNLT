@@ -2,14 +2,13 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter
 import gzip
 import hashlib
 import json
 import math
-from pathlib import Path
 import re
-
+from collections import Counter
+from pathlib import Path
 
 SCHEMA = "bosscrafts-openai-humaneval-report-v2"
 TASK_COUNT = 164

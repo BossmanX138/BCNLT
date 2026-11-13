@@ -15,7 +15,6 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-
 SCHEMA_VERSION = "bosscrafts-project-codenet-source-audit-v1"
 REQUIRED_COLUMNS = {
     "submission_id",

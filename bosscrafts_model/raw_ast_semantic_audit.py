@@ -1,13 +1,13 @@
 """Content-addressed raw-AST relation and lexical-scope audit evidence."""
 from __future__ import annotations
 
-from collections import defaultdict
-from dataclasses import dataclass
 import hashlib
 import json
 import os
-from pathlib import Path
 import tempfile
+from collections import defaultdict
+from dataclasses import dataclass
+from pathlib import Path
 from typing import TypeGuard, cast
 
 from .bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
@@ -15,7 +15,6 @@ from .current_task_packing import CurrentCorpusTaskPacker
 from .raw_ast_witness import RawAstWitnessClient
 from .source_semantic_replay import SourceSemanticReplayAuditor
 from .tokenizer import NativeTokenizerBinding
-
 
 _ITEM_SCHEMA = "bosscrafts-raw-ast-semantic-witness-item-v1"
 _MANIFEST_SCHEMA = "bosscrafts-raw-ast-semantic-audit-manifest-v1"

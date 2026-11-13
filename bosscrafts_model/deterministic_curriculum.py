@@ -1,11 +1,11 @@
 """Derive a balanced curriculum with globally deterministic, isolated prompts."""
 from __future__ import annotations
 
+import hashlib
+import sqlite3
 from collections import Counter
 from dataclasses import dataclass
-import hashlib
 from pathlib import Path
-import sqlite3
 
 from .bcnlt_source_pipeline import CURRENT_RUNTIME_SPEC_SHA256
 from .compression import decompress_bounded
@@ -17,7 +17,6 @@ from .resumable_task_packing import (
     audit_task_database,
 )
 from .tokenizer import NativeTokenizerBinding
-
 
 DETERMINISTIC_CURRICULUM_SCHEMA = "bosscrafts-deterministic-curriculum-v1"
 SPLITS = ("train", "validation", "test")

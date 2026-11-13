@@ -3,21 +3,20 @@
 from __future__ import annotations
 
 import argparse
-from array import array
-from collections import Counter, defaultdict
 import json
-from pathlib import Path
 import sqlite3
 import sys
-
+from array import array
+from collections import Counter, defaultdict
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PINNED_TOKENIZERS_SITE = PROJECT_ROOT / "vendor" / "tokenizers_runtime_0_23"
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PINNED_TOKENIZERS_SITE))
 
-from bosscrafts_model.tokenizer import NativeTokenizerBinding  # noqa: E402
 from bosscrafts_model.compression import decompress_bounded  # noqa: E402
+from bosscrafts_model.tokenizer import NativeTokenizerBinding  # noqa: E402
 
 
 def _decode_u16(blob: bytes, *, token_count: int) -> list[int]:

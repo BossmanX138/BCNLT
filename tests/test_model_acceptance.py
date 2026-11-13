@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import copy
 import json
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
+
+from test_full_model_acceptance_categories import CATEGORIES, _category
 
 from bosscrafts_model.bcnlt_source_pipeline import CURRENT_RUNTIME_SPEC_SHA256
 from bosscrafts_model.model_acceptance import verify_model_acceptance
-from test_full_model_acceptance_categories import CATEGORIES, _category
-
 
 DATABASE_ID = "a" * 64
 MODEL_ID = "b" * 64

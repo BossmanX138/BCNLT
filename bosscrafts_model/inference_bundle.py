@@ -1,18 +1,17 @@
 """Immutable inference-only BossCrafts model bundles."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
-from pathlib import Path
 import shutil
+from dataclasses import dataclass
+from pathlib import Path
 
 import torch
 
 from .model import EngineeringModel
 from .tokenizer import NativeTokenizerBinding
 from .training_checkpoint import load_model_checkpoint_for_inference
-
 
 INFERENCE_BUNDLE_SCHEMA = "bosscrafts-inference-bundle-v1"
 MODEL_FILE = "model.pt"

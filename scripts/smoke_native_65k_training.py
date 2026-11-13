@@ -4,11 +4,10 @@ from __future__ import annotations
 import argparse
 import json
 import math
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import torch
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:

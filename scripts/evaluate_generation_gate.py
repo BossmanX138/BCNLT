@@ -2,16 +2,15 @@
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
 import hashlib
 import json
 import os
-from pathlib import Path
 import sys
 import time
+from collections import defaultdict
+from pathlib import Path
 
 import torch
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -43,7 +42,6 @@ from bosscrafts_model.resumable_task_packing import (
 )
 from bosscrafts_model.tokenizer import NativeTokenizerBinding, bound_native_65k_config
 from bosscrafts_model.training_checkpoint import load_model_checkpoint_for_inference
-
 
 SCHEMA = "bosscrafts-strict-generation-gate-v1"
 DEFAULT_DATABASE = (

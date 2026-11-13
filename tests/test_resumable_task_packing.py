@@ -4,12 +4,12 @@ import hashlib
 import importlib
 import importlib.util
 import json
-from pathlib import Path
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 from bosscrafts_model.bcnlt_source_pipeline import BCNLTSourcePipeline
 from bosscrafts_model.current_corpus import SourceCandidate

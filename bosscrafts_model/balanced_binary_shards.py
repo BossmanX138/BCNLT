@@ -1,17 +1,16 @@
 """Compact uint16 task shards with deterministic balanced sampling weights."""
 from __future__ import annotations
 
-from collections import Counter, defaultdict
-from dataclasses import dataclass
 import hashlib
 import json
-from pathlib import Path
 import struct
-from typing import cast, Iterator, TypedDict
+from collections import Counter, defaultdict
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterator, TypedDict, cast
 
 from .current_task_packing import EXAMPLE_SCHEMA, PACKED_MANIFEST_SCHEMA
 from .tokenizer import NativeTokenizerBinding
-
 
 BINARY_MANIFEST_SCHEMA = "bosscrafts-balanced-binary-task-manifest-v1"
 INDEX_STRUCT = struct.Struct("<QHHfBBBB32s32s32s32s")

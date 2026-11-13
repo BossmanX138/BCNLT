@@ -6,12 +6,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from bosscrafts_model.project_codenet_pilot import build_pilot  # noqa: E402
-
 
 FIELDS = [
     "submission_id",

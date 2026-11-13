@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import importlib
 import importlib.util
-import hashlib
 import json
 from pathlib import Path
 

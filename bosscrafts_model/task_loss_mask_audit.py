@@ -1,13 +1,13 @@
 """Fail-closed, no-optimizer audit of packed causal loss boundaries."""
 from __future__ import annotations
 
-from collections import Counter
-from dataclasses import dataclass
 import hashlib
 import json
 import os
-from pathlib import Path
 import tempfile
+from collections import Counter
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Mapping
 
 from .bcnlt_source_pipeline import CURRENT_RUNTIME_SPEC_SHA256
@@ -17,7 +17,6 @@ from .resumable_task_packing import (
     audit_task_database,
 )
 from .tokenizer import NativeTokenizerBinding
-
 
 LOSS_MASK_AUDIT_SCHEMA = "bosscrafts-task-loss-mask-audit-v1"
 

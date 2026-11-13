@@ -7,7 +7,6 @@ from typing import Iterable, Sequence
 from .bcnlt_source_pipeline import _NativeSemanticStreamCodec
 from .tokenizer import NativeTokenizerBinding
 
-
 INFERENCE_TASKS = (
     "raw",
     "code_to_semantic",

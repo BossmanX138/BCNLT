@@ -4,7 +4,6 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-
 PYTHON_SOURCE_IDENTITY_POLICY = "python-source-bytes-crlf-cr-to-lf-v1"
 
 

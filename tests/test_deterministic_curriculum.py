@@ -1,23 +1,22 @@
 from __future__ import annotations
 
-from array import array
 import hashlib
 import json
-from pathlib import Path
 import sqlite3
 import sys
 import tempfile
 import unittest
 import zlib
-
+from array import array
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PINNED_TOKENIZERS_SITE = PROJECT_ROOT / "vendor" / "tokenizers_runtime_0_23"
 if str(PINNED_TOKENIZERS_SITE) not in sys.path:
     sys.path.insert(0, str(PINNED_TOKENIZERS_SITE))
 
-from bosscrafts_model.deterministic_curriculum import derive_deterministic_curriculum
 from bosscrafts_model.bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
+from bosscrafts_model.deterministic_curriculum import derive_deterministic_curriculum
 from bosscrafts_model.resumable_task_packing import TASK_DATABASE_SCHEMA
 from bosscrafts_model.task_determinism import audit_task_prompt_determinism
 from bosscrafts_model.tokenizer import NativeTokenizerBinding

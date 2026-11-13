@@ -1,8 +1,11 @@
 import io
 import unittest
+
 import torch
-from bosscrafts_model.config import ModelConfig, STAGES
+
+from bosscrafts_model.config import STAGES, ModelConfig
 from bosscrafts_model.model import EngineeringModel, next_token_loss
+
 
 class NeuralTests(unittest.TestCase):
     def setUp(self):

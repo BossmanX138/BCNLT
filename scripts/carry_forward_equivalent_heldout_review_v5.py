@@ -4,9 +4,8 @@ from __future__ import annotations
 import hashlib
 import itertools
 import json
-from pathlib import Path
 import sys
-
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -18,7 +17,6 @@ from bosscrafts_model.bcnlt_source_pipeline import (  # noqa: E402
 from bosscrafts_model.heldout_semantic_review import (  # noqa: E402
     HeldoutSemanticReviewAdjudicator,
 )
-
 
 BASELINE_IDENTITY = "2a8f439fb5e185240ee5b672c289fee6c1702bf69387b1d01d049814bcbda650"
 BASELINE_ADMISSION = (

@@ -3,11 +3,10 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import torch
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -29,7 +28,6 @@ from bosscrafts_model.inference_protocol import (
 )
 from bosscrafts_model.model import EngineeringModel
 from bosscrafts_model.tokenizer import NativeTokenizerBinding, bound_native_65k_config
-
 
 DEFAULT_BUNDLE = (
     PROJECT_ROOT / "artifacts" / "models" / "BossCrafts-Engineering-0.5B-v1"

@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 from bosscrafts_model.balanced_curriculum import build_balanced_curriculum
 from bosscrafts_model.bcnlt_source_pipeline import BCNLTSourcePipeline
+from bosscrafts_model.compact_semantic_wire import COMPACT_SEMANTIC_WIRE_SCHEMA
 from bosscrafts_model.current_corpus import SourceCandidate
 from bosscrafts_model.current_task_packing import CurrentCorpusTaskPacker
-from bosscrafts_model.compact_semantic_wire import COMPACT_SEMANTIC_WIRE_SCHEMA
 from bosscrafts_model.resumable_current_corpus import ResumableCurrentCorpusAdmission
 from bosscrafts_model.resumable_task_packing import audit_task_database
 from bosscrafts_model.tokenizer import NativeTokenizerBinding

@@ -1,9 +1,9 @@
 """Streaming masked-loss evaluation for BossCrafts task examples."""
 from __future__ import annotations
 
+import math
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-import math
 from typing import Iterable
 
 import torch

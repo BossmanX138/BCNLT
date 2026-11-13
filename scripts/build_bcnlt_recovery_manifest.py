@@ -1,12 +1,11 @@
 """Build deterministic BCNLT recovery evidence from project-local copies only."""
 from __future__ import annotations
 
-from dataclasses import asdict
 import hashlib
 import json
-from pathlib import Path
 import sys
-
+from dataclasses import asdict
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RECOVERY_ROOT = PROJECT_ROOT / "artifacts" / "bcnlt" / "runtime-recovery-v1"

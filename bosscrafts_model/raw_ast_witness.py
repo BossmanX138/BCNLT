@@ -1,15 +1,15 @@
 """Host client for the raw-AST witness sidecar."""
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 import hashlib
 import json
-from pathlib import Path
 import subprocess
 import threading
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
+from pathlib import Path
 
 from .bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
-
 
 PROTOCOL = "bosscrafts-raw-ast-witness-v1"
 MAX_RESPONSE_BYTES = 32 * 1024 * 1024

@@ -1,22 +1,22 @@
 """Deterministic balanced task curriculum built directly from admitted sources."""
 from __future__ import annotations
 
+import hashlib
+import sqlite3
+import zlib
 from collections import Counter
 from dataclasses import dataclass
-import hashlib
 from pathlib import Path
-import sqlite3
 from typing import cast
-import zlib
 
+from .bcnlt_adapter import MAX_CANONICAL_OUTPUT_BYTES
 from .bcnlt_source_pipeline import (
     CURRENT_RUNTIME_SPEC_SHA256,
     PARSER_RUNTIME_IDENTITY_SHA256,
 )
-from .bcnlt_adapter import MAX_CANONICAL_OUTPUT_BYTES
-from .compression import decompress_bounded
 from .compact_semantic_wire import COMPACT_SEMANTIC_WIRE_SCHEMA
 from .compact_task_packing import CompactCurrentCorpusTaskPacker
+from .compression import decompress_bounded
 from .current_task_packing import CurrentCorpusTaskPacker
 from .resumable_current_corpus import RESUMABLE_SCHEMA
 from .resumable_task_packing import (
@@ -29,7 +29,6 @@ from .resumable_task_packing import (
     audit_task_database,
 )
 from .tokenizer import NativeTokenizerBinding
-
 
 CURRICULUM_SCHEMA = "bosscrafts-balanced-curriculum-v2"
 TASK_FAMILIES = (

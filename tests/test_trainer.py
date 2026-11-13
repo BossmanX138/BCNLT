@@ -1,23 +1,23 @@
 from __future__ import annotations
 
-from array import array
 import hashlib
 import importlib
 import importlib.util
 import json
 import math
-from pathlib import Path
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
 import zlib
+from array import array
+from pathlib import Path
 
 import torch
 
-from bosscrafts_model.config import ModelConfig
 from bosscrafts_model.bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
+from bosscrafts_model.config import ModelConfig
 from bosscrafts_model.model import EngineeringModel
 from bosscrafts_model.resumable_task_packing import (
     TASK_DATABASE_SCHEMA,

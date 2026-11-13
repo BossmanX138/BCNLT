@@ -1,14 +1,13 @@
 """Fail-closed acceptance contract for a trained, usable BossCrafts model."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
 import math
+from dataclasses import dataclass
 from typing import Sequence, TypeGuard
 
 from .bcnlt_source_pipeline import CURRENT_RUNTIME_SPEC_SHA256
-
 
 ACCEPTANCE_SCHEMA = "bosscrafts-model-acceptance-v2"
 STRUCTURED_TASKS = (
