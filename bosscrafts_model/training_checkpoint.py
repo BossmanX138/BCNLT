@@ -1,6 +1,8 @@
 """Atomic, lineage-bound checkpoints for BossCrafts model training."""
+
 from __future__ import annotations
 
+import hashlib
 import math
 import os
 import tempfile
@@ -41,6 +43,14 @@ def _is_sha256(value: object) -> TypeGuard[str]:
     )
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _state_values_are_finite(value: object) -> bool:
     """Reject non-finite scalar or tensor values in nested checkpoint state."""
     pending = [value]
@@ -48,9 +58,9 @@ def _state_values_are_finite(value: object) -> bool:
     while pending:
         current = pending.pop()
         if isinstance(current, torch.Tensor):
-            if (
-                current.is_floating_point() or current.is_complex()
-            ) and not bool(torch.isfinite(current).all()):
+            if (current.is_floating_point() or current.is_complex()) and not bool(
+                torch.isfinite(current).all()
+            ):
                 return False
         elif type(current) is float:
             if not math.isfinite(current):
@@ -73,6 +83,7 @@ def _state_values_are_finite(value: object) -> bool:
 
 @dataclass(frozen=True)
 class TrainingCheckpointState:
+    checkpoint_sha256: str
     step: int
     examples_seen: int
     epoch_index: int
@@ -124,7 +135,10 @@ def save_training_checkpoint(
             raise ValueError(f"{name} must be a lowercase SHA-256 digest")
     if cursor_after_example_id is not None and not _is_sha256(cursor_after_example_id):
         raise ValueError("cursor_after_example_id must be a lowercase SHA-256 or None")
-    if cursor_after_example_id is not None and cursor_after_example_id != last_example_id:
+    if (
+        cursor_after_example_id is not None
+        and cursor_after_example_id != last_example_id
+    ):
         raise ValueError("checkpoint cursor must match the last trained example")
     if epoch_index == target_epochs and cursor_after_example_id is not None:
         raise ValueError("completed checkpoint cursor must be None")
@@ -152,7 +166,9 @@ def save_training_checkpoint(
         "model_state_dict": model_state,
         "optimizer_state_dict": optimizer_state,
         "cpu_rng_state": torch.get_rng_state(),
-        "cuda_rng_state_all": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+        "cuda_rng_state_all": torch.cuda.get_rng_state_all()
+        if torch.cuda.is_available()
+        else None,
     }
     try:
         with tempfile.NamedTemporaryFile(
@@ -195,9 +211,7 @@ def load_training_checkpoint(
     model.load_state_dict(
         cast(dict[str, Any], payload["model_state_dict"]), strict=True
     )
-    optimizer.load_state_dict(
-        cast(dict[str, Any], payload["optimizer_state_dict"])
-    )
+    optimizer.load_state_dict(cast(dict[str, Any], payload["optimizer_state_dict"]))
     torch.set_rng_state(cast(torch.Tensor, payload["cpu_rng_state"]))
     cuda_states = payload.get("cuda_rng_state_all")
     if cuda_states is not None and torch.cuda.is_available():
@@ -243,9 +257,19 @@ def _load_verified_payload(
     if any(not _is_sha256(value) for value in expected.values()):
         raise ValueError("expected training lineage contains an invalid SHA-256")
     try:
+        checkpoint_sha256 = _sha256_file(checkpoint_path)
+    except OSError as error:
+        raise ValueError("training checkpoint is unreadable") from error
+    try:
         payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     except Exception as error:
         raise ValueError("training checkpoint is unreadable") from error
+    try:
+        checkpoint_sha256_after_load = _sha256_file(checkpoint_path)
+    except OSError as error:
+        raise ValueError("training checkpoint is unreadable") from error
+    if checkpoint_sha256_after_load != checkpoint_sha256:
+        raise ValueError("training checkpoint changed while loading")
     if (
         type(payload) is not dict
         or set(payload) != _CHECKPOINT_FIELDS
@@ -314,11 +338,15 @@ def _load_verified_payload(
         )
     ):
         raise ValueError("training checkpoint progress is invalid")
-    if cursor_after_example_id is not None and cursor_after_example_id != last_example_id:
+    if (
+        cursor_after_example_id is not None
+        and cursor_after_example_id != last_example_id
+    ):
         raise ValueError("training checkpoint cursor does not match the last example")
     if epoch_index == target_epochs and cursor_after_example_id is not None:
         raise ValueError("training checkpoint cursor at completion is invalid")
     state = TrainingCheckpointState(
+        checkpoint_sha256=checkpoint_sha256,
         step=step,
         examples_seen=examples_seen,
         epoch_index=epoch_index,

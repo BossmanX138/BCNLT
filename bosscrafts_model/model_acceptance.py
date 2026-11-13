@@ -1,4 +1,5 @@
 """Fail-closed acceptance contract for a trained, usable BossCrafts model."""
+
 from __future__ import annotations
 
 import hashlib
@@ -15,7 +16,7 @@ from .artifact_schemas import (
 )
 from .bcnlt_source_pipeline import CURRENT_RUNTIME_SPEC_SHA256
 
-ACCEPTANCE_SCHEMA = "bosscrafts-model-acceptance-v3"
+ACCEPTANCE_SCHEMA = "bosscrafts-model-acceptance-v4"
 STRUCTURED_TASKS = (
     "code_to_semantic",
     "semantic_continuation",
@@ -69,6 +70,7 @@ _EVALUATION_FIELDS = frozenset(
         "cell_regressions",
         "checkpoint_epoch_index",
         "checkpoint_lineage_verified",
+        "checkpoint_sha256",
         "checkpoint_step",
         "checkpoint_target_epochs",
         "checkpoint_task_database_identity_sha256",
@@ -109,6 +111,7 @@ _INFERENCE_FIELDS = frozenset(
     {
         "checkpoint_epoch_index",
         "checkpoint_lineage_verified",
+        "checkpoint_sha256",
         "checkpoint_step",
         "checkpoint_target_epochs",
         "checkpoint_task_database_identity_sha256",
@@ -163,9 +166,7 @@ def _finite_number(value: object) -> TypeGuard[int | float]:
     )
 
 
-def _integer_field(
-    payload: dict[str, object], name: str, *, minimum: int = 0
-) -> int:
+def _integer_field(payload: dict[str, object], name: str, *, minimum: int = 0) -> int:
     value = payload.get(name)
     if type(value) is not int or value < minimum:
         raise ValueError(f"acceptance field {name} must be an integer >= {minimum}")
@@ -194,9 +195,7 @@ def _loss_breakdown(
         type(value) is not dict
         or set(value) != expected_keys
         or any(
-            type(key) is not str
-            or not _finite_number(loss)
-            or float(loss) < 0.0
+            type(key) is not str or not _finite_number(loss) or float(loss) < 0.0
             for key, loss in value.items()
         )
     ):
@@ -204,11 +203,11 @@ def _loss_breakdown(
     return value
 
 
-def _verify_evaluation_consistency(
-    payload: dict[str, object], *, split: str
-) -> None:
+def _verify_evaluation_consistency(payload: dict[str, object], *, split: str) -> None:
     if set(payload) != _EVALUATION_FIELDS:
-        raise ValueError(f"{split} evaluation fields do not match the acceptance schema")
+        raise ValueError(
+            f"{split} evaluation fields do not match the acceptance schema"
+        )
     if payload.get("schema_version") != CHECKPOINT_EVALUATION_SCHEMA:
         raise ValueError(f"{split} evaluation schema is unsupported")
 
@@ -237,7 +236,10 @@ def _verify_evaluation_consistency(
     if baseline_hash is None:
         if baseline_source != "deterministic_random_initialization":
             raise ValueError(f"{split} evaluation baseline lineage mismatch")
-    elif not _is_sha256(baseline_hash) or baseline_source == "deterministic_random_initialization":
+    elif (
+        not _is_sha256(baseline_hash)
+        or baseline_source == "deterministic_random_initialization"
+    ):
         raise ValueError(f"{split} evaluation baseline lineage mismatch")
 
     example_count = _integer_field(payload, "example_count", minimum=1)
@@ -261,14 +263,18 @@ def _verify_evaluation_consistency(
         or exact_count > example_count
         or baseline_exact_count > example_count
         or baseline_target_count != target_count
-        or not math.isclose(accuracy, correct_count / target_count, rel_tol=1e-12, abs_tol=1e-12)
+        or not math.isclose(
+            accuracy, correct_count / target_count, rel_tol=1e-12, abs_tol=1e-12
+        )
         or not math.isclose(
             baseline_accuracy,
             baseline_correct_count / baseline_target_count,
             rel_tol=1e-12,
             abs_tol=1e-12,
         )
-        or not math.isclose(exact_rate, exact_count / example_count, rel_tol=1e-12, abs_tol=1e-12)
+        or not math.isclose(
+            exact_rate, exact_count / example_count, rel_tol=1e-12, abs_tol=1e-12
+        )
         or not math.isclose(
             baseline_exact_rate,
             baseline_exact_count / example_count,
@@ -290,7 +296,9 @@ def _verify_evaluation_consistency(
         or baseline_mean_loss >= 709.0
         or perplexity <= 0.0
         or baseline_perplexity <= 0.0
-        or not math.isclose(perplexity, math.exp(mean_loss), rel_tol=1e-12, abs_tol=1e-12)
+        or not math.isclose(
+            perplexity, math.exp(mean_loss), rel_tol=1e-12, abs_tol=1e-12
+        )
         or not math.isclose(
             baseline_perplexity,
             math.exp(baseline_mean_loss),
@@ -317,9 +325,7 @@ def _verify_evaluation_consistency(
         payload, "baseline_language_mean_loss", language_keys
     )
     current_family = _loss_breakdown(payload, "family_mean_loss", family_keys)
-    baseline_family = _loss_breakdown(
-        payload, "baseline_family_mean_loss", family_keys
-    )
+    baseline_family = _loss_breakdown(payload, "baseline_family_mean_loss", family_keys)
     current_cells = _loss_breakdown(payload, "cell_mean_loss", cell_keys)
     baseline_cells = _loss_breakdown(payload, "baseline_cell_mean_loss", cell_keys)
     expected_regressions = {
@@ -339,7 +345,9 @@ def _verify_evaluation_consistency(
             if float(current_cells[key]) > float(baseline_cells[key])
         ),
     }
-    if any(payload.get(name) != values for name, values in expected_regressions.items()):
+    if any(
+        payload.get(name) != values for name, values in expected_regressions.items()
+    ):
         raise ValueError(f"{split} evaluation regression consistency failed")
     if payload.get("target_token_accuracy_improved") != (accuracy > baseline_accuracy):
         raise ValueError(f"{split} evaluation accuracy flag is inconsistent")
@@ -366,10 +374,13 @@ def _verify_inference_consistency(payload: dict[str, object], *, task: str) -> N
         "bfloat16",
     }:
         raise ValueError(f"{task} inference runtime fields are invalid")
-    if any(
-        type(payload.get(name)) is not str
-        for name in ("full_text", "generated_protocol_text", "generated_text")
-    ) or _integer_field(payload, "prompt_token_count", minimum=1) < 1:
+    if (
+        any(
+            type(payload.get(name)) is not str
+            for name in ("full_text", "generated_protocol_text", "generated_text")
+        )
+        or _integer_field(payload, "prompt_token_count", minimum=1) < 1
+    ):
         raise ValueError(f"{task} inference text or prompt evidence is invalid")
 
 
@@ -377,6 +388,7 @@ def _verify_inference_consistency(payload: dict[str, object], *, task: str) -> N
 class ModelAcceptanceResult:
     schema_version: str
     acceptance_passed: bool
+    checkpoint_sha256: str
     checkpoint_step: int
     task_database_identity_sha256: str
     model_fingerprint: str
@@ -414,14 +426,18 @@ def verify_model_acceptance(
             or split not in {"validation", "test"}
             or split in evaluation_by_split
         ):
-            raise ValueError("acceptance requires one validation and one test evaluation")
+            raise ValueError(
+                "acceptance requires one validation and one test evaluation"
+            )
         _verify_evaluation_consistency(payload, split=split)
         if not (
             payload.get("checkpoint_lineage_verified") is True
             and payload.get("checkpoint_training_complete") is True
             and payload.get("full_model") is True
         ):
-            raise ValueError(f"{split} evaluation is not a complete full-model checkpoint")
+            raise ValueError(
+                f"{split} evaluation is not a complete full-model checkpoint"
+            )
         example_count = payload.get("example_count")
         split_count = payload.get("split_example_count")
         if (
@@ -432,24 +448,16 @@ def verify_model_acceptance(
         ):
             raise ValueError(f"{split} evaluation does not cover the complete split")
         language_counts = payload.get("language_counts")
-        if (
-            type(language_counts) is not dict
-            or language_counts
-            != {
-                language: HELDOUT_EXAMPLES_PER_CELL * len(STRUCTURED_TASKS)
-                for language in EXPECTED_LANGUAGES
-            }
-        ):
+        if type(language_counts) is not dict or language_counts != {
+            language: HELDOUT_EXAMPLES_PER_CELL * len(STRUCTURED_TASKS)
+            for language in EXPECTED_LANGUAGES
+        }:
             raise ValueError(f"{split} evaluation does not cover every language")
         family_counts = payload.get("family_counts")
-        if (
-            type(family_counts) is not dict
-            or family_counts
-            != {
-                family: HELDOUT_EXAMPLES_PER_CELL * len(EXPECTED_LANGUAGES)
-                for family in STRUCTURED_TASKS
-            }
-        ):
+        if type(family_counts) is not dict or family_counts != {
+            family: HELDOUT_EXAMPLES_PER_CELL * len(EXPECTED_LANGUAGES)
+            for family in STRUCTURED_TASKS
+        }:
             raise ValueError(f"{split} evaluation does not cover every task family")
         cell_counts = payload.get("cell_counts")
         cell_mean_loss = payload.get("cell_mean_loss")
@@ -469,7 +477,9 @@ def verify_model_acceptance(
                 for value in baseline_cell_mean_loss.values()
             )
         ):
-            raise ValueError(f"{split} evaluation does not cover every language-family cell")
+            raise ValueError(
+                f"{split} evaluation does not cover every language-family cell"
+            )
         actual_cell_regressions = sorted(
             cell
             for cell, loss in cell_mean_loss.items()
@@ -523,7 +533,9 @@ def verify_model_acceptance(
             and payload.get("checkpoint_training_complete") is True
             and payload.get("full_model") is True
         ):
-            raise ValueError(f"{task} inference is not a complete full-model checkpoint")
+            raise ValueError(
+                f"{task} inference is not a complete full-model checkpoint"
+            )
         heldout_accuracy = payload.get("heldout_target_token_accuracy")
         expected_ids = payload.get("heldout_expected_token_ids")
         generated_ids = payload.get("new_token_ids")
@@ -574,10 +586,13 @@ def verify_model_acceptance(
             or category not in ACCEPTANCE_CATEGORIES
             or category in category_by_name
         ):
-            raise ValueError("acceptance requires every independent category exactly once")
+            raise ValueError(
+                "acceptance requires every independent category exactly once"
+            )
         required_fields = {
             "artifact_sha256",
             "category",
+            "checkpoint_sha256",
             "checkpoint_step",
             "evidence_complete",
             "example_count",
@@ -593,9 +608,13 @@ def verify_model_acceptance(
             "tokenizer_sha256",
         }
         if set(payload) != required_fields:
-            raise ValueError(f"{category} evidence fields do not match the acceptance schema")
+            raise ValueError(
+                f"{category} evidence fields do not match the acceptance schema"
+            )
         supplied_hash = payload.get("artifact_sha256")
-        body = {key: value for key, value in payload.items() if key != "artifact_sha256"}
+        body = {
+            key: value for key, value in payload.items() if key != "artifact_sha256"
+        }
         if not _is_sha256(supplied_hash) or supplied_hash != _payload_sha256(body):
             raise ValueError(f"{category} evidence integrity mismatch")
         if (
@@ -621,17 +640,27 @@ def verify_model_acceptance(
         *inference_by_task.values(),
         *category_by_name.values(),
     ]
-    database_ids = {payload.get("task_database_identity_sha256") for payload in all_payloads}
+    database_ids = {
+        payload.get("task_database_identity_sha256") for payload in all_payloads
+    }
     model_ids = {payload.get("model_fingerprint") for payload in all_payloads}
+    checkpoint_ids = {payload.get("checkpoint_sha256") for payload in all_payloads}
     checkpoint_steps = {payload.get("checkpoint_step") for payload in all_payloads}
-    if len(database_ids) != 1 or len(model_ids) != 1 or len(checkpoint_steps) != 1:
+    if (
+        len(database_ids) != 1
+        or len(model_ids) != 1
+        or len(checkpoint_ids) != 1
+        or len(checkpoint_steps) != 1
+    ):
         raise ValueError("acceptance evidence lineage mismatch")
     database_identity_value = next(iter(database_ids))
     model_fingerprint_value = next(iter(model_ids))
+    checkpoint_sha256_value = next(iter(checkpoint_ids))
     checkpoint_step_value = next(iter(checkpoint_steps))
     if (
         not _is_sha256(database_identity_value)
         or not _is_sha256(model_fingerprint_value)
+        or not _is_sha256(checkpoint_sha256_value)
         or type(checkpoint_step_value) is not int
         or checkpoint_step_value < 1
     ):
@@ -660,6 +689,7 @@ def verify_model_acceptance(
     return ModelAcceptanceResult(
         schema_version=ACCEPTANCE_SCHEMA,
         acceptance_passed=True,
+        checkpoint_sha256=checkpoint_sha256_value,
         checkpoint_step=checkpoint_step_value,
         task_database_identity_sha256=database_identity_value,
         model_fingerprint=model_fingerprint_value,

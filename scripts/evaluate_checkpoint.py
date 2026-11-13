@@ -1,4 +1,5 @@
 """Evaluate a lineage-verified BossCrafts checkpoint on streamed task examples."""
+
 from __future__ import annotations
 
 import argparse
@@ -104,7 +105,9 @@ def main() -> int:
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--dtype", choices=("float32", "bfloat16"), default="float32")
     parser.add_argument("--full-model", action="store_true")
-    parser.add_argument("--split", choices=("train", "validation", "test"), default="validation")
+    parser.add_argument(
+        "--split", choices=("train", "validation", "test"), default="validation"
+    )
     parser.add_argument("--max-examples", type=int, default=100)
     parser.add_argument("--output", type=Path)
     arguments = parser.parse_args()
@@ -112,7 +115,11 @@ def main() -> int:
         parser.error("max-examples must be between 1 and 10000")
     if arguments.device == "cuda" and not torch.cuda.is_available():
         parser.error("CUDA was requested but is unavailable")
-    if arguments.dtype == "bfloat16" and arguments.device == "cuda" and not torch.cuda.is_bf16_supported():
+    if (
+        arguments.dtype == "bfloat16"
+        and arguments.device == "cuda"
+        and not torch.cuda.is_bf16_supported()
+    ):
         parser.error("CUDA bfloat16 was requested but is unsupported")
 
     binding = NativeTokenizerBinding.load()
@@ -175,9 +182,7 @@ def main() -> int:
         device=device,
         max_examples=arguments.max_examples,
     )
-    relative_improvement = (
-        baseline.mean_loss - result.mean_loss
-    ) / baseline.mean_loss
+    relative_improvement = (baseline.mean_loss - result.mean_loss) / baseline.mean_loss
     language_regressions = sorted(
         language
         for language, loss in result.language_mean_loss.items()
@@ -193,8 +198,7 @@ def main() -> int:
     cell_regressions = sorted(
         cell
         for cell, loss in result.cell_mean_loss.items()
-        if cell in baseline.cell_mean_loss
-        and loss > baseline.cell_mean_loss[cell]
+        if cell in baseline.cell_mean_loss and loss > baseline.cell_mean_loss[cell]
     )
     promotion_threshold = 0.02
     checkpoint_training_complete = (
@@ -241,6 +245,7 @@ def main() -> int:
         "baseline_target_token_accuracy": baseline.target_token_accuracy,
         "baseline_target_token_count": baseline.target_token_count,
         "checkpoint_lineage_verified": True,
+        "checkpoint_sha256": state.checkpoint_sha256,
         "checkpoint_task_database_identity_sha256": (
             checkpoint_task_audit.database_identity_sha256
         ),

@@ -21,6 +21,7 @@ DATABASE_ID = "a" * 64
 MODEL_ID = "b" * 64
 TOKENIZER_ID = "c" * 64
 HELDOUT_ID = "d" * 64
+CHECKPOINT_ID = "e" * 64
 FAMILIES = ("code_to_semantic", "semantic_continuation", "semantic_to_code")
 LANGUAGES = tuple(sorted(CURRENT_RUNTIME_SPEC_SHA256))
 CATEGORIES = (
@@ -43,9 +44,7 @@ def _canonical(value: object) -> bytes:
 
 def _evaluation(split: str) -> dict[str, object]:
     cells = {
-        f"{language}|{family}": 128
-        for language in LANGUAGES
-        for family in FAMILIES
+        f"{language}|{family}": 128 for language in LANGUAGES for family in FAMILIES
     }
     return {
         "schema_version": CHECKPOINT_EVALUATION_SCHEMA,
@@ -66,6 +65,7 @@ def _evaluation(split: str) -> dict[str, object]:
         "cell_regressions": [],
         "checkpoint_epoch_index": 1,
         "checkpoint_lineage_verified": True,
+        "checkpoint_sha256": CHECKPOINT_ID,
         "checkpoint_step": 86_016,
         "checkpoint_target_epochs": 1,
         "checkpoint_task_database_identity_sha256": DATABASE_ID,
@@ -107,6 +107,7 @@ def _inference(task: str) -> dict[str, object]:
         "schema_version": CHECKPOINT_INFERENCE_SCHEMA,
         "checkpoint_epoch_index": 1,
         "checkpoint_lineage_verified": True,
+        "checkpoint_sha256": CHECKPOINT_ID,
         "checkpoint_step": 86_016,
         "checkpoint_target_epochs": 1,
         "checkpoint_task_database_identity_sha256": DATABASE_ID,
@@ -208,6 +209,7 @@ def _category(category: str) -> dict[str, object]:
     payload: dict[str, object] = {
         "schema_version": MODEL_CATEGORY_EVIDENCE_SCHEMA,
         "category": category,
+        "checkpoint_sha256": CHECKPOINT_ID,
         "checkpoint_step": 86_016,
         "evidence_complete": True,
         "example_count": minimum_examples[category],
@@ -236,8 +238,11 @@ class FullModelAcceptanceCategoryTests(unittest.TestCase):
     def test_acceptance_requires_all_independently_hashed_categories(self):
         result = self._verify(tuple(_category(category) for category in CATEGORIES))
         self.assertTrue(result.acceptance_passed)
+        self.assertEqual(result.checkpoint_sha256, CHECKPOINT_ID)
         self.assertEqual(set(result.category_evidence_sha256), set(CATEGORIES))
-        self.assertEqual(result.parser_runtime_identity_sha256, PARSER_RUNTIME_IDENTITY_SHA256)
+        self.assertEqual(
+            result.parser_runtime_identity_sha256, PARSER_RUNTIME_IDENTITY_SHA256
+        )
         self.assertEqual(result.tokenizer_sha256, TOKENIZER_ID)
 
     def test_missing_or_failed_category_cannot_be_hidden_by_loss_improvement(self):
@@ -250,7 +255,9 @@ class FullModelAcceptanceCategoryTests(unittest.TestCase):
             item for item in weak if item["category"] == "ordinary_instruction"
         )
         instruction["metrics"]["task_success_rate"] = 0.79
-        body = {key: value for key, value in instruction.items() if key != "artifact_sha256"}
+        body = {
+            key: value for key, value in instruction.items() if key != "artifact_sha256"
+        }
         instruction["artifact_sha256"] = hashlib.sha256(_canonical(body)).hexdigest()
         with self.assertRaisesRegex(ValueError, "ordinary_instruction"):
             self._verify(tuple(weak))
@@ -273,13 +280,28 @@ class FullModelAcceptanceCategoryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "lineage"):
             self._verify(tuple(mismatched))
 
+        different_checkpoint = copy.deepcopy(evidence)
+        different_checkpoint[-1]["checkpoint_sha256"] = "f" * 64
+        body = {
+            key: value
+            for key, value in different_checkpoint[-1].items()
+            if key != "artifact_sha256"
+        }
+        different_checkpoint[-1]["artifact_sha256"] = hashlib.sha256(
+            _canonical(body)
+        ).hexdigest()
+        with self.assertRaisesRegex(ValueError, "lineage"):
+            self._verify(tuple(different_checkpoint))
+
     def test_semantic_fidelity_requires_strict_uncertainty_receipt(self):
         evidence = [_category(category) for category in CATEGORIES]
         semantic = next(
             item for item in evidence if item["category"] == "semantic_fidelity"
         )
         semantic["metrics"]["strict_uncertainty_acceptance_passed"] = False
-        body = {key: value for key, value in semantic.items() if key != "artifact_sha256"}
+        body = {
+            key: value for key, value in semantic.items() if key != "artifact_sha256"
+        }
         semantic["artifact_sha256"] = hashlib.sha256(_canonical(body)).hexdigest()
         with self.assertRaisesRegex(ValueError, "semantic_fidelity"):
             self._verify(tuple(evidence))
@@ -295,7 +317,9 @@ class FullModelAcceptanceCategoryTests(unittest.TestCase):
         for category, metric, value in invalid_rates:
             with self.subTest(category=category, metric=metric):
                 evidence = [_category(name) for name in CATEGORIES]
-                item = next(entry for entry in evidence if entry["category"] == category)
+                item = next(
+                    entry for entry in evidence if entry["category"] == category
+                )
                 item["metrics"][metric] = value
                 body = {
                     key: body_value

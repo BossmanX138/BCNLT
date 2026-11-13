@@ -1,4 +1,5 @@
 """Run bounded greedy inference from a lineage-verified BossCrafts checkpoint."""
+
 from __future__ import annotations
 
 import argparse
@@ -102,7 +103,9 @@ def main() -> int:
     prompt_source = parser.add_mutually_exclusive_group(required=True)
     prompt_source.add_argument("--prompt")
     prompt_source.add_argument("--heldout-family", choices=INFERENCE_TASKS[1:])
-    parser.add_argument("--heldout-split", choices=("validation", "test"), default="test")
+    parser.add_argument(
+        "--heldout-split", choices=("validation", "test"), default="test"
+    )
     parser.add_argument("--task", choices=INFERENCE_TASKS)
     parser.add_argument("--max-new-tokens", type=int, default=32)
     parser.add_argument("--output", type=Path)
@@ -119,7 +122,11 @@ def main() -> int:
         parser.error("held-out family and task must match")
     if arguments.device == "cuda" and not torch.cuda.is_available():
         parser.error("CUDA was requested but is unavailable")
-    if arguments.dtype == "bfloat16" and arguments.device == "cuda" and not torch.cuda.is_bf16_supported():
+    if (
+        arguments.dtype == "bfloat16"
+        and arguments.device == "cuda"
+        and not torch.cuda.is_bf16_supported()
+    ):
         parser.error("CUDA bfloat16 was requested but is unsupported")
 
     binding = NativeTokenizerBinding.load()
@@ -189,6 +196,7 @@ def main() -> int:
     payload = {
         "schema_version": CHECKPOINT_INFERENCE_SCHEMA,
         "checkpoint_lineage_verified": True,
+        "checkpoint_sha256": state.checkpoint_sha256,
         "checkpoint_task_database_identity_sha256": (
             checkpoint_task_audit.database_identity_sha256
         ),
@@ -218,9 +226,7 @@ def main() -> int:
         "heldout_split": (
             arguments.heldout_split if heldout_case is not None else None
         ),
-        "heldout_target_token_accuracy": (
-            heldout_accuracy
-        ),
+        "heldout_target_token_accuracy": (heldout_accuracy),
         "model_fingerprint": config.fingerprint(),
         "new_token_count": len(new_ids),
         "new_token_ids": new_ids,

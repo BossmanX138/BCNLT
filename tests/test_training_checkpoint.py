@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib
 import importlib.util
 import os
@@ -58,7 +59,9 @@ class TrainingCheckpointTests(unittest.TestCase):
             expected_random = torch.rand(4)
             torch.manual_seed(999)
             restored_model = EngineeringModel(config)
-            restored_optimizer = torch.optim.AdamW(restored_model.parameters(), lr=0.001)
+            restored_optimizer = torch.optim.AdamW(
+                restored_model.parameters(), lr=0.001
+            )
             state = module.load_training_checkpoint(
                 path,
                 restored_model,
@@ -70,6 +73,10 @@ class TrainingCheckpointTests(unittest.TestCase):
                 expected_training_plan_sha256=plan_identity,
             )
             self.assertEqual(state.step, 7)
+            self.assertEqual(
+                state.checkpoint_sha256,
+                hashlib.sha256(path.read_bytes()).hexdigest(),
+            )
             self.assertEqual(state.examples_seen, 19)
             self.assertEqual(state.epoch_index, 2)
             self.assertEqual(state.target_epochs, 3)

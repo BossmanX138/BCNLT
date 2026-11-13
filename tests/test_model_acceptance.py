@@ -21,6 +21,7 @@ from scripts.verify_model_acceptance import _read_payload
 
 DATABASE_ID = "a" * 64
 MODEL_ID = "b" * 64
+CHECKPOINT_ID = "e" * 64
 FAMILIES = ("code_to_semantic", "semantic_continuation", "semantic_to_code")
 
 
@@ -55,6 +56,7 @@ def _evaluation(split: str) -> dict[str, object]:
         "cell_regressions": [],
         "checkpoint_epoch_index": 1,
         "checkpoint_lineage_verified": True,
+        "checkpoint_sha256": CHECKPOINT_ID,
         "checkpoint_step": 86_016,
         "checkpoint_target_epochs": 1,
         "checkpoint_task_database_identity_sha256": DATABASE_ID,
@@ -98,6 +100,7 @@ def _inference(task: str) -> dict[str, object]:
         "schema_version": CHECKPOINT_INFERENCE_SCHEMA,
         "checkpoint_epoch_index": 1,
         "checkpoint_lineage_verified": True,
+        "checkpoint_sha256": CHECKPOINT_ID,
         "checkpoint_step": 86_016,
         "checkpoint_target_epochs": 1,
         "checkpoint_task_database_identity_sha256": DATABASE_ID,
@@ -134,6 +137,7 @@ class ModelAcceptanceTests(unittest.TestCase):
             _categories(),
         )
         self.assertTrue(result.acceptance_passed)
+        self.assertEqual(result.checkpoint_sha256, CHECKPOINT_ID)
         self.assertEqual(result.checkpoint_step, 86_016)
         self.assertEqual(result.task_database_identity_sha256, DATABASE_ID)
         self.assertEqual(set(result.evaluation_sha256), {"validation", "test"})
@@ -272,6 +276,19 @@ class ModelAcceptanceTests(unittest.TestCase):
                 _categories(),
             )
 
+        mixed_checkpoint = _inference("code_to_semantic")
+        mixed_checkpoint["checkpoint_sha256"] = "f" * 64
+        with self.assertRaisesRegex(ValueError, "lineage"):
+            verify_model_acceptance(
+                (_evaluation("validation"), _evaluation("test")),
+                (
+                    mixed_checkpoint,
+                    _inference("semantic_continuation"),
+                    _inference("semantic_to_code"),
+                ),
+                _categories(),
+            )
+
         manual = _inference("code_to_semantic")
         manual["prompt_source"] = "manual"
         with self.assertRaisesRegex(ValueError, "held-out"):
@@ -324,7 +341,9 @@ class ModelAcceptanceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             duplicate = root / "duplicate.json"
-            duplicate.write_text('{"split":"test","split":"validation"}', encoding="utf-8")
+            duplicate.write_text(
+                '{"split":"test","split":"validation"}', encoding="utf-8"
+            )
             with self.assertRaisesRegex(ValueError, "duplicate"):
                 _read_payload(duplicate)
 
@@ -342,14 +361,8 @@ class ModelAcceptanceTests(unittest.TestCase):
             evidence = {
                 "validation.json": _evaluation("validation"),
                 "test.json": _evaluation("test"),
-                **{
-                    f"{task}.json": _inference(task)
-                    for task in FAMILIES
-                },
-                **{
-                    f"{category}.json": _category(category)
-                    for category in CATEGORIES
-                },
+                **{f"{task}.json": _inference(task) for task in FAMILIES},
+                **{f"{category}.json": _category(category) for category in CATEGORIES},
             }
             for name, payload in evidence.items():
                 (root / name).write_text(json.dumps(payload), encoding="utf-8")
