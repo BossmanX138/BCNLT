@@ -10,7 +10,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from bosscrafts_model.resumable_task_packing import ResumableCurrentTaskPacking  # noqa: E402
+from bosscrafts_model.resumable_task_packing import (  # noqa: E402
+    ResumableCurrentTaskPacking,
+)
 from bosscrafts_model.tokenizer import NativeTokenizerBinding  # noqa: E402
 
 DEFAULT_ADMISSION = (

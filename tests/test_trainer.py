@@ -472,23 +472,24 @@ class TrainerTests(unittest.TestCase):
                 json.loads(heldout_inference_output.read_text()), heldout_payload
             )
 
+            evaluation_command = [
+                sys.executable,
+                str(project_root / "scripts" / "evaluate_checkpoint.py"),
+                "--database",
+                str(database),
+                "--checkpoint",
+                str(checkpoint),
+                "--device",
+                "cpu",
+                "--split",
+                "train",
+                "--max-examples",
+                "2",
+                "--output",
+                str(evaluation_output),
+            ]
             evaluation = subprocess.run(
-                [
-                    sys.executable,
-                    str(project_root / "scripts" / "evaluate_checkpoint.py"),
-                    "--database",
-                    str(database),
-                    "--checkpoint",
-                    str(checkpoint),
-                    "--device",
-                    "cpu",
-                    "--split",
-                    "train",
-                    "--max-examples",
-                    "2",
-                    "--output",
-                    str(evaluation_output),
-                ],
+                evaluation_command,
                 cwd=project_root,
                 text=True,
                 encoding="utf-8",
@@ -511,6 +512,23 @@ class TrainerTests(unittest.TestCase):
             self.assertTrue(math.isfinite(evaluation_payload["relative_loss_improvement"]))
             self.assertEqual(evaluation_payload["promotion_threshold"], 0.02)
             self.assertIn("promotion_gate_passed", evaluation_payload)
+            self.assertFalse(evaluation_payload["promotion_gate_passed"])
+            self.assertIn(
+                "full production model was not evaluated",
+                evaluation_payload["promotion_blockers"],
+            )
+            original_evaluation = evaluation_output.read_bytes()
+            repeated_evaluation = subprocess.run(
+                evaluation_command,
+                cwd=project_root,
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(repeated_evaluation.returncode, 0)
+            self.assertIn("already exists", repeated_evaluation.stderr)
+            self.assertEqual(evaluation_output.read_bytes(), original_evaluation)
 
 
 if __name__ == "__main__":

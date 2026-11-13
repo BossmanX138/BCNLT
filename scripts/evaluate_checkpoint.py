@@ -4,7 +4,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
+import tempfile
 from dataclasses import asdict
 from pathlib import Path
 
@@ -55,6 +57,34 @@ DEFAULT_CHECKPOINT = (
     / "bounded-training-trial-v1"
     / "checkpoint.pt"
 )
+
+
+def _publish_new_evaluation(path: Path, rendered: str) -> None:
+    """Publish immutable evaluation evidence without clobbering prior results."""
+    destination = path.resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(rendered + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, destination)
+        except FileExistsError as error:
+            raise ValueError("evaluation output already exists") from error
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
 
 
 def main() -> int:
@@ -167,6 +197,34 @@ def main() -> int:
         and loss > baseline.cell_mean_loss[cell]
     )
     promotion_threshold = 0.02
+    checkpoint_training_complete = (
+        state.epoch_index >= state.target_epochs
+        and state.cursor_after_example_id is None
+    )
+    evaluation_complete = result.example_count == split_example_count
+    baseline_scope_matches = (
+        baseline.target_token_count == result.target_token_count
+        and set(baseline.language_mean_loss) == set(result.language_mean_loss)
+        and set(baseline.family_mean_loss) == set(result.family_mean_loss)
+        and set(baseline.cell_mean_loss) == set(result.cell_mean_loss)
+    )
+    promotion_blockers: list[str] = []
+    if not checkpoint_training_complete:
+        promotion_blockers.append("checkpoint training is incomplete")
+    if not arguments.full_model:
+        promotion_blockers.append("full production model was not evaluated")
+    if not evaluation_complete:
+        promotion_blockers.append("evaluation does not cover the complete split")
+    if not baseline_scope_matches:
+        promotion_blockers.append("baseline and candidate evaluation scopes differ")
+    if relative_improvement < promotion_threshold:
+        promotion_blockers.append("relative loss improvement is below threshold")
+    if language_regressions:
+        promotion_blockers.append("one or more language losses regressed")
+    if family_regressions:
+        promotion_blockers.append("one or more task-family losses regressed")
+    if cell_regressions:
+        promotion_blockers.append("one or more language-family cell losses regressed")
     payload = {
         **asdict(result),
         "schema_version": CHECKPOINT_EVALUATION_SCHEMA,
@@ -189,10 +247,7 @@ def main() -> int:
         "checkpoint_epoch_index": state.epoch_index,
         "checkpoint_step": state.step,
         "checkpoint_target_epochs": state.target_epochs,
-        "checkpoint_training_complete": (
-            state.epoch_index >= state.target_epochs
-            and state.cursor_after_example_id is None
-        ),
+        "checkpoint_training_complete": checkpoint_training_complete,
         "device": device.type,
         "dtype": str(dtype).removeprefix("torch."),
         "full_model": arguments.full_model,
@@ -200,18 +255,14 @@ def main() -> int:
         "family_regressions": family_regressions,
         "cell_regressions": cell_regressions,
         "language_regressions": language_regressions,
-        "promotion_gate_passed": (
-            relative_improvement >= promotion_threshold
-            and not language_regressions
-            and not family_regressions
-            and not cell_regressions
-        ),
+        "promotion_blockers": promotion_blockers,
+        "promotion_gate_passed": not promotion_blockers,
         "promotion_threshold": promotion_threshold,
         "relative_loss_improvement": relative_improvement,
         "split": arguments.split,
         "split_example_count": split_example_count,
         "evaluated_fraction": result.example_count / split_example_count,
-        "evaluation_complete": result.example_count == split_example_count,
+        "evaluation_complete": evaluation_complete,
         "target_token_accuracy_improved": (
             result.target_token_accuracy > baseline.target_token_accuracy
         ),
@@ -222,11 +273,7 @@ def main() -> int:
     }
     rendered = json.dumps(payload, sort_keys=True)
     if arguments.output is not None:
-        destination = arguments.output.resolve()
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        temporary = destination.with_name(f".{destination.name}.tmp")
-        temporary.write_text(rendered + "\n", encoding="utf-8")
-        temporary.replace(destination)
+        _publish_new_evaluation(arguments.output, rendered)
     print(rendered)
     return 0
 
