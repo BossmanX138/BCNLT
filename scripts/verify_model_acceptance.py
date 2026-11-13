@@ -114,6 +114,7 @@ def _ground_heldout_cases(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--task-database", type=Path, required=True)
+    parser.add_argument("--heldout-manifest", type=Path, required=True)
     parser.add_argument("--validation-evaluation", type=Path, required=True)
     parser.add_argument("--test-evaluation", type=Path, required=True)
     parser.add_argument("--code-to-semantic-inference", type=Path, required=True)
@@ -140,7 +141,6 @@ def main() -> int:
         arguments.task_database,
         inferences,
     )
-
     result = verify_model_acceptance(
         (
             _read_payload(arguments.validation_evaluation),
@@ -152,6 +152,7 @@ def main() -> int:
             for category in ACCEPTANCE_CATEGORIES
         ),
         binding=binding,
+        heldout_manifest=_read_payload(arguments.heldout_manifest),
         heldout_cases=heldout_cases,
         task_database_identity_sha256=database_identity,
     )

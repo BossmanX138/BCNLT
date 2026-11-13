@@ -13,7 +13,11 @@ import zlib
 from array import array
 from pathlib import Path
 
-from test_full_model_acceptance_categories import CATEGORIES, _category
+from test_full_model_acceptance_categories import (
+    CATEGORIES,
+    HELDOUT_MANIFEST,
+    _category,
+)
 
 from bosscrafts_model.artifact_schemas import (
     CHECKPOINT_EVALUATION_SCHEMA,
@@ -109,6 +113,7 @@ def verify_model_acceptance(
         inferences,
         categories,
         binding=BINDING,
+        heldout_manifest=HELDOUT_MANIFEST,
         heldout_cases=_heldout_cases(),
         task_database_identity_sha256=DATABASE_ID,
     )
@@ -452,6 +457,7 @@ class ModelAcceptanceTests(unittest.TestCase):
                 tuple(_inference(task) for task in FAMILIES),
                 _categories(),
                 binding=BINDING,
+                heldout_manifest=HELDOUT_MANIFEST,
                 heldout_cases=cases,
                 task_database_identity_sha256=DATABASE_ID,
             )
@@ -462,6 +468,7 @@ class ModelAcceptanceTests(unittest.TestCase):
                 tuple(_inference(task) for task in FAMILIES),
                 _categories(),
                 binding=BINDING,
+                heldout_manifest=HELDOUT_MANIFEST,
                 heldout_cases=_heldout_cases(),
                 task_database_identity_sha256="f" * 64,
             )
@@ -540,6 +547,7 @@ class ModelAcceptanceTests(unittest.TestCase):
                 ),
                 _categories(),
                 binding=BINDING,
+                heldout_manifest=HELDOUT_MANIFEST,
                 heldout_cases=cases,
                 task_database_identity_sha256=DATABASE_ID,
             )
@@ -637,6 +645,7 @@ class ModelAcceptanceTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("--task-database", completed.stdout)
+        self.assertIn("--heldout-manifest", completed.stdout)
         self.assertIn("--validation-evaluation", completed.stdout)
         self.assertIn("--code-to-semantic-inference", completed.stdout)
         self.assertIn("--tokenizer-fidelity-evidence", completed.stdout)
@@ -665,6 +674,21 @@ class ModelAcceptanceTests(unittest.TestCase):
             root = Path(directory)
             database = root / "tasks.sqlite"
             database_identity = _write_ground_truth_database(database)
+            heldout_manifest = copy.deepcopy(HELDOUT_MANIFEST)
+            heldout_manifest["task_database_identity_sha256"] = database_identity
+            heldout_unsigned = {
+                key: value
+                for key, value in heldout_manifest.items()
+                if key != "manifest_sha256"
+            }
+            heldout_manifest["manifest_sha256"] = hashlib.sha256(
+                json.dumps(
+                    heldout_unsigned,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).hexdigest()
             evidence = {
                 "validation.json": _evaluation("validation"),
                 "test.json": _evaluation("test"),
@@ -672,7 +696,13 @@ class ModelAcceptanceTests(unittest.TestCase):
                 **{f"{category}.json": _category(category) for category in CATEGORIES},
             }
             for payload in evidence.values():
+                if "heldout_manifest_sha256" in payload:
+                    payload["heldout_manifest_sha256"] = heldout_manifest[
+                        "manifest_sha256"
+                    ]
                 _rebind_database(payload, database_identity)
+            heldout_path = root / "heldout-manifest.json"
+            heldout_path.write_text(json.dumps(heldout_manifest), encoding="utf-8")
             for name, payload in evidence.items():
                 (root / name).write_text(json.dumps(payload), encoding="utf-8")
             output = root / "acceptance.json"
@@ -682,6 +712,8 @@ class ModelAcceptanceTests(unittest.TestCase):
                     str(project_root / "scripts" / "verify_model_acceptance.py"),
                     "--task-database",
                     str(database),
+                    "--heldout-manifest",
+                    str(heldout_path),
                     "--validation-evaluation",
                     str(root / "validation.json"),
                     "--test-evaluation",

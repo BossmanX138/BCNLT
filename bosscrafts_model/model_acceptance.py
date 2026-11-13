@@ -14,6 +14,7 @@ from .artifact_schemas import (
     CHECKPOINT_EVALUATION_SCHEMA,
     CHECKPOINT_INFERENCE_SCHEMA,
     MODEL_CATEGORY_EVIDENCE_SCHEMA,
+    MODEL_HELDOUT_SUITE_SCHEMA,
 )
 from .bcnlt_source_pipeline import (
     CURRENT_RUNTIME_SPEC_SHA256,
@@ -31,7 +32,7 @@ from .tokenizer import (
     NativeTokenizerBinding,
 )
 
-ACCEPTANCE_SCHEMA = "bosscrafts-model-acceptance-v7"
+ACCEPTANCE_SCHEMA = "bosscrafts-model-acceptance-v8"
 EXPECTED_MODEL_FINGERPRINT = ModelConfig(
     tokenizer_manifest=EXPECTED_BINDING_SHA256
 ).fingerprint()
@@ -68,6 +69,7 @@ MINIMUM_CATEGORY_EXAMPLES = {
     "regression": 1,
     "resources": 1,
 }
+MAXIMUM_CATEGORY_EXAMPLES = 100_000
 
 _EVALUATION_FIELDS = frozenset(
     {
@@ -176,6 +178,92 @@ def _is_sha256(value: object) -> TypeGuard[str]:
 
 def _payload_sha256(payload: dict[str, object]) -> str:
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
+
+
+def _canonical_sha256(value: object) -> str:
+    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class GroundedHeldoutSuite:
+    manifest_sha256: str
+    task_database_identity_sha256: str
+    category_example_ids_sha256: dict[str, str]
+    category_example_counts: dict[str, int]
+
+
+def verify_heldout_suite_manifest(
+    payload: dict[str, object],
+    *,
+    task_database_identity_sha256: str,
+) -> GroundedHeldoutSuite:
+    """Verify the exact held-out case inventory used by every acceptance category."""
+
+    required_fields = {
+        "categories",
+        "expected_languages",
+        "heldout_split",
+        "manifest_sha256",
+        "parser_runtime_identity_sha256",
+        "schema_version",
+        "structured_tasks",
+        "task_database_identity_sha256",
+        "tokenizer_sha256",
+    }
+    if type(payload) is not dict or set(payload) != required_fields:
+        raise ValueError("held-out suite fields do not match the acceptance schema")
+    if not _is_sha256(task_database_identity_sha256):
+        raise ValueError("held-out suite database identity is invalid")
+    supplied_hash = payload.get("manifest_sha256")
+    unsigned = {key: value for key, value in payload.items() if key != "manifest_sha256"}
+    if not _is_sha256(supplied_hash) or supplied_hash != _payload_sha256(unsigned):
+        raise ValueError("held-out suite integrity mismatch")
+    if (
+        payload.get("schema_version") != MODEL_HELDOUT_SUITE_SCHEMA
+        or payload.get("heldout_split") != "test"
+        or payload.get("task_database_identity_sha256")
+        != task_database_identity_sha256
+        or payload.get("parser_runtime_identity_sha256")
+        != PARSER_RUNTIME_IDENTITY_SHA256
+        or payload.get("tokenizer_sha256") != EXPECTED_TOKENIZER_SHA256
+        or payload.get("expected_languages") != list(EXPECTED_LANGUAGES)
+        or payload.get("structured_tasks") != list(STRUCTURED_TASKS)
+    ):
+        raise ValueError("held-out suite lineage mismatch")
+    categories = payload.get("categories")
+    if type(categories) is not dict or set(categories) != set(ACCEPTANCE_CATEGORIES):
+        raise ValueError("held-out suite category inventory is incomplete")
+
+    category_hashes: dict[str, str] = {}
+    category_counts: dict[str, int] = {}
+    for category in ACCEPTANCE_CATEGORIES:
+        entry = categories.get(category)
+        if type(entry) is not dict or set(entry) != {
+            "example_ids",
+            "example_ids_sha256",
+        }:
+            raise ValueError(f"{category} held-out inventory is invalid")
+        example_ids = entry.get("example_ids")
+        supplied_ids_hash = entry.get("example_ids_sha256")
+        if (
+            type(example_ids) is not list
+            or not MINIMUM_CATEGORY_EXAMPLES[category] <= len(example_ids)
+            <= MAXIMUM_CATEGORY_EXAMPLES
+            or any(not _is_sha256(example_id) for example_id in example_ids)
+            or example_ids != sorted(example_ids)
+            or len(set(example_ids)) != len(example_ids)
+            or not _is_sha256(supplied_ids_hash)
+            or supplied_ids_hash != _canonical_sha256(example_ids)
+        ):
+            raise ValueError(f"{category} held-out inventory is invalid")
+        category_hashes[category] = supplied_ids_hash
+        category_counts[category] = len(example_ids)
+    return GroundedHeldoutSuite(
+        manifest_sha256=supplied_hash,
+        task_database_identity_sha256=task_database_identity_sha256,
+        category_example_ids_sha256=category_hashes,
+        category_example_counts=category_counts,
+    )
 
 
 def _finite_number(value: object) -> TypeGuard[int | float]:
@@ -428,6 +516,7 @@ def verify_model_acceptance(
     category_evidence: Sequence[dict[str, object]],
     *,
     binding: NativeTokenizerBinding,
+    heldout_manifest: dict[str, object],
     heldout_cases: Mapping[str, HeldoutInferenceCase],
     task_database_identity_sha256: str,
 ) -> ModelAcceptanceResult:
@@ -443,6 +532,10 @@ def verify_model_acceptance(
         raise ValueError("acceptance ground-truth database identity is invalid")
     if type(binding) is not NativeTokenizerBinding:
         raise TypeError("acceptance requires a verified NativeTokenizerBinding")
+    heldout_suite = verify_heldout_suite_manifest(
+        heldout_manifest,
+        task_database_identity_sha256=task_database_identity_sha256,
+    )
     if not isinstance(heldout_cases, Mapping) or set(heldout_cases) != set(
         STRUCTURED_TASKS
     ):
@@ -670,6 +763,7 @@ def verify_model_acceptance(
             "evidence_complete",
             "example_count",
             "failure_codes",
+            "heldout_example_ids_sha256",
             "heldout_manifest_sha256",
             "heldout_split",
             "metrics",
@@ -696,11 +790,14 @@ def verify_model_acceptance(
             or payload.get("passed") is not True
             or payload.get("failure_codes") != []
             or payload.get("heldout_split") != "test"
-            or not _is_sha256(payload.get("heldout_manifest_sha256"))
+            or payload.get("heldout_manifest_sha256")
+            != heldout_suite.manifest_sha256
+            or payload.get("heldout_example_ids_sha256")
+            != heldout_suite.category_example_ids_sha256[category]
             or not _is_sha256(payload.get("parser_runtime_identity_sha256"))
             or not _is_sha256(payload.get("tokenizer_sha256"))
             or type(example_count) is not int
-            or example_count < MINIMUM_CATEGORY_EXAMPLES[category]
+            or example_count != heldout_suite.category_example_counts[category]
         ):
             raise ValueError(f"{category} acceptance evidence is incomplete")
         _verify_category_metrics(category, payload.get("metrics"))
@@ -756,7 +853,7 @@ def verify_model_acceptance(
         or len(tokenizer_ids) != 1
         or next(iter(tokenizer_ids)) != EXPECTED_TOKENIZER_SHA256
         or len(heldout_ids) != 1
-        or not _is_sha256(next(iter(heldout_ids)))
+        or next(iter(heldout_ids)) != heldout_suite.manifest_sha256
     ):
         raise ValueError("acceptance category lineage mismatch")
 
@@ -789,7 +886,7 @@ def verify_model_acceptance(
         },
         parser_runtime_identity_sha256=str(next(iter(parser_ids))),
         tokenizer_sha256=str(next(iter(tokenizer_ids))),
-        heldout_manifest_sha256=str(next(iter(heldout_ids))),
+        heldout_manifest_sha256=heldout_suite.manifest_sha256,
     )
 
 

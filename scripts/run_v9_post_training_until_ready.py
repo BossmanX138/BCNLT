@@ -32,6 +32,7 @@ V8_CHECKPOINT = (
 )
 V8_TRAINING_STATUS = V8_CHECKPOINT.with_name("training-controller-status.json")
 EVALUATION_ROOT = PROJECT_ROOT / "artifacts" / "evaluations" / "v9-post-training"
+HELDOUT_SUITE_MANIFEST = EVALUATION_ROOT / "heldout-suite-manifest.json"
 BUNDLE = PROJECT_ROOT / "artifacts" / "models" / "BossCrafts-Engineering-0.5B-v9"
 DEFAULT_STATUS = EVALUATION_ROOT / "post-training-controller-status.json"
 EXPECTED_DATABASE_IDENTITY = (
@@ -229,6 +230,8 @@ def _acceptance_command(
         str(PROJECT_ROOT / "scripts" / "verify_model_acceptance.py"),
         "--task-database",
         str(DATABASE),
+        "--heldout-manifest",
+        str(HELDOUT_SUITE_MANIFEST),
         "--validation-evaluation",
         str(EVALUATION_ROOT / "validation.json"),
         "--test-evaluation",

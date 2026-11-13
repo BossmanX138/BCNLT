@@ -77,6 +77,7 @@ class V9PostTrainingControllerTests(unittest.TestCase):
         command = _acceptance_command(inferences, categories, Path("acceptance.json"))
 
         self.assertIn("--task-database", command)
+        self.assertIn("--heldout-manifest", command)
         for category in ACCEPTANCE_CATEGORIES:
             option = f"--{category.replace('_', '-')}-evidence"
             self.assertEqual(command[command.index(option) + 1], str(categories[category]))

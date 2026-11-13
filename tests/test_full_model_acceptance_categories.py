@@ -10,6 +10,7 @@ from bosscrafts_model.artifact_schemas import (
     CHECKPOINT_EVALUATION_SCHEMA,
     CHECKPOINT_INFERENCE_SCHEMA,
     MODEL_CATEGORY_EVIDENCE_SCHEMA,
+    MODEL_HELDOUT_SUITE_SCHEMA,
 )
 from bosscrafts_model.bcnlt_source_pipeline import (
     CURRENT_RUNTIME_SPEC_SHA256,
@@ -21,6 +22,7 @@ from bosscrafts_model.inference_protocol import (
 )
 from bosscrafts_model.model_acceptance import (
     EXPECTED_MODEL_FINGERPRINT,
+    verify_heldout_suite_manifest,
 )
 from bosscrafts_model.model_acceptance import (
     verify_model_acceptance as _verify_model_acceptance,
@@ -33,7 +35,6 @@ from bosscrafts_model.tokenizer import (
 DATABASE_ID = "a" * 64
 MODEL_ID = EXPECTED_MODEL_FINGERPRINT
 TOKENIZER_ID = EXPECTED_TOKENIZER_SHA256
-HELDOUT_ID = "d" * 64
 CHECKPOINT_ID = "e" * 64
 FAMILIES = ("code_to_semantic", "semantic_continuation", "semantic_to_code")
 LANGUAGES = tuple(sorted(CURRENT_RUNTIME_SPEC_SHA256))
@@ -48,12 +49,57 @@ CATEGORIES = (
     "regression",
     "resources",
 )
+CATEGORY_MINIMUMS = {
+    "tokenizer_fidelity": 1_024,
+    "semantic_fidelity": 1_792,
+    "raw_code": 1_400,
+    "ordinary_instruction": 512,
+    "execution_correctness": 512,
+    "safety": 256,
+    "regression": 1,
+    "resources": 1,
+}
 
 
 def _canonical(value: object) -> bytes:
     return json.dumps(
         value, ensure_ascii=False, separators=(",", ":"), sort_keys=True
     ).encode("utf-8")
+
+
+def _heldout_suite_manifest() -> dict[str, object]:
+    categories: dict[str, object] = {}
+    for category in CATEGORIES:
+        example_ids = sorted(
+            hashlib.sha256(f"{category}:{index}".encode()).hexdigest()
+            for index in range(CATEGORY_MINIMUMS[category])
+        )
+        categories[category] = {
+            "example_ids": example_ids,
+            "example_ids_sha256": hashlib.sha256(_canonical(example_ids)).hexdigest(),
+        }
+    unsigned: dict[str, object] = {
+        "schema_version": MODEL_HELDOUT_SUITE_SCHEMA,
+        "task_database_identity_sha256": DATABASE_ID,
+        "parser_runtime_identity_sha256": PARSER_RUNTIME_IDENTITY_SHA256,
+        "tokenizer_sha256": TOKENIZER_ID,
+        "heldout_split": "test",
+        "expected_languages": list(LANGUAGES),
+        "structured_tasks": list(FAMILIES),
+        "categories": categories,
+    }
+    return {
+        **unsigned,
+        "manifest_sha256": hashlib.sha256(_canonical(unsigned)).hexdigest(),
+    }
+
+
+HELDOUT_MANIFEST = _heldout_suite_manifest()
+HELDOUT_SUITE = verify_heldout_suite_manifest(
+    HELDOUT_MANIFEST,
+    task_database_identity_sha256=DATABASE_ID,
+)
+HELDOUT_ID = HELDOUT_SUITE.manifest_sha256
 
 
 def _heldout_case(task: str) -> HeldoutInferenceCase:
@@ -93,6 +139,7 @@ def verify_model_acceptance(evaluations: object, inferences: object, categories:
         inferences,
         categories,
         binding=BINDING,
+        heldout_manifest=HELDOUT_MANIFEST,
         heldout_cases=_heldout_cases(),
         task_database_identity_sha256=DATABASE_ID,
     )
@@ -258,24 +305,17 @@ def _metrics(category: str) -> dict[str, object]:
 
 
 def _category(category: str) -> dict[str, object]:
-    minimum_examples = {
-        "tokenizer_fidelity": 1_024,
-        "semantic_fidelity": 1_792,
-        "raw_code": 1_400,
-        "ordinary_instruction": 512,
-        "execution_correctness": 512,
-        "safety": 256,
-        "regression": 1,
-        "resources": 1,
-    }
     payload: dict[str, object] = {
         "schema_version": MODEL_CATEGORY_EVIDENCE_SCHEMA,
         "category": category,
         "checkpoint_sha256": CHECKPOINT_ID,
         "checkpoint_step": 86_016,
         "evidence_complete": True,
-        "example_count": minimum_examples[category],
+        "example_count": CATEGORY_MINIMUMS[category],
         "failure_codes": [],
+        "heldout_example_ids_sha256": (
+            HELDOUT_SUITE.category_example_ids_sha256[category]
+        ),
         "heldout_manifest_sha256": HELDOUT_ID,
         "heldout_split": "test",
         "metrics": _metrics(category),
@@ -306,6 +346,7 @@ class FullModelAcceptanceCategoryTests(unittest.TestCase):
             result.parser_runtime_identity_sha256, PARSER_RUNTIME_IDENTITY_SHA256
         )
         self.assertEqual(result.tokenizer_sha256, TOKENIZER_ID)
+        self.assertEqual(result.heldout_manifest_sha256, HELDOUT_ID)
 
     def test_missing_or_failed_category_cannot_be_hidden_by_loss_improvement(self):
         evidence = [_category(category) for category in CATEGORIES]
@@ -374,6 +415,59 @@ class FullModelAcceptanceCategoryTests(unittest.TestCase):
             item["artifact_sha256"] = hashlib.sha256(_canonical(body)).hexdigest()
         with self.assertRaisesRegex(ValueError, "category lineage"):
             self._verify(tuple(wrong_tokenizer))
+
+        invented_manifest = copy.deepcopy(evidence)
+        for item in invented_manifest:
+            item["heldout_manifest_sha256"] = "f" * 64
+            body = {
+                key: value for key, value in item.items() if key != "artifact_sha256"
+            }
+            item["artifact_sha256"] = hashlib.sha256(_canonical(body)).hexdigest()
+        with self.assertRaisesRegex(ValueError, "incomplete|lineage"):
+            self._verify(tuple(invented_manifest))
+
+        wrong_inventory = copy.deepcopy(evidence)
+        wrong_inventory[0]["heldout_example_ids_sha256"] = "f" * 64
+        body = {
+            key: value
+            for key, value in wrong_inventory[0].items()
+            if key != "artifact_sha256"
+        }
+        wrong_inventory[0]["artifact_sha256"] = hashlib.sha256(
+            _canonical(body)
+        ).hexdigest()
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            self._verify(tuple(wrong_inventory))
+
+    def test_heldout_suite_rejects_forged_or_ambiguous_case_inventory(self):
+        forged = copy.deepcopy(HELDOUT_MANIFEST)
+        forged["task_database_identity_sha256"] = "f" * 64
+        unsigned = {
+            key: value for key, value in forged.items() if key != "manifest_sha256"
+        }
+        forged["manifest_sha256"] = hashlib.sha256(_canonical(unsigned)).hexdigest()
+        with self.assertRaisesRegex(ValueError, "lineage"):
+            verify_heldout_suite_manifest(
+                forged,
+                task_database_identity_sha256=DATABASE_ID,
+            )
+
+        duplicate = copy.deepcopy(HELDOUT_MANIFEST)
+        inventory = duplicate["categories"]["tokenizer_fidelity"]
+        inventory["example_ids"][1] = inventory["example_ids"][0]
+        inventory["example_ids"] = sorted(inventory["example_ids"])
+        inventory["example_ids_sha256"] = hashlib.sha256(
+            _canonical(inventory["example_ids"])
+        ).hexdigest()
+        unsigned = {
+            key: value for key, value in duplicate.items() if key != "manifest_sha256"
+        }
+        duplicate["manifest_sha256"] = hashlib.sha256(_canonical(unsigned)).hexdigest()
+        with self.assertRaisesRegex(ValueError, "inventory"):
+            verify_heldout_suite_manifest(
+                duplicate,
+                task_database_identity_sha256=DATABASE_ID,
+            )
 
     def test_semantic_fidelity_requires_strict_uncertainty_receipt(self):
         evidence = [_category(category) for category in CATEGORIES]
