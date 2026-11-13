@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import unittest
+from dataclasses import replace
 
 from bosscrafts_model.artifact_schemas import (
     CHECKPOINT_EVALUATION_SCHEMA,
@@ -26,6 +27,9 @@ from bosscrafts_model.model_acceptance import (
 )
 from bosscrafts_model.model_acceptance import (
     verify_model_acceptance as _verify_model_acceptance,
+)
+from bosscrafts_model.strict_uncertainty_acceptance import (
+    StrictUncertaintyAcceptanceReceipt,
 )
 from bosscrafts_model.tokenizer import (
     EXPECTED_TOKENIZER_SHA256,
@@ -245,8 +249,42 @@ def _inference(task: str) -> dict[str, object]:
     }
 
 
+def _strict_receipt_payload() -> dict[str, object]:
+    policy = {
+        "minimum_global_selective_coverage_at_025": 0.5,
+        "maximum_global_selective_error_rate_at_025": 0.1,
+        "minimum_per_language_selective_coverage_at_025": 0.5,
+        "maximum_per_language_selective_error_rate_at_025": 0.1,
+    }
+    metric = {
+        "sample_count": 1,
+        "brier": 0.1,
+        "ece": 0.1,
+        "selective_coverage_at_025": 1.0,
+        "selective_error_rate_at_025": 0.0,
+    }
+    provisional = StrictUncertaintyAcceptanceReceipt(
+        schema_version="bosscrafts-strict-uncertainty-acceptance-v1",
+        calibration_artifact_sha256="8" * 64,
+        parser_runtime_identity_sha256=PARSER_RUNTIME_IDENTITY_SHA256,
+        policy=policy,
+        global_metrics={**metric, "sample_count": len(LANGUAGES)},
+        per_language_metrics={language: dict(metric) for language in LANGUAGES},
+        upstream_promoted=True,
+        passed=True,
+        failure_codes=(),
+        receipt_sha256="",
+    )
+    receipt = replace(
+        provisional,
+        receipt_sha256=provisional.compute_sha256(),
+    )
+    return receipt.to_dict()
+
+
 def _metrics(category: str) -> dict[str, object]:
     language_passes = {language: True for language in LANGUAGES}
+    strict_receipt = _strict_receipt_payload()
     return {
         "tokenizer_fidelity": {
             "exact_roundtrip_rate": 1.0,
@@ -259,7 +297,7 @@ def _metrics(category: str) -> dict[str, object]:
             "unknown_semantic_rate": 0.0,
             "language_passes": language_passes,
             "strict_uncertainty_acceptance_passed": True,
-            "strict_uncertainty_receipt_sha256": "9" * 64,
+            "strict_uncertainty_receipt_sha256": strict_receipt["receipt_sha256"],
         },
         "raw_code": {
             "exact_roundtrip_rate": 1.0,
@@ -376,6 +414,11 @@ def _records(category: str) -> list[dict[str, object]]:
 
 
 def _category(category: str) -> dict[str, object]:
+    supporting_evidence = (
+        {"strict_uncertainty_receipt": _strict_receipt_payload()}
+        if category == "semantic_fidelity"
+        else {}
+    )
     payload: dict[str, object] = {
         "schema_version": MODEL_CATEGORY_EVIDENCE_SCHEMA,
         "category": category,
@@ -394,6 +437,7 @@ def _category(category: str) -> dict[str, object]:
         "parser_runtime_identity_sha256": PARSER_RUNTIME_IDENTITY_SHA256,
         "passed": True,
         "records": _records(category),
+        "supporting_evidence": supporting_evidence,
         "task_database_identity_sha256": DATABASE_ID,
         "tokenizer_sha256": TOKENIZER_ID,
     }
@@ -635,6 +679,45 @@ class FullModelAcceptanceCategoryTests(unittest.TestCase):
         semantic["artifact_sha256"] = hashlib.sha256(_canonical(body)).hexdigest()
         with self.assertRaisesRegex(ValueError, "semantic_fidelity"):
             self._verify(tuple(evidence))
+
+        forged = [_category(category) for category in CATEGORIES]
+        forged_semantic = next(
+            item for item in forged if item["category"] == "semantic_fidelity"
+        )
+        raw_receipt = forged_semantic["supporting_evidence"][
+            "strict_uncertainty_receipt"
+        ]
+        receipt = StrictUncertaintyAcceptanceReceipt(
+            schema_version=raw_receipt["schema_version"],
+            calibration_artifact_sha256=raw_receipt[
+                "calibration_artifact_sha256"
+            ],
+            parser_runtime_identity_sha256="f" * 64,
+            policy=raw_receipt["policy"],
+            global_metrics=raw_receipt["global_metrics"],
+            per_language_metrics=raw_receipt["per_language_metrics"],
+            upstream_promoted=True,
+            passed=True,
+            failure_codes=(),
+            receipt_sha256="",
+        )
+        receipt = replace(receipt, receipt_sha256=receipt.compute_sha256())
+        forged_semantic["supporting_evidence"] = {
+            "strict_uncertainty_receipt": receipt.to_dict()
+        }
+        forged_semantic["metrics"]["strict_uncertainty_receipt_sha256"] = (
+            receipt.receipt_sha256
+        )
+        body = {
+            key: value
+            for key, value in forged_semantic.items()
+            if key != "artifact_sha256"
+        }
+        forged_semantic["artifact_sha256"] = hashlib.sha256(
+            _canonical(body)
+        ).hexdigest()
+        with self.assertRaisesRegex(ValueError, "current runtime gates"):
+            self._verify(tuple(forged))
 
     def test_category_rates_must_be_probabilities(self):
         invalid_rates = (

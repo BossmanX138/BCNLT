@@ -26,13 +26,16 @@ from .inference_protocol import (
     response_payload_token_ids,
     response_protocol_complete,
 )
+from .strict_uncertainty_acceptance import (
+    validate_strict_uncertainty_receipt_payload,
+)
 from .tokenizer import (
     EXPECTED_BINDING_SHA256,
     EXPECTED_TOKENIZER_SHA256,
     NativeTokenizerBinding,
 )
 
-ACCEPTANCE_SCHEMA = "bosscrafts-model-acceptance-v9"
+ACCEPTANCE_SCHEMA = "bosscrafts-model-acceptance-v10"
 EXPECTED_MODEL_FINGERPRINT = ModelConfig(
     tokenizer_manifest=EXPECTED_BINDING_SHA256
 ).fingerprint()
@@ -776,6 +779,7 @@ def verify_model_acceptance(
             "passed",
             "records",
             "schema_version",
+            "supporting_evidence",
             "task_database_identity_sha256",
             "tokenizer_sha256",
         }
@@ -805,11 +809,15 @@ def verify_model_acceptance(
             or example_count != heldout_suite.category_example_counts[category]
         ):
             raise ValueError(f"{category} acceptance evidence is incomplete")
+        supporting_metrics = _validated_category_supporting_evidence(
+            category,
+            payload.get("supporting_evidence"),
+        )
         recomputed_metrics = recompute_category_metrics(
             category,
             payload.get("records"),
             heldout_suite.category_example_ids[category],
-            payload.get("metrics"),
+            supporting_metrics,
         )
         if payload.get("metrics") != recomputed_metrics:
             raise ValueError(f"{category} metrics do not match held-out records")
@@ -930,6 +938,30 @@ def _language_passes(metrics: dict[str, object]) -> None:
         language: True for language in EXPECTED_LANGUAGES
     }:
         raise ValueError("acceptance category does not pass every language")
+
+
+def _validated_category_supporting_evidence(
+    category: str,
+    value: object,
+) -> dict[str, object]:
+    if category != "semantic_fidelity":
+        if value != {}:
+            raise ValueError(f"{category} supporting evidence must be empty")
+        return {}
+    if type(value) is not dict or set(value) != {"strict_uncertainty_receipt"}:
+        raise ValueError("semantic_fidelity supporting evidence is incomplete")
+    raw_receipt = value.get("strict_uncertainty_receipt")
+    if type(raw_receipt) is not dict:
+        raise ValueError("semantic_fidelity uncertainty receipt is invalid")
+    receipt = validate_strict_uncertainty_receipt_payload(
+        raw_receipt,
+        expected_parser_runtime_identity_sha256=PARSER_RUNTIME_IDENTITY_SHA256,
+        expected_languages=EXPECTED_LANGUAGES,
+    )
+    return {
+        "strict_uncertainty_acceptance_passed": receipt.passed,
+        "strict_uncertainty_receipt_sha256": receipt.receipt_sha256,
+    }
 
 
 _CATEGORY_RECORD_FIELDS = {
