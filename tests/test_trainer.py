@@ -117,7 +117,9 @@ class TrainerTests(unittest.TestCase):
             gradient_accumulation=8,
         )
 
-        for expected, actual in zip(reference.parameters(), accumulated.parameters()):
+        for expected, actual in zip(
+            reference.parameters(), accumulated.parameters(), strict=True
+        ):
             self.assertTrue(torch.allclose(expected, actual, atol=1e-7, rtol=1e-6))
 
     def test_bounded_training_script_checkpoints_and_resumes_after_cursor(self):

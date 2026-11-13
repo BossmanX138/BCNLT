@@ -7,7 +7,6 @@ from scripts.run_v9_post_training_until_ready import (
     EXPECTED_DATABASE_IDENTITY,
     EXPECTED_MODEL_FINGERPRINT,
     EXPECTED_OPTIMIZER_STEPS,
-    EXPECTED_RUNTIME_IDENTITY,
     EXPECTED_SPLIT_COUNT,
     _evaluation_command,
     _inference_command,

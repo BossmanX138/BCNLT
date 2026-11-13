@@ -23,7 +23,10 @@ class TrainingScheduleTests(unittest.TestCase):
         self.assertAlmostEqual(values[-1], 0.0001)
         self.assertTrue(all(math.isfinite(value) and value > 0 for value in values))
         self.assertTrue(
-            all(left >= right for left, right in zip(values[1:], values[2:]))
+            all(
+                left >= right
+                for left, right in zip(values[1:], values[2:], strict=False)
+            )
         )
 
     def test_schedule_rejects_steps_outside_the_frozen_plan(self):

@@ -1,20 +1,21 @@
 """Deterministic held-out review queues for current-spec semantic records."""
 from __future__ import annotations
 
-from collections.abc import Iterable
-from dataclasses import dataclass
 import hashlib
 import json
+from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
+from .bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
 from .current_task_packing import (
     EXAMPLE_SCHEMA,
     PACKED_MANIFEST_SCHEMA,
     CurrentCorpusTaskPacker,
 )
-from .bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
+from .jsonl import split_jsonl_records
 from .tokenizer import NativeTokenizerBinding
-
 
 REVIEW_ITEM_SCHEMA = "bosscrafts-heldout-semantic-review-item-v2"
 REVIEW_MANIFEST_SCHEMA = "bosscrafts-heldout-semantic-review-manifest-v2"
@@ -151,7 +152,7 @@ class HeldoutSemanticReviewQueue:
             admitted = admitted_by_document.get(str(example["document_id"]))
             if admitted is None:
                 raise ValueError("packed example document is absent from admission records")
-            canonical_lines = str(admitted["canonical_jsonl"]).splitlines()
+            canonical_lines = split_jsonl_records(str(admitted["canonical_jsonl"]))
             record_index_value = example["record_index"]
             if type(record_index_value) is not int:
                 raise ValueError("packed example record index is not an integer")
@@ -269,11 +270,11 @@ class HeldoutSemanticReviewQueue:
             split = CurrentCorpusTaskPacker._split(str(admitted["document_id"]))
             if split not in {"validation", "test"}:
                 continue
-            canonical_lines = str(admitted["canonical_jsonl"]).splitlines()
+            canonical_lines = split_jsonl_records(str(admitted["canonical_jsonl"]))
             if not canonical_lines:
                 continue
             selector = hashlib.sha256(
-                f"{admitted['document_id']}:semantic-review".encode("utf-8")
+                f"{admitted['document_id']}:semantic-review".encode()
             ).digest()
             record_index = int.from_bytes(selector[:8], "big") % len(canonical_lines)
             try:
@@ -410,13 +411,15 @@ class HeldoutSemanticReviewQueue:
 class HeldoutSemanticReviewAdjudicator:
     """Validate and freeze explicit human/model decisions for a review queue."""
 
-    _RUBRIC_FIELDS = {
-        "event_matches_source",
-        "ir_kind_plausible",
-        "scope_plausible",
-        "span_matches_source",
-        "uncertainty_calibrated",
-    }
+    _RUBRIC_FIELDS: ClassVar[frozenset[str]] = frozenset(
+        (
+            "event_matches_source",
+            "ir_kind_plausible",
+            "scope_plausible",
+            "span_matches_source",
+            "uncertainty_calibrated",
+        )
+    )
 
     def materialize(
         self,
@@ -441,7 +444,7 @@ class HeldoutSemanticReviewAdjudicator:
         if _sha256_text(queue_text) != source_manifest.get("queue_sha256"):
             raise ValueError("review queue SHA-256 mismatch")
         items: list[dict[str, object]] = []
-        for line in queue_text.splitlines():
+        for line in split_jsonl_records(queue_text):
             try:
                 item = json.loads(line)
             except json.JSONDecodeError as error:

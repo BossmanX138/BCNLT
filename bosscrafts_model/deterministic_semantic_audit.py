@@ -1,16 +1,16 @@
 """Deterministic pre-audit for objective BCNLT semantic-record invariants."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
 import os
-from pathlib import Path
 import tempfile
+from dataclasses import dataclass
+from pathlib import Path
 from typing import TypeGuard
 
-from .local_semantic_review import DualLocalSemanticReviewer, _SEMANTIC_CONTRACT
-
+from .jsonl import split_jsonl_records
+from .local_semantic_review import _SEMANTIC_CONTRACT, DualLocalSemanticReviewer
 
 _SOURCE_MANIFEST_SCHEMA = "bosscrafts-heldout-semantic-review-manifest-v2"
 _SOURCE_ITEM_SCHEMA = "bosscrafts-heldout-semantic-review-item-v2"
@@ -221,7 +221,7 @@ class DeterministicSemanticAuditReport:
         findings_text, manifest = self._evaluate(Path(source_root).resolve())
         _atomic_write(output / "findings.jsonl", findings_text.encode("utf-8"))
         _atomic_write(
-            output / "manifest.json", f"{_canonical(manifest)}\n".encode("utf-8")
+            output / "manifest.json", f"{_canonical(manifest)}\n".encode()
         )
         return self._result(output, manifest)
 
@@ -259,7 +259,7 @@ class DeterministicSemanticAuditReport:
         if _sha256_text(queue_text) != manifest.get("queue_sha256"):
             raise ValueError("semantic source queue SHA-256 mismatch")
         rows: list[dict[str, object]] = []
-        for line in queue_text.splitlines():
+        for line in split_jsonl_records(queue_text):
             try:
                 row = json.loads(line)
             except json.JSONDecodeError as exc:

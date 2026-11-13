@@ -1,16 +1,17 @@
 """Bounded, split-exact curriculum selected only from audited eligible sources."""
 from __future__ import annotations
 
-from collections import Counter, defaultdict
-from dataclasses import dataclass
 import hashlib
 import heapq
 import json
 import math
-from pathlib import Path
 import sqlite3
-from typing import Mapping, cast
 import zlib
+from collections import Counter, defaultdict
+from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Self, cast
 
 from .bcnlt_adapter import MAX_CANONICAL_OUTPUT_BYTES
 from .bcnlt_source_pipeline import (
@@ -20,7 +21,8 @@ from .bcnlt_source_pipeline import (
 from .compact_semantic_wire import COMPACT_SEMANTIC_WIRE_SCHEMA
 from .compact_task_packing import CompactCurrentCorpusTaskPacker
 from .compression import decompress_bounded
-from .current_task_packing import CurrentCorpusTaskPacker, FAMILIES
+from .current_task_packing import FAMILIES, CurrentCorpusTaskPacker
+from .jsonl import split_jsonl_records
 from .resumable_current_corpus import RESUMABLE_SCHEMA
 from .resumable_task_packing import (
     FULL_SEMANTIC_WIRE_SCHEMA,
@@ -37,7 +39,6 @@ from .training_eligibility import (
     ELIGIBILITY_MANIFEST_SCHEMA,
     ELIGIBLE_DOCUMENT_SCHEMA,
 )
-
 
 AUDITED_CURRICULUM_SCHEMA = "bosscrafts-audited-balanced-curriculum-v1"
 SPLITS = ("train", "validation", "test")
@@ -88,7 +89,7 @@ class _PromptClaimIndex:
         self._connection: sqlite3.Connection | None = None
         self._pending = 0
 
-    def __enter__(self) -> "_PromptClaimIndex":
+    def __enter__(self) -> Self:
         if self.path.exists():
             raise ValueError("prompt-claim scratch database already exists")
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -275,7 +276,7 @@ def _load_eligibility(
     ):
         raise ValueError("audited source eligibility inventory SHA-256 mismatch")
     eligible_ids: set[str] = set()
-    for line in eligible_text.splitlines():
+    for line in split_jsonl_records(eligible_text):
         try:
             row = json.loads(line)
         except json.JSONDecodeError as exc:

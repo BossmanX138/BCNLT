@@ -63,6 +63,7 @@ AUDIT_HOST_CODE_FILES = (
     "bosscrafts_model/deterministic_semantic_audit.py",
     "bosscrafts_model/local_semantic_review.py",
     "bosscrafts_model/heldout_semantic_review.py",
+    "bosscrafts_model/jsonl.py",
     "bosscrafts_model/bcnlt_source_pipeline.py",
     "bosscrafts_model/raw_ast_witness.py",
     "bosscrafts_model/raw_ast_witness_sidecar.py",

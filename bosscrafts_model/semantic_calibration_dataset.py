@@ -1,20 +1,20 @@
 """Freeze dual-reviewed semantic records into disjoint calibration splits."""
 from __future__ import annotations
 
-from collections.abc import Iterable
-from dataclasses import dataclass
 import hashlib
 import json
 import os
-from pathlib import Path
 import tempfile
+from collections.abc import Iterable
+from dataclasses import dataclass
+from pathlib import Path
 
 from .heldout_semantic_review import REVIEW_ITEM_SCHEMA, REVIEW_MANIFEST_SCHEMA
+from .jsonl import split_jsonl_records
 from .local_semantic_review import (
     DualLocalSemanticReviewer,
     LocalReviewerSpec,
 )
-
 
 _MANIFEST_SCHEMA = "bosscrafts-semantic-calibration-dataset-v1"
 _OBSERVATION_SCHEMA = "bosscrafts-semantic-uncertainty-observation-v1"
@@ -311,7 +311,7 @@ class SemanticCalibrationDatasetBuilder:
         manifest = {**unsigned, "manifest_sha256": manifest_sha256}
         _atomic_write(
             output_path / "manifest.json",
-            f"{_canonical(manifest)}\n".encode("utf-8"),
+            f"{_canonical(manifest)}\n".encode(),
         )
         return SemanticCalibrationDatasetResult(
             output_root=output_path,
@@ -368,7 +368,7 @@ class SemanticCalibrationDatasetBuilder:
         if _sha256_text(text) != expected_sha256:
             raise ValueError(f"{name} SHA-256 mismatch")
         rows = []
-        for line in text.splitlines():
+        for line in split_jsonl_records(text):
             try:
                 row = json.loads(line)
             except json.JSONDecodeError as exc:

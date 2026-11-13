@@ -1,27 +1,29 @@
 """Crash-resumable current-lineage task packing backed by committed SQLite rows."""
 from __future__ import annotations
 
-from array import array
-from collections import Counter, defaultdict
-from dataclasses import dataclass
 import hashlib
 import json
 import math
-from pathlib import Path
 import sqlite3
 import sys
-from typing import Iterator, TypedDict, cast
 import zlib
+from array import array
+from collections import Counter, defaultdict
+from collections.abc import Iterator
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TypedDict, cast
 
+from .bcnlt_adapter import MAX_CANONICAL_OUTPUT_BYTES
 from .bcnlt_source_pipeline import (
     PARSER_RUNTIME_IDENTITY_SHA256,
     PARSER_RUNTIME_NOT_APPLICABLE,
 )
-from .bcnlt_adapter import MAX_CANONICAL_OUTPUT_BYTES
 from .compact_semantic_wire import COMPACT_SEMANTIC_WIRE_SCHEMA
 from .compact_task_packing import CompactCurrentCorpusTaskPacker
 from .compression import decompress_bounded
 from .current_task_packing import CurrentCorpusTaskPacker
+from .jsonl import split_jsonl_records
 from .resumable_current_corpus import RESUMABLE_SCHEMA
 from .resumable_training_semantic_audit import ResumableTrainingSemanticAudit
 from .tokenizer import NativeTokenizerBinding
@@ -29,7 +31,6 @@ from .training_eligibility import (
     ELIGIBILITY_MANIFEST_SCHEMA,
     ELIGIBLE_DOCUMENT_SCHEMA,
 )
-
 
 TASK_DATABASE_SCHEMA = "bosscrafts-current-task-resumable-v3"
 FULL_SEMANTIC_WIRE_SCHEMA = "bosscrafts-full-semantic-wire-v3"
@@ -74,9 +75,7 @@ def salted_source_example_id(source_kind: str, source_example_id: str) -> str:
     ):
         raise ValueError("source example ID is invalid")
     return hashlib.sha256(
-        f"{SALTED_SOURCE_EXAMPLE_ID_POLICY}:{source_kind}:{source_example_id}".encode(
-            "utf-8"
-        )
+        f"{SALTED_SOURCE_EXAMPLE_ID_POLICY}:{source_kind}:{source_example_id}".encode()
     ).hexdigest()
 
 
@@ -628,7 +627,7 @@ class ResumableCurrentTaskPacking:
         ):
             raise ValueError("training eligibility inventory SHA-256 mismatch")
         eligible_ids: set[str] = set()
-        for line in content.splitlines():
+        for line in split_jsonl_records(content):
             try:
                 row = json.loads(line)
             except json.JSONDecodeError as error:

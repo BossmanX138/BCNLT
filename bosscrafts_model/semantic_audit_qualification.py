@@ -1,16 +1,16 @@
 """Qualification of combined deterministic and raw-AST semantic audits."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
 import os
-from pathlib import Path
 import tempfile
+from dataclasses import dataclass
+from pathlib import Path
 from typing import TypeGuard
 
+from .jsonl import split_jsonl_records
 from .semantic_challenge_review import SemanticChallengeReviewBuilder
-
 
 _REPORT_SCHEMA = "bosscrafts-combined-semantic-audit-qualification-v1"
 _DETERMINISTIC_SCHEMA = "bosscrafts-deterministic-semantic-audit-manifest-v1"
@@ -104,7 +104,7 @@ class SemanticAuditQualificationEvaluator:
             Path(raw_ast_root).resolve(),
         )
         _atomic_write(
-            output / "qualification.json", f"{_canonical(report)}\n".encode("utf-8")
+            output / "qualification.json", f"{_canonical(report)}\n".encode()
         )
         return self._result(output, report)
 
@@ -328,7 +328,7 @@ class SemanticAuditQualificationEvaluator:
         if _sha256_text(text) != expected_sha256:
             raise ValueError(f"{name} SHA-256 mismatch")
         rows: list[dict[str, object]] = []
-        for line in text.splitlines():
+        for line in split_jsonl_records(text):
             try:
                 row = json.loads(line)
             except json.JSONDecodeError as exc:

@@ -4,21 +4,20 @@ from __future__ import annotations
 import hashlib
 import itertools
 import json
-from pathlib import Path
 import sys
-
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from bosscrafts_model.bcnlt_source_pipeline import (  # noqa: E402
+from bosscrafts_model.bcnlt_source_pipeline import (
     PARSER_RUNTIME_IDENTITY_SHA256,
 )
-from bosscrafts_model.heldout_semantic_review import (  # noqa: E402
+from bosscrafts_model.heldout_semantic_review import (
     HeldoutSemanticReviewAdjudicator,
 )
-
+from bosscrafts_model.jsonl import split_jsonl_records
 
 BASELINE_IDENTITY = "425695e335c022996677e8ab7459bf68e679c32cb619d366bc6051fa9ac43011"
 BASELINE_ADMISSION = (
@@ -151,10 +150,12 @@ def _verify_admission_equivalence() -> tuple[int, str, str, str]:
         if baseline_static != candidate_static:
             raise ValueError(f"V5/V6 static admission fields differ at row {count}")
         baseline_records = [
-            json.loads(line) for line in str(baseline_row["canonical_jsonl"]).splitlines()
+            json.loads(line)
+            for line in split_jsonl_records(str(baseline_row["canonical_jsonl"]))
         ]
         candidate_records = [
-            json.loads(line) for line in str(candidate_row["canonical_jsonl"]).splitlines()
+            json.loads(line)
+            for line in split_jsonl_records(str(candidate_row["canonical_jsonl"]))
         ]
         if len(baseline_records) != len(candidate_records):
             raise ValueError(f"V5/V6 record count differs at row {count}")

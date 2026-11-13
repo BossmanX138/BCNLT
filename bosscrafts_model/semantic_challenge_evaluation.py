@@ -1,17 +1,17 @@
 """Fail-closed qualification of local reviewers on blinded semantic controls."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
 import os
-from pathlib import Path
 import tempfile
+from dataclasses import dataclass
+from pathlib import Path
 from typing import TypeGuard
 
+from .jsonl import split_jsonl_records
 from .local_semantic_review import DualLocalSemanticReviewer, LocalReviewerSpec
 from .semantic_challenge_review import SemanticChallengeReviewBuilder
-
 
 _REPORT_SCHEMA = "bosscrafts-semantic-challenge-qualification-v1"
 _REVIEW_MANIFEST_SCHEMA = "bosscrafts-dual-local-semantic-review-manifest-v2"
@@ -149,7 +149,7 @@ class SemanticChallengeEvaluator:
         report = self._evaluate(Path(challenge_root).resolve(), Path(review_root).resolve())
         _atomic_write(
             output / "qualification.json",
-            f"{_canonical(report)}\n".encode("utf-8"),
+            f"{_canonical(report)}\n".encode(),
         )
         return self._result(output, report)
 
@@ -464,7 +464,7 @@ class SemanticChallengeEvaluator:
         if missing_ok and not path.exists():
             return []
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
+            lines = split_jsonl_records(path.read_text(encoding="utf-8"))
         except OSError as exc:
             raise ValueError(f"{name} cannot be read") from exc
         rows: list[dict[str, object]] = []

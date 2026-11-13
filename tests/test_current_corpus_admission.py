@@ -2,24 +2,24 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import replace
-from pathlib import Path
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
+from pathlib import Path
 
 from bosscrafts_model.bcnlt_source_pipeline import (
-    BCNLTSourcePipeline,
     CURRENT_RUNTIME_SPEC_SHA256,
     PARSER_RUNTIME_IDENTITY_SHA256,
+    BCNLTSourcePipeline,
 )
 from bosscrafts_model.current_corpus import (
-    CurrentCorpusAdmission,
     RECORD_SCHEMA,
-    SQLiteSourceCatalog,
+    CurrentCorpusAdmission,
     SourceCandidate,
+    SQLiteSourceCatalog,
 )
 from bosscrafts_model.tokenizer import NativeTokenizerBinding
 
@@ -147,11 +147,18 @@ class CurrentCorpusAdmissionTests(unittest.TestCase):
             ]
             self.assertEqual(
                 {row["reason_code"] for row in rows},
-                {"duplicate_document_id", "content_hash_mismatch", "unsupported_language", "semantic_parse_failure"},
+                {
+                    "duplicate_document_id",
+                    "content_hash_mismatch",
+                    "unsupported_language",
+                    "semantic_preprocessing_failure",
+                },
             )
             self.assertTrue(all("raw_token_ids" not in row for row in rows))
             parse_rejection = next(
-                row for row in rows if row["reason_code"] == "semantic_parse_failure"
+                row
+                for row in rows
+                if row["reason_code"] == "semantic_preprocessing_failure"
             )
             self.assertIn("BCNLT parser", parse_rejection["detail"])
 

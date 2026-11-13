@@ -1,28 +1,27 @@
 """Crash-resumable current-spec admission backed by committed SQLite rows."""
 from __future__ import annotations
 
-from array import array
 import atexit
-from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
-from dataclasses import dataclass
 import json
 import multiprocessing
-from pathlib import Path
 import sqlite3
 import sys
-from typing import Iterable
 import zlib
+from array import array
+from collections.abc import Iterable
+from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
+from dataclasses import dataclass
+from pathlib import Path
 
 from .bcnlt_source_pipeline import (
-    BCNLTPreprocessingError,
-    BCNLTSourcePipeline,
     CURRENT_RUNTIME_SPEC_SHA256,
     PARSER_RUNTIME_IDENTITY_SHA256,
+    BCNLTPreprocessingError,
+    BCNLTSourcePipeline,
     PreparedBCNLTInput,
 )
 from .current_corpus import CurrentCorpusAdmission, SourceCandidate
 from .tokenizer import NativeTokenizerBinding
-
 
 RESUMABLE_SCHEMA = "bosscrafts-current-corpus-resumable-v4"
 _EXECUTOR_PREFETCH_MULTIPLIER = 4
@@ -469,7 +468,7 @@ class ResumableCurrentCorpusAdmission:
             self._insert_rejection(
                 connection,
                 candidate,
-                "semantic_parse_failure",
+                "semantic_preprocessing_failure",
                 prepared.rejection_detail,
             )
             return
@@ -516,7 +515,7 @@ class ResumableCurrentCorpusAdmission:
             self._insert_rejection(
                 connection,
                 candidate,
-                "semantic_parse_failure",
+                "semantic_preprocessing_failure",
                 prepared.rejection_detail,
             )
             return

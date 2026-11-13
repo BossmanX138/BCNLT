@@ -4,9 +4,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from pathlib import Path
 import sys
-
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -14,8 +13,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from bosscrafts_model.bcnlt_adapter import BCNLTCanonicalRecord
 from bosscrafts_model.compact_semantic_wire import CompactSemanticWireV2
+from bosscrafts_model.jsonl import split_jsonl_records
 from bosscrafts_model.tokenizer import NativeTokenizerBinding
-
 
 DEFAULT_ADMISSION = (
     PROJECT_ROOT
@@ -30,7 +29,7 @@ DEFAULT_ANALYSIS = PROJECT_ROOT / "artifacts" / "audits" / "compact-semantic-wir
 
 def _records(language: str, canonical_jsonl: str) -> tuple[BCNLTCanonicalRecord, ...]:
     records = []
-    for line in canonical_jsonl.splitlines():
+    for line in split_jsonl_records(canonical_jsonl):
         payload = json.loads(line)
         records.append(
             BCNLTCanonicalRecord(

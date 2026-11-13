@@ -1,11 +1,12 @@
 """Prove the V6 held-out delta is limited to canonical recent history."""
 from __future__ import annotations
 
-from collections import Counter
 import hashlib
 import json
+from collections import Counter
 from pathlib import Path
 
+from bosscrafts_model.jsonl import split_jsonl_records
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 V5 = PROJECT_ROOT / "artifacts/corpora/bcnlt-v5-65536-heldout-admission-v1/admitted.jsonl"
@@ -37,8 +38,14 @@ def main() -> int:
     changed_records = 0
     non_history_changed_records = 0
     for v5_row, v6_row in zip(v5_rows, v6_rows, strict=True):
-        v5_records = [json.loads(line) for line in str(v5_row["canonical_jsonl"]).splitlines()]
-        v6_records = [json.loads(line) for line in str(v6_row["canonical_jsonl"]).splitlines()]
+        v5_records = [
+            json.loads(line)
+            for line in split_jsonl_records(str(v5_row["canonical_jsonl"]))
+        ]
+        v6_records = [
+            json.loads(line)
+            for line in split_jsonl_records(str(v6_row["canonical_jsonl"]))
+        ]
         if len(v5_records) != len(v6_records):
             raise ValueError(f"record count changed: {v5_row['relative_path']}")
         document_changed = 0

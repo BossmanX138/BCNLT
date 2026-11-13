@@ -6,10 +6,11 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
 import subprocess
-from typing import Callable
+from collections.abc import Callable
+from pathlib import Path
 
+from bosscrafts_model.jsonl import split_jsonl_records
 
 PROTOCOL = "bosscrafts-bcnlt-source-sidecar-v1"
 
@@ -58,7 +59,7 @@ def _run(
         )
     response = json.loads(completed.stdout)
     canonical = response["canonical_jsonl"]
-    records = [json.loads(line) for line in canonical.splitlines() if line]
+    records = [json.loads(line) for line in split_jsonl_records(canonical)]
     return response, records
 
 

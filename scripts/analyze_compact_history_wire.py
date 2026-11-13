@@ -4,16 +4,15 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from pathlib import Path
 import sys
-
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from bosscrafts_model.jsonl import split_jsonl_records
 from bosscrafts_model.tokenizer import NativeTokenizerBinding
-
 
 DEFAULT_ADMISSION = (
     PROJECT_ROOT
@@ -48,7 +47,7 @@ def main() -> int:
     reconstruction_failures = 0
     exception_documents: set[str] = set()
 
-    for line in admission_bytes.decode("utf-8").splitlines():
+    for line in split_jsonl_records(admission_bytes.decode("utf-8")):
         document = json.loads(line)
         documents += 1
         semantic_token_ids = document["semantic_token_ids"]
@@ -58,7 +57,7 @@ def main() -> int:
             raise ValueError("held-out semantic_token_ids are invalid")
         original_semantic_tokens += len(semantic_token_ids)
         prior_surfaces: list[str] = []
-        for canonical_line in document["canonical_jsonl"].splitlines():
+        for canonical_line in split_jsonl_records(document["canonical_jsonl"]):
             record = json.loads(canonical_line)
             records += 1
             actual = record["recent_history"]

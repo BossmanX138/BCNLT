@@ -1,17 +1,17 @@
 """Build blinded paired semantic controls from verified natural-runtime labels."""
 from __future__ import annotations
 
-from copy import deepcopy
-from dataclasses import dataclass
 import hashlib
 import json
 import os
-from pathlib import Path
 import tempfile
+from copy import deepcopy
+from dataclasses import dataclass
+from pathlib import Path
 from typing import cast
 
 from .heldout_semantic_review import REVIEW_ITEM_SCHEMA, REVIEW_MANIFEST_SCHEMA
-
+from .jsonl import split_jsonl_records
 
 _CHALLENGE_SCHEMA = "bosscrafts-semantic-challenge-review-v1"
 _ANSWER_SCHEMA = "bosscrafts-semantic-challenge-answer-v1"
@@ -214,7 +214,7 @@ class SemanticChallengeReviewBuilder:
         )
         _atomic_write(
             output_path / "manifest.json",
-            f"{_canonical(manifest)}\n".encode("utf-8"),
+            f"{_canonical(manifest)}\n".encode(),
         )
         return self.verify(output_path)
 
@@ -560,7 +560,7 @@ class SemanticChallengeReviewBuilder:
     @staticmethod
     def _load_canonical_rows(text: str, name: str) -> list[dict[str, object]]:
         rows: list[dict[str, object]] = []
-        for line in text.splitlines():
+        for line in split_jsonl_records(text):
             try:
                 row = json.loads(line)
             except json.JSONDecodeError as exc:

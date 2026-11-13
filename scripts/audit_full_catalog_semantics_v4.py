@@ -2,31 +2,30 @@
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass
 import hashlib
 import json
-from pathlib import Path
 import sys
-
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from bosscrafts_model.bcnlt_source_pipeline import (  # noqa: E402
-    BCNLTPreprocessingError,
-    BCNLTSourcePipeline,
+from bosscrafts_model.bcnlt_source_pipeline import (
     CURRENT_RUNTIME_SPEC_SHA256,
     PARSER_RUNTIME_IDENTITY_SHA256,
     SIDECAR_PROTOCOL,
+    BCNLTPreprocessingError,
+    BCNLTSourcePipeline,
 )
-from bosscrafts_model.current_corpus import (  # noqa: E402
-    SQLiteSourceCatalog,
+from bosscrafts_model.current_corpus import (
     SourceCandidate,
+    SQLiteSourceCatalog,
 )
-from bosscrafts_model.tokenizer import NativeTokenizerBinding  # noqa: E402
-
+from bosscrafts_model.jsonl import split_jsonl_records
+from bosscrafts_model.tokenizer import NativeTokenizerBinding
 
 DEFAULT_CATALOG = (
     PROJECT_ROOT
@@ -73,7 +72,7 @@ def _inspect(pipeline: BCNLTSourcePipeline, candidate: SourceCandidate) -> _Outc
         if type(canonical) is not str or (canonical and not canonical.endswith("\n")):
             raise BCNLTPreprocessingError("canonical JSONL framing mismatch")
         expected_canonical = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-        expected_records = len(canonical.splitlines())
+        expected_records = len(split_jsonl_records(canonical))
         if (
             response.get("protocol") != SIDECAR_PROTOCOL
             or response.get("language") != candidate.language

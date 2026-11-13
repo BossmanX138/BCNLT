@@ -1,20 +1,20 @@
 """Deterministic current-spec corpus admission for the frozen native 65K lineage."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
-from pathlib import Path
 import sqlite3
-from typing import Iterable, cast
+from collections.abc import Iterable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import cast
 from urllib.parse import quote
 
 from .bcnlt_source_pipeline import (
+    PARSER_RUNTIME_IDENTITY_SHA256,
     BCNLTPreprocessingError,
     BCNLTSourcePipeline,
-    PARSER_RUNTIME_IDENTITY_SHA256,
 )
-
 
 RECORD_SCHEMA = "bosscrafts-current-corpus-record-v2"
 MANIFEST_SCHEMA = "bosscrafts-current-corpus-manifest-v2"
@@ -271,7 +271,9 @@ class CurrentCorpusAdmission:
             except (BCNLTPreprocessingError, ValueError) as error:
                 detail = " ".join(str(error).split())[:512]
                 rejections.append(
-                    self._rejection(candidate, "semantic_parse_failure", detail)
+                    self._rejection(
+                        candidate, "semantic_preprocessing_failure", detail
+                    )
                 )
                 continue
             raw = self._pipeline.prepare_raw(

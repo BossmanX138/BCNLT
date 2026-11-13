@@ -81,7 +81,9 @@ def test_materializes_complete_disjoint_loss_mask_receipt(tmp_path: Path):
     catalog_sha = _catalog(catalog, candidates)
     databases: dict[str, Path] = {}
     try:
-        for split, candidate in zip(("train", "validation", "test"), candidates):
+        for split, candidate in zip(
+            ("train", "validation", "test"), candidates, strict=True
+        ):
             admission_path = tmp_path / f"{split}-admission.sqlite"
             task_path = tmp_path / f"{split}-tasks.sqlite"
             admission = ResumableCurrentCorpusAdmission(

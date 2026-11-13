@@ -1,18 +1,20 @@
 """Content-addressed, leakage-resistant source freeze for V10 training admission."""
 from __future__ import annotations
 
-from collections import Counter, defaultdict
-from dataclasses import dataclass
 import hashlib
 import json
 import os
-from pathlib import Path
 import sqlite3
 import tempfile
-from typing import Any
+from collections import Counter, defaultdict
+from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from types import MappingProxyType
+from typing import Any, ClassVar
 
 from .current_corpus import APPROVED_LICENSES, SQLiteSourceCatalog
-
+from .jsonl import split_jsonl_records
 
 FREEZE_MANIFEST_SCHEMA = "bosscrafts-training-source-freeze-v1"
 FREEZE_DOCUMENT_SCHEMA = "bosscrafts-training-source-document-v1"
@@ -96,20 +98,22 @@ class TrainingCorpusFreezeResult:
 class VerifiedTrainingSourceFreeze:
     """Read an immutable source freeze and expose only its verified train split."""
 
-    _CANDIDATE_FIELDS = {
-        "language": "language",
-        "dialect": "dialect",
-        "relative_path": "relative_path",
-        "content_sha256": "content_sha256",
-        "license_spdx": "license_spdx",
-        "attribution": "attribution",
-        "ownership": "ownership",
-        "source_provider": "source_provider",
-        "source_name": "source_name",
-        "source_revision": "source_revision",
-        "repository_identity": "repository_identity",
-        "upstream_url": "upstream_url",
-    }
+    _CANDIDATE_FIELDS: ClassVar[Mapping[str, str]] = MappingProxyType(
+        {
+            "language": "language",
+            "dialect": "dialect",
+            "relative_path": "relative_path",
+            "content_sha256": "content_sha256",
+            "license_spdx": "license_spdx",
+            "attribution": "attribution",
+            "ownership": "ownership",
+            "source_provider": "source_provider",
+            "source_name": "source_name",
+            "source_revision": "source_revision",
+            "repository_identity": "repository_identity",
+            "upstream_url": "upstream_url",
+        }
+    )
 
     def __init__(
         self,
@@ -151,7 +155,7 @@ class VerifiedTrainingSourceFreeze:
             raise ValueError("frozen document inventory SHA-256 mismatch")
         rows: dict[str, dict[str, object]] = {}
         split_counts: Counter[str] = Counter()
-        for line in documents_bytes.decode("utf-8").splitlines():
+        for line in split_jsonl_records(documents_bytes.decode("utf-8")):
             try:
                 row = json.loads(line)
             except json.JSONDecodeError as exc:
@@ -410,7 +414,7 @@ class TrainingCorpusFreezer:
         manifest = {**unsigned, "manifest_sha256": manifest_sha256}
         _atomic_write(output / "documents.jsonl", documents_text.encode("utf-8"))
         _atomic_write(
-            output / "manifest.json", f"{_canonical(manifest)}\n".encode("utf-8")
+            output / "manifest.json", f"{_canonical(manifest)}\n".encode()
         )
         return TrainingCorpusFreezeResult(
             output_root=output,
@@ -518,7 +522,10 @@ class TrainingCorpusFreezer:
             data = path.read_bytes()
             if _sha256_bytes(data) != manifest[hash_key]:
                 raise ValueError("heldout admission payload SHA-256 mismatch")
-            rows = [json.loads(line) for line in data.decode("utf-8").splitlines()]
+            rows = [
+                json.loads(line)
+                for line in split_jsonl_records(data.decode("utf-8"))
+            ]
             if len(rows) != manifest[expected_count]:
                 raise ValueError("heldout admission payload count mismatch")
             for row in rows:

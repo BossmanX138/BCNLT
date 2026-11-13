@@ -7,6 +7,7 @@ import json
 from .bcnlt_adapter import BCNLTCanonicalRecord
 from .compact_semantic_wire import COMPACT_SEMANTIC_WIRE_SCHEMA, CompactSemanticWireV2
 from .current_task_packing import CurrentCorpusTaskPacker
+from .jsonl import split_jsonl_records
 from .tokenizer import NativeTokenizerBinding
 
 
@@ -54,7 +55,7 @@ class CompactCurrentCorpusTaskPacker(CurrentCorpusTaskPacker):
         record_count = row.get("semantic_record_count")
         if type(canonical_jsonl) is not str or type(language) is not str:
             raise ValueError("compact task row lacks canonical semantic data")
-        lines = canonical_jsonl.splitlines()
+        lines = split_jsonl_records(canonical_jsonl)
         if type(record_count) is not int or len(lines) != record_count:
             raise ValueError("compact task canonical record count mismatch")
         records = tuple(self._record(language, line) for line in lines)

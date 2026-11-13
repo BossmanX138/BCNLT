@@ -14,17 +14,21 @@ from bosscrafts_model.bcnlt_source_pipeline import (
     BCNLTPreprocessingError,
     BCNLTSourcePipeline,
 )
+from bosscrafts_model.jsonl import split_jsonl_records
 from bosscrafts_model.tokenizer import NativeTokenizerBinding
 
 
-_PIPELINE: BCNLTSourcePipeline | None = None
+class _PipelineState:
+    value: BCNLTSourcePipeline | None = None
+
+
+_PIPELINE = _PipelineState()
 
 
 def _pipeline() -> BCNLTSourcePipeline:
-    global _PIPELINE
-    if _PIPELINE is None:
-        _PIPELINE = BCNLTSourcePipeline(NativeTokenizerBinding.load())
-    return _PIPELINE
+    if _PIPELINE.value is None:
+        _PIPELINE.value = BCNLTSourcePipeline(NativeTokenizerBinding.load())
+    return _PIPELINE.value
 
 
 def verify_runtime() -> str:
@@ -50,12 +54,13 @@ def parse_source(
             language=source.language,
             path=source.path,
         )
-    except BCNLTPreprocessingError as error:
+    except (BCNLTPreprocessingError, ValueError) as error:
         raise ValueError(f"parser rejected {source.path}: {error}") from error
+    if prepared.canonical_jsonl is None:
+        raise ValueError(f"parser omitted canonical records for {source.path}")
     records = [
         json.loads(line)
-        for line in prepared.canonical_jsonl.splitlines()
-        if line
+        for line in split_jsonl_records(prepared.canonical_jsonl)
     ]
     return {
         "protocol": "bosscrafts-bcnlt-source-sidecar-v2",
@@ -74,7 +79,7 @@ def parse_source(
 def pytest_configure(config: Any) -> None:
     """Install the V10 transport before pytest imports handoff test modules."""
     del config
-    import bcnlm.runtime as runtime
+    from bcnlm import runtime
 
     runtime.parse_source = parse_source
     runtime.verify_runtime = verify_runtime
@@ -82,5 +87,6 @@ def pytest_configure(config: Any) -> None:
 
 def pytest_unconfigure(config: Any) -> None:
     del config
-    if _PIPELINE is not None:
-        _PIPELINE.close()
+    if _PIPELINE.value is not None:
+        _PIPELINE.value.close()
+        _PIPELINE.value = None

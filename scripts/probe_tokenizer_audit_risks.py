@@ -4,25 +4,27 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
+from collections.abc import MutableMapping
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PINNED_TOKENIZERS_SITE = PROJECT_ROOT / "vendor" / "tokenizers_runtime_0_23"
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PINNED_TOKENIZERS_SITE))
 
-from bosscrafts_model.tokenizer import NativeTokenizerBinding  # noqa: E402
-from bosscrafts_model.inference_protocol import (  # noqa: E402
+from bosscrafts_model.bcnlt_adapter import BCNLTMultilingualOutputAdapter
+from bosscrafts_model.bcnlt_source_pipeline import (
+    CURRENT_RUNTIME_SPEC_SHA256,
+    BCNLTSourcePipeline,
+)
+from bosscrafts_model.inference_protocol import (
     build_inference_prompt,
     response_protocol_complete,
 )
-from bosscrafts_model.bcnlt_adapter import BCNLTMultilingualOutputAdapter  # noqa: E402
-from bosscrafts_model.bcnlt_source_pipeline import (  # noqa: E402
-    BCNLTSourcePipeline,
-    CURRENT_RUNTIME_SPEC_SHA256,
-)
-from bosscrafts_model.semantic import NativeSemanticRecordCodec, SemanticRecord  # noqa: E402
+from bosscrafts_model.jsonl import split_jsonl_records
+from bosscrafts_model.semantic import NativeSemanticRecordCodec, SemanticRecord
+from bosscrafts_model.tokenizer import NativeTokenizerBinding
 
 
 def main() -> None:
@@ -97,7 +99,9 @@ def main() -> None:
         language="python",
         path="audit.py",
     )
-    first_record = json.loads(prepared.canonical_jsonl.splitlines()[0])
+    if prepared.canonical_jsonl is None:
+        raise ValueError("semantic probe omitted canonical records")
+    first_record = json.loads(split_jsonl_records(prepared.canonical_jsonl)[0])
     first_record["metadata"]["audit_non_finite"] = float("nan")
     first_record["ir"]["children"] = ["not-an-ir-node", 123]
     permissive_line = json.dumps(
@@ -162,10 +166,14 @@ def main() -> None:
         "failures": unicode_failures,
     }
 
-    try:
-        binding.structural_token_ids[stream_end] = 0
-        structural_mapping_mutable = True
-    except TypeError:
+    structural_mapping = binding.structural_token_ids
+    if isinstance(structural_mapping, MutableMapping):
+        try:
+            structural_mapping[stream_end] = 0
+            structural_mapping_mutable = True
+        except TypeError:
+            structural_mapping_mutable = False
+    else:
         structural_mapping_mutable = False
     results["structural_mapping_mutable"] = structural_mapping_mutable
     results["tokenizer_object_mutable"] = hasattr(

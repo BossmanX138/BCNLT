@@ -1,23 +1,23 @@
 """Full-source replay gate for held-out BCNLT semantic review records."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
 import os
-from pathlib import Path
 import tempfile
-from typing import TypeGuard, TypedDict
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TypedDict, TypeGuard
 
 from .bcnlt_source_pipeline import (
+    PARSER_RUNTIME_IDENTITY_SHA256,
     BCNLTPreprocessingError,
     BCNLTSourcePipeline,
-    PARSER_RUNTIME_IDENTITY_SHA256,
 )
 from .current_task_packing import CurrentCorpusTaskPacker
 from .heldout_semantic_review import REVIEW_ITEM_SCHEMA, REVIEW_MANIFEST_SCHEMA
+from .jsonl import split_jsonl_records
 from .tokenizer import NativeTokenizerBinding
-
 
 _REPLAY_ITEM_SCHEMA = "bosscrafts-source-semantic-replay-item-v1"
 _REPLAY_MANIFEST_SCHEMA = "bosscrafts-source-semantic-replay-manifest-v1"
@@ -49,7 +49,7 @@ def _parse_canonical_records(
     canonical_jsonl: str, *, name: str
 ) -> tuple[dict[str, object], ...]:
     records: list[dict[str, object]] = []
-    for line in canonical_jsonl.splitlines():
+    for line in split_jsonl_records(canonical_jsonl):
         try:
             record = json.loads(line)
         except json.JSONDecodeError as exc:
@@ -121,7 +121,7 @@ class SourceSemanticReplayAuditor:
         )
         _atomic_write(output / "replay_results.jsonl", results_text.encode("utf-8"))
         _atomic_write(
-            output / "manifest.json", f"{_canonical(manifest)}\n".encode("utf-8")
+            output / "manifest.json", f"{_canonical(manifest)}\n".encode()
         )
         return self._result(output, manifest)
 
@@ -383,7 +383,7 @@ class SourceSemanticReplayAuditor:
             raise ValueError("semantic review queue SHA-256 mismatch")
         rows: list[dict[str, object]] = []
         ids: set[str] = set()
-        for line in queue_text.splitlines():
+        for line in split_jsonl_records(queue_text):
             try:
                 row = json.loads(line)
             except json.JSONDecodeError as exc:

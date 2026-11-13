@@ -1,21 +1,21 @@
 """Resumable, local-only dual review for held-out semantic records."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import ipaddress
 import json
 import os
-from pathlib import Path
 import re
 import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TypedDict
 from urllib import error as urlerror
 from urllib import request as urlrequest
 from urllib.parse import urlparse
-from typing import TypedDict
 
 from .heldout_semantic_review import REVIEW_ITEM_SCHEMA, REVIEW_MANIFEST_SCHEMA
-
+from .jsonl import split_jsonl_records
 
 _DECISION_SCHEMA = "bosscrafts-local-semantic-review-decision-v2"
 _MANIFEST_SCHEMA = "bosscrafts-dual-local-semantic-review-manifest-v2"
@@ -318,7 +318,7 @@ class DualLocalSemanticReviewer:
         if _sha256_text(queue_text) != manifest.get("queue_sha256"):
             raise ValueError("review queue SHA-256 mismatch")
         items: list[dict[str, object]] = []
-        for line in queue_text.splitlines():
+        for line in split_jsonl_records(queue_text):
             try:
                 item = json.loads(line)
             except json.JSONDecodeError as exc:
@@ -355,7 +355,7 @@ class DualLocalSemanticReviewer:
         }
         decisions: dict[tuple[str, str], dict[str, object]] = {}
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
+            lines = split_jsonl_records(path.read_text(encoding="utf-8"))
         except OSError as exc:
             raise ValueError("review decision ledger cannot be read") from exc
         for line in lines:
@@ -611,7 +611,7 @@ class DualLocalSemanticReviewer:
         prior_failure_sha256 = (
             prior_failure["failure_sha256"] if prior_failure is not None else None
         )
-        request_bytes = f"{_canonical(payload)}\n".encode("utf-8")
+        request_bytes = f"{_canonical(payload)}\n".encode()
         request = urlrequest.Request(
             f"{reviewer.base_url}/v1/chat/completions",
             data=request_bytes,
@@ -644,7 +644,7 @@ class DualLocalSemanticReviewer:
             response_payload = json.loads(raw)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError("local reviewer response is not valid JSON") from exc
-        response_bytes = f"{_canonical(response_payload)}\n".encode("utf-8")
+        response_bytes = f"{_canonical(response_payload)}\n".encode()
         response_sha256 = _sha256_bytes(response_bytes)
         response_relative = f"responses/{response_sha256}.json"
         response_path = self.output_root / Path(response_relative)
@@ -774,7 +774,7 @@ class DualLocalSemanticReviewer:
         path = self.output_root / "reviewer_decisions.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("ab") as handle:
-            handle.write(f"{_canonical(entry)}\n".encode("utf-8"))
+            handle.write(f"{_canonical(entry)}\n".encode())
             handle.flush()
             os.fsync(handle.fileno())
 
@@ -815,7 +815,7 @@ class DualLocalSemanticReviewer:
         entry = {**unsigned, "failure_sha256": _sha256_text(_canonical(unsigned))}
         path = self.output_root / "reviewer_failures.jsonl"
         with path.open("ab") as handle:
-            handle.write(f"{_canonical(entry)}\n".encode("utf-8"))
+            handle.write(f"{_canonical(entry)}\n".encode())
             handle.flush()
             os.fsync(handle.fileno())
 
@@ -829,7 +829,7 @@ class DualLocalSemanticReviewer:
             return ()
         item_ids = {str(item["review_id"]) for item in items}
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
+            lines = split_jsonl_records(path.read_text(encoding="utf-8"))
         except OSError as exc:
             raise ValueError("review failure ledger cannot be read") from exc
         verified: list[dict[str, object]] = []
@@ -1050,7 +1050,7 @@ class DualLocalSemanticReviewer:
         manifest = {**unsigned, "manifest_sha256": manifest_sha256}
         _atomic_write(
             self.output_root / "manifest.json",
-            f"{_canonical(manifest)}\n".encode("utf-8"),
+            f"{_canonical(manifest)}\n".encode(),
         )
         return DualLocalReviewResult(
             output_root=self.output_root,

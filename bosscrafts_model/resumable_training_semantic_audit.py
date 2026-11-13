@@ -1,19 +1,19 @@
 """Crash-resumable full-record semantic audit for a completed source admission."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
-from pathlib import Path
 import sqlite3
 import subprocess
-from typing import Any, Protocol, cast
 import zlib
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Protocol, cast
 
 from .bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
 from .deterministic_semantic_audit import DeterministicSemanticAuditor
+from .jsonl import split_jsonl_records
 from .raw_ast_witness import RawAstWitnessClient
-
 
 AUDIT_SCHEMA = "bosscrafts-resumable-training-semantic-audit-v1"
 SOURCE_ADMISSION_SCHEMA = "bosscrafts-current-corpus-resumable-v4"
@@ -225,7 +225,7 @@ class ResumableTrainingSemanticAudit:
         all_ids: set[str] = set()
         selected_ids: set[str] = set()
         training_count = 0
-        for line in documents.decode("utf-8").splitlines():
+        for line in split_jsonl_records(documents.decode("utf-8")):
             try:
                 row = json.loads(line)
             except json.JSONDecodeError as exc:
@@ -307,7 +307,7 @@ class ResumableTrainingSemanticAudit:
         stable_metadata = {
             key: value for key, value in metadata.items() if key != "catalog_exhausted"
         }
-        digest.update(f"{_canonical(stable_metadata)}\n".encode("utf-8"))
+        digest.update(f"{_canonical(stable_metadata)}\n".encode())
         for row in connection.execute(
             """SELECT document_id,content_sha256,language,relative_path,status,
                       reason_code,detail,semantic_spec_sha256,
@@ -315,7 +315,7 @@ class ResumableTrainingSemanticAudit:
                       semantic_record_count,semantic_token_count,raw_token_count
                FROM documents ORDER BY document_id"""
         ):
-            digest.update(f"{_canonical(list(row))}\n".encode("utf-8"))
+            digest.update(f"{_canonical(list(row))}\n".encode())
         return digest.hexdigest()
 
     def _connect(self) -> sqlite3.Connection:
@@ -507,7 +507,7 @@ class ResumableTrainingSemanticAudit:
         if _sha256_bytes(canonical_jsonl.encode("utf-8")) != admission["canonical_sha256"]:
             raise ValueError("canonical JSONL SHA-256 mismatch")
         records: list[dict[str, object]] = []
-        for line in canonical_jsonl.splitlines():
+        for line in split_jsonl_records(canonical_jsonl):
             try:
                 record = json.loads(line)
             except json.JSONDecodeError as exc:

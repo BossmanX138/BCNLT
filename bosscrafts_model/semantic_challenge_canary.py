@@ -1,16 +1,16 @@
 """Select a small, paired, defect-balanced canary without exposing its labels."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
 import os
-from pathlib import Path
 import tempfile
+from dataclasses import dataclass
+from pathlib import Path
 from typing import TypeGuard
 
+from .jsonl import split_jsonl_records
 from .semantic_challenge_review import SemanticChallengeReviewBuilder
-
 
 _SCHEMA = "bosscrafts-semantic-challenge-canary-selection-v1"
 _DEFECT_TYPES = (
@@ -80,7 +80,7 @@ class SemanticChallengeCanarySelector:
         selection = self._build(challenge)
         _atomic_write(
             output / "selection.json",
-            f"{_canonical(selection)}\n".encode("utf-8"),
+            f"{_canonical(selection)}\n".encode(),
         )
         return self._result(output, selection)
 
@@ -110,7 +110,7 @@ class SemanticChallengeCanarySelector:
         ).verify(challenge_root)
         answer_path = challenge_root / str(manifest.get("answer_key_file"))
         try:
-            lines = answer_path.read_text(encoding="utf-8").splitlines()
+            lines = split_jsonl_records(answer_path.read_text(encoding="utf-8"))
         except OSError as exc:
             raise ValueError("semantic challenge answer key cannot be read") from exc
         answers: list[dict[str, object]] = []
@@ -124,7 +124,7 @@ class SemanticChallengeCanarySelector:
             answers.append(row)
         queue_path = challenge_root / str(manifest.get("queue_file"))
         try:
-            queue_lines = queue_path.read_text(encoding="utf-8").splitlines()
+            queue_lines = split_jsonl_records(queue_path.read_text(encoding="utf-8"))
         except OSError as exc:
             raise ValueError("semantic challenge queue cannot be read") from exc
         queue_by_id: dict[str, dict[str, object]] = {}

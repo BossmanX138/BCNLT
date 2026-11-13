@@ -1,16 +1,16 @@
 """Record-boundary task packing for admitted current-spec BCNLT documents."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
 from .bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
 from .current_corpus import MANIFEST_SCHEMA, RECORD_SCHEMA
+from .jsonl import split_jsonl_records
 from .tokenizer import NativeTokenizerBinding
-
 
 EXAMPLE_SCHEMA = "bosscrafts-current-task-example-v2"
 PACKED_MANIFEST_SCHEMA = "bosscrafts-current-task-manifest-v2"
@@ -81,7 +81,7 @@ class CurrentCorpusTaskPacker:
         ):
             raise ValueError("admission tokenizer lineage mismatch")
         rows: list[dict[str, object]] = []
-        for line in records_text.splitlines():
+        for line in split_jsonl_records(records_text):
             try:
                 row = json.loads(line)
             except json.JSONDecodeError as error:
@@ -168,7 +168,7 @@ class CurrentCorpusTaskPacker:
         rejections: list[dict[str, object]] = []
         task_end = self._id("task:end")
         fragments = self._semantic_record_fragments(row)
-        canonical_lines = str(row["canonical_jsonl"]).splitlines()
+        canonical_lines = split_jsonl_records(str(row["canonical_jsonl"]))
         if len(canonical_lines) != len(fragments):
             raise ValueError("canonical and tokenized semantic record counts differ")
         canonical_records = [json.loads(line) for line in canonical_lines]
