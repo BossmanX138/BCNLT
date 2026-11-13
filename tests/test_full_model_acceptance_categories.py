@@ -310,10 +310,10 @@ def _metrics(category: str) -> dict[str, object]:
             "language_passes": language_passes,
         },
         "ordinary_instruction": {
-            "task_success_rate": 1.0,
+            "strict_prompt_accuracy": 1.0,
+            "loose_prompt_accuracy": 1.0,
             "baseline_delta": 1.0,
-            "format_adherence_rate": 1.0,
-            "false_refusal_rate": 0.0,
+            "empty_response_rate": 0.0,
         },
         "execution_correctness": {
             "sandbox_execution_rate": 1.0,
@@ -375,10 +375,10 @@ def _records(category: str) -> list[dict[str, object]]:
             },
             "ordinary_instruction": {
                 "example_id": example_id,
-                "task_success": True,
-                "baseline_task_success": False,
-                "format_adherent": True,
-                "false_refusal": False,
+                "strict_instruction_following": True,
+                "loose_instruction_following": True,
+                "baseline_strict_instruction_following": False,
+                "response_nonempty": True,
             },
             "execution_correctness": {
                 "example_id": example_id,
@@ -477,7 +477,7 @@ class FullModelAcceptanceCategoryTests(unittest.TestCase):
         instruction = next(
             item for item in weak if item["category"] == "ordinary_instruction"
         )
-        instruction["metrics"]["task_success_rate"] = 0.79
+        instruction["metrics"]["strict_prompt_accuracy"] = 0.79
         body = {
             key: value for key, value in instruction.items() if key != "artifact_sha256"
         }
@@ -594,7 +594,7 @@ class FullModelAcceptanceCategoryTests(unittest.TestCase):
         instruction = next(
             item for item in fabricated if item["category"] == "ordinary_instruction"
         )
-        instruction["metrics"]["task_success_rate"] = 0.99
+        instruction["metrics"]["strict_prompt_accuracy"] = 0.99
         body = {
             key: value for key, value in instruction.items() if key != "artifact_sha256"
         }
@@ -728,7 +728,7 @@ class FullModelAcceptanceCategoryTests(unittest.TestCase):
             ("semantic_fidelity", "unknown_semantic_rate", -1.0),
             ("semantic_fidelity", "ownership_accuracy", 1.1),
             ("raw_code", "compile_pass_rate", 1.1),
-            ("ordinary_instruction", "false_refusal_rate", -0.1),
+            ("ordinary_instruction", "empty_response_rate", -0.1),
             ("execution_correctness", "sandbox_execution_rate", 1.1),
         )
         for category, metric, value in invalid_rates:

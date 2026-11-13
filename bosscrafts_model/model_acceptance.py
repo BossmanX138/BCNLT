@@ -1167,10 +1167,10 @@ _CATEGORY_RECORD_FIELDS = {
     },
     "ordinary_instruction": {
         "example_id",
-        "task_success",
-        "baseline_task_success",
-        "format_adherent",
-        "false_refusal",
+        "strict_instruction_following",
+        "loose_instruction_following",
+        "baseline_strict_instruction_following",
+        "response_nonempty",
     },
     "execution_correctness": {
         "example_id",
@@ -1332,12 +1332,20 @@ def recompute_category_metrics(
             "language_passes": language_passes,
         }
     if category == "ordinary_instruction":
+        for record in records:
+            strict = _record_bool(record, "strict_instruction_following")
+            loose = _record_bool(record, "loose_instruction_following")
+            response_nonempty = _record_bool(record, "response_nonempty")
+            if (strict and not loose) or ((strict or loose) and not response_nonempty):
+                raise ValueError("ordinary_instruction record invariants are invalid")
         return {
-            "task_success_rate": _rate(records, "task_success"),
-            "baseline_delta": _rate(records, "task_success")
-            - _rate(records, "baseline_task_success"),
-            "format_adherence_rate": _rate(records, "format_adherent"),
-            "false_refusal_rate": _rate(records, "false_refusal"),
+            "strict_prompt_accuracy": _rate(
+                records, "strict_instruction_following"
+            ),
+            "loose_prompt_accuracy": _rate(records, "loose_instruction_following"),
+            "baseline_delta": _rate(records, "strict_instruction_following")
+            - _rate(records, "baseline_strict_instruction_following"),
+            "empty_response_rate": 1.0 - _rate(records, "response_nonempty"),
         }
     if category == "execution_correctness":
         grouped = _records_by_language(records)
@@ -1469,15 +1477,15 @@ def verify_category_metrics(category: str, value: object) -> None:
         return
     if category == "ordinary_instruction":
         if set(metrics) != {
-            "task_success_rate",
+            "strict_prompt_accuracy",
+            "loose_prompt_accuracy",
             "baseline_delta",
-            "format_adherence_rate",
-            "false_refusal_rate",
+            "empty_response_rate",
         } or (
-            _metric_rate(metrics, "task_success_rate") < 0.80
+            _metric_rate(metrics, "strict_prompt_accuracy") < 0.80
+            or _metric_rate(metrics, "loose_prompt_accuracy") < 0.85
             or _metric_rate(metrics, "baseline_delta") < 0.0
-            or _metric_rate(metrics, "format_adherence_rate") < 0.95
-            or _metric_rate(metrics, "false_refusal_rate") > 0.05
+            or _metric_rate(metrics, "empty_response_rate") > 0.01
         ):
             raise ValueError("ordinary_instruction acceptance gate failed")
         return

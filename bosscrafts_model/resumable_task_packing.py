@@ -329,9 +329,11 @@ class ResumableTaskDataset:
                 batch = requested[offset : offset + 500]
                 placeholders = ",".join("?" for _ in batch)
                 query = (
-                    "SELECT example_id, document_id, language, family, record_index, split, "
+                    "SELECT example_id, document_id, language, family, record_index, split, "  # nosec B608  # noqa: S608
                     "input_ids_zlib, token_count, loss_start_index, "
                     "semantic_spec_sha256, parser_runtime_identity_sha256, source_sha256 "
+                    # Only a bounded count of literal '?' placeholders is
+                    # interpolated; every example ID remains a bound value.
                     f"FROM tasks WHERE example_id IN ({placeholders})"
                 )
                 for row in connection.execute(query, batch):

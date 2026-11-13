@@ -20,9 +20,9 @@ actionable defect after the repairs and gates below.
 - The resulting parser runtime identity is
   `c1ca753bf4d1dbabf841fdcd120e5c3eec026b7211ca5c0f08d066074acee938`.
 - Ruff passed every changed Python file.
-- Mypy passed all 69 configured core source files and the changed orchestration
+- Mypy passed all 71 configured core source files and the changed orchestration
   scripts in strict mode.
-- The latest complete combined regression passed 574 tests and 195 subtests
+- The latest complete combined regression passed 582 tests and 195 subtests
   with warnings treated as errors.
 - The complementary Docker containment slice passed all 13 Docker-only tests
   and 13 subtests; 560 other tests were explicitly deselected.
@@ -30,6 +30,12 @@ actionable defect after the repairs and gates below.
   `966cd89545d6b6acfd7638bc708b98261ca58e84` froze 541 executable-constraint
   cases from source SHA-256
   `6a85310ca8ce15eff755aa08a3a4ff931c7e273e7515ebb3c492ea85fd8288f2`.
+- The official Google IFEval evaluator is installed from exact revision
+  `e6890f85757dd84e27ca6df2dd30651dafad28e0` with every source byte pinned.
+  Its isolated runtime also freezes the required NLTK `punkt` and `punkt_tab`
+  archives at revision `550b6625bcef1f2abff2ff770a5a0d272c9c6b2a`.
+  The installed 129-file, 66,482,565-byte runtime verified as manifest
+  `44f4d751b203a2c8330542e00d8abb418e270f00697c2a4ba5badfd18abd6712`.
 - The exact NVIDIA Aegis 2.0 revision
   `d86bb8bedff51d25ac834ab7838f1cc61acb7a2c` froze 1,928 reconstructable
   held-out prompt-label cases from test-source SHA-256
@@ -42,8 +48,11 @@ actionable defect after the repairs and gates below.
 - A fresh locked production dependency export passed `pip-audit` 2.9.0 with no
   known vulnerabilities after upgrading the pinned PyTorch and setuptools
   chain.
-- Bandit reported no medium- or high-severity findings. The remaining 82 low
-  findings were reviewed as intentional subprocess use without a shell,
+- Bandit reported no unsuppressed medium- or high-severity findings. Its one
+  low-confidence medium SQL-construction warning was traced to a bounded count
+  of literal SQLite `?` placeholders; every validated SHA-256 ID remains a
+  bound parameter, and the exception is documented in the source. Remaining
+  low findings were reviewed as intentional subprocess use without a shell,
   non-secret protocol constants, destructor cleanup suppression, or
   deterministic non-cryptographic sampling.
 - A comprehensive security scan inventoried 514 files and found one actionable
@@ -132,6 +141,15 @@ actionable defect after the repairs and gates below.
     and repaired two additional assumptions: official IFEval rows can repeat an
     instruction type with different arguments, and the released Aegis test
     taxonomy and safe-label category combinations differ from the prose list.
+18. Ordinary-instruction acceptance still consumed caller-asserted booleans,
+    so a fabricated record could claim task success without executing the
+    frozen IFEval constraints. The pinned official evaluator now runs in an
+    isolated interpreter with a restricted environment, bounded payloads,
+    deterministic language detection, exact runtime verification before and
+    after execution, and strict case/response inventory checks. Acceptance now
+    measures official strict and loose instruction following, baseline delta,
+    and empty-response rate. A real all-541-case diagnostic run completed in
+    2.298 seconds and left the pinned runtime unchanged.
 
 ## Boundaries
 
@@ -154,8 +172,10 @@ actionable defect after the repairs and gates below.
 
 The latest repair batch has no regression in the executed source and integration
 gates, but the exhaustive review remains active and CodeRabbit review remains
-pending authentication. The upstream IFEval evaluator is not yet bound to an
-audited local case runner, so the newly frozen ordinary-instruction catalogs are
-reproducible inputs rather than completed model evidence. Training and model
-insertion stay held. This record is not evidence that a model has been trained,
-promoted, or improved.
+pending authentication. The ordinary-instruction runner is executable and
+audited, but its batch output is not yet published as an immutable receipt and
+the acceptance compiler does not yet require that receipt. The safety and other
+remaining category runners are also incomplete. Training and meaningful model
+insertion stay held; a read-only diagnostic Mk10 smoke would be permissible but
+would not be promotion evidence. This record is not evidence that a model has
+been trained, promoted, or improved.
