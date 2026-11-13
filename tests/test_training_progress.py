@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import importlib
 import importlib.util
 import json
 from pathlib import Path
 
 import pytest
+
+from bosscrafts_model.training_progress import TRAINING_PROGRESS_SCHEMA
 
 
 def _feature():
@@ -16,7 +19,9 @@ def _feature():
 
 def _payload() -> dict[str, object]:
     return {
-        "schema_version": "bosscrafts-training-progress-v1",
+        "schema_version": TRAINING_PROGRESS_SCHEMA,
+        "checkpoint_sha256": "d" * 64,
+        "checkpoint_size_bytes": 123,
         "checkpoint_written": True,
         "gradients_finite": True,
         "full_model": True,
@@ -56,6 +61,54 @@ def test_loads_valid_progress_and_returns_narrowed_values(tmp_path: Path) -> Non
     assert progress["training_complete"] is False
 
 
+def test_binds_progress_to_exact_checkpoint_bytes(tmp_path: Path) -> None:
+    feature = _feature()
+    checkpoint = tmp_path / "checkpoint.pt"
+    checkpoint.write_bytes(b"checkpoint-bytes")
+    payload = _payload()
+    payload["checkpoint_size_bytes"] = checkpoint.stat().st_size
+    payload["checkpoint_sha256"] = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    path = tmp_path / "training-progress.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    progress = feature.load_training_progress(
+        path,
+        expected_fields={},
+        checkpoint_path=checkpoint,
+    )
+    assert progress["checkpoint_sha256"] == payload["checkpoint_sha256"]
+
+    checkpoint.write_bytes(b"substituted-checkpoint")
+    with pytest.raises(ValueError, match="checkpoint identity"):
+        feature.load_training_progress(
+            path,
+            expected_fields={},
+            checkpoint_path=checkpoint,
+        )
+
+
+def test_rejects_duplicate_progress_keys(tmp_path: Path) -> None:
+    feature = _feature()
+    rendered = json.dumps(_payload())
+    path = tmp_path / "training-progress.json"
+    path.write_text(
+        rendered[:-1] + ', "checkpoint_written": true}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate training progress key"):
+        feature.load_training_progress(path, expected_fields={})
+
+
+def test_rejects_oversized_progress_document(tmp_path: Path) -> None:
+    feature = _feature()
+    path = tmp_path / "training-progress.json"
+    path.write_bytes(b"x" * (feature.MAX_TRAINING_PROGRESS_BYTES + 1))
+
+    with pytest.raises(ValueError, match="size limit"):
+        feature.load_training_progress(path, expected_fields={})
+
+
 @pytest.mark.parametrize(
     ("key", "value"),
     (
@@ -63,6 +116,8 @@ def test_loads_valid_progress_and_returns_narrowed_values(tmp_path: Path) -> Non
         ("checkpoint_written", False),
         ("gradients_finite", False),
         ("full_model", False),
+        ("checkpoint_size_bytes", 0),
+        ("checkpoint_size_bytes", True),
         ("planned_optimizer_steps", 0),
         ("planned_optimizer_steps", True),
         ("total_optimizer_steps", True),
@@ -140,6 +195,7 @@ def test_rejects_training_completion_that_disagrees_with_remaining_steps(
         "task_database_identity_sha256",
         "model_fingerprint",
         "training_plan_sha256",
+        "checkpoint_sha256",
     ),
 )
 def test_rejects_invalid_progress_lineage_digest(

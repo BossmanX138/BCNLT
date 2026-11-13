@@ -26,6 +26,7 @@ from bosscrafts_model.tokenizer import (  # noqa: E402
     NativeTokenizerBinding,
     bound_native_65k_config,
 )
+from bosscrafts_model.training_progress import TRAINING_PROGRESS_SCHEMA  # noqa: E402
 
 V7_ROOT = PROJECT_ROOT.parent / ".codex_staging_bosscrafts_model_v7_candidate"
 V7_PIPELINE_STATUS = (
@@ -185,13 +186,16 @@ def _validate_training_status(
     database_identity: str,
     model_fingerprint: str,
     expected_plan_sha256: str | None,
+    expected_checkpoint_sha256: str,
 ) -> tuple[str, int]:
     plan_sha256 = payload.get("training_plan_sha256")
+    checkpoint_sha256 = payload.get("checkpoint_sha256")
     total_optimizer_steps = payload.get("total_optimizer_steps")
     optimizer_steps_remaining = payload.get("optimizer_steps_remaining")
     if not (
-        payload.get("schema_version") == "bosscrafts-training-progress-v1"
+        payload.get("schema_version") == TRAINING_PROGRESS_SCHEMA
         and payload.get("checkpoint_written") is True
+        and checkpoint_sha256 == expected_checkpoint_sha256
         and payload.get("gradients_finite") is True
         and payload.get("full_model") is True
         and payload.get("device") == "cuda"
@@ -276,12 +280,15 @@ def main() -> int:
     plan_sha256: str | None = None
     previous_steps = -1
     if TRAINING_STATUS.is_file():
+        if not CHECKPOINT.is_file():
+            raise ValueError("V8 training checkpoint is missing")
         existing = _load_json(TRAINING_STATUS, "V8 training status")
         plan_sha256, previous_steps = _validate_training_status(
             existing,
             database_identity=database_identity,
             model_fingerprint=model_fingerprint,
             expected_plan_sha256=None,
+            expected_checkpoint_sha256=_sha256(CHECKPOINT),
         )
         if existing.get("training_complete") is True:
             final = {
@@ -306,11 +313,14 @@ def main() -> int:
                 f"V8 training chunk failed with exit code {completed.returncode}"
             )
         training = _load_json(TRAINING_STATUS, "V8 training status")
+        if not CHECKPOINT.is_file():
+            raise ValueError("V8 training checkpoint is missing")
         plan_sha256, current_steps = _validate_training_status(
             training,
             database_identity=database_identity,
             model_fingerprint=model_fingerprint,
             expected_plan_sha256=plan_sha256,
+            expected_checkpoint_sha256=_sha256(CHECKPOINT),
         )
         if current_steps <= previous_steps:
             raise RuntimeError("V8 training chunk made no optimizer-step progress")

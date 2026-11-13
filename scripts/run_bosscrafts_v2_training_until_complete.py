@@ -18,6 +18,7 @@ from bosscrafts_model.training_progress import (
 
 CHECKPOINT_DIR = PROJECT_ROOT / "artifacts" / "checkpoints" / "bosscrafts-engineering-v2"
 DEFAULT_STATUS = CHECKPOINT_DIR / "training-progress.json"
+DEFAULT_CHECKPOINT = CHECKPOINT_DIR / "checkpoint.pt"
 EXPECTED_DATABASE_IDENTITY = "4103825ba8d474749813f4a97f2214fe35e50041baedbfbe1e41a64d258530d3"
 EXPECTED_MODEL_FINGERPRINT = "383bc3acb9bea01ed9a40fb6293a5ac81ee7ffb27ffbc4fdcfeafd96358b3bca"
 EXPECTED_PLAN_SHA256 = "e5b78bf0a13c802db0fa5dabb3abc83c3edc1646173ded0d8b411e72938fc0b3"
@@ -31,6 +32,7 @@ def _load_status(path: Path) -> TrainingProgress:
             "model_fingerprint": EXPECTED_MODEL_FINGERPRINT,
             "training_plan_sha256": EXPECTED_PLAN_SHA256,
         },
+        checkpoint_path=DEFAULT_CHECKPOINT,
     )
 
 

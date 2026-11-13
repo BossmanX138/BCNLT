@@ -35,6 +35,7 @@ from bosscrafts_model.training_checkpoint import (  # noqa: E402
     load_training_checkpoint,
     save_training_checkpoint,
 )
+from bosscrafts_model.training_progress import TRAINING_PROGRESS_SCHEMA  # noqa: E402
 from bosscrafts_model.training_schedule import cosine_learning_rate  # noqa: E402
 
 DEFAULT_DATABASE = (
@@ -344,6 +345,8 @@ def main() -> int:
             and initial_state.cursor_after_example_id is None
         ):
             raise ValueError("initial model checkpoint training is incomplete")
+        if initial_state.checkpoint_sha256 != initialization["checkpoint_sha256"]:
+            raise ValueError("initial checkpoint changed before loading")
 
     remaining_steps = arguments.max_steps
     invocation_steps = 0
@@ -416,10 +419,12 @@ def main() -> int:
         training_plan_sha256=training_plan_sha256,
     )
     checkpoint_write_seconds = time.perf_counter() - checkpoint_started
+    checkpoint_sha256 = _sha256_file(arguments.checkpoint.resolve())
     payload = {
-        "schema_version": "bosscrafts-training-progress-v1",
+        "schema_version": TRAINING_PROGRESS_SCHEMA,
         "binding_sha256": binding.binding_sha256,
         "checkpoint": str(arguments.checkpoint.resolve()),
+        "checkpoint_sha256": checkpoint_sha256,
         "checkpoint_size_bytes": arguments.checkpoint.stat().st_size,
         "checkpoint_written": True,
         "device": device.type,

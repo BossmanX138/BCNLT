@@ -379,7 +379,11 @@ class TrainerTests(unittest.TestCase):
             first_payload = json.loads(first.stdout)
             self.assertEqual(first_payload["total_optimizer_steps"], 1)
             self.assertEqual(
-                first_payload["schema_version"], "bosscrafts-training-progress-v1"
+                first_payload["schema_version"], "bosscrafts-training-progress-v2"
+            )
+            self.assertEqual(
+                first_payload["checkpoint_sha256"],
+                hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
             )
             self.assertEqual(first_payload["planned_optimizer_steps"], 4)
             self.assertEqual(first_payload["optimizer_steps_remaining"], 3)

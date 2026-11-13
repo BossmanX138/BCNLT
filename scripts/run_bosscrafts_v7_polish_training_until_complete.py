@@ -29,6 +29,7 @@ CHECKPOINT_DIR = (
     PROJECT_ROOT / "artifacts" / "checkpoints" / "bosscrafts-engineering-v7-polish"
 )
 DEFAULT_STATUS = CHECKPOINT_DIR / "training-progress.json"
+DEFAULT_CHECKPOINT = CHECKPOINT_DIR / "checkpoint.pt"
 
 
 def _load_status(path: Path) -> TrainingProgress:
@@ -41,6 +42,7 @@ def _load_status(path: Path) -> TrainingProgress:
             "planned_optimizer_steps": PLANNED_OPTIMIZER_STEPS,
             "initialization": expected_initialization(),
         },
+        checkpoint_path=DEFAULT_CHECKPOINT,
     )
 
 
