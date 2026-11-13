@@ -158,6 +158,22 @@ def _validated_optimizer_state(
     return optimizer_state
 
 
+def _validate_rng_state_compatibility(payload: dict[str, object]) -> None:
+    cpu_state = cast(torch.Tensor, payload["cpu_rng_state"])
+    if cpu_state.shape != torch.get_rng_state().shape:
+        raise ValueError("training checkpoint CPU RNG state is incompatible")
+    cuda_states = payload.get("cuda_rng_state_all")
+    if cuda_states is None or not torch.cuda.is_available():
+        return
+    saved_cuda_states = cast(list[torch.Tensor], cuda_states)
+    current_cuda_states = torch.cuda.get_rng_state_all()
+    if len(saved_cuda_states) != len(current_cuda_states) or any(
+        saved.shape != current.shape
+        for saved, current in zip(saved_cuda_states, current_cuda_states, strict=True)
+    ):
+        raise ValueError("training checkpoint CUDA RNG state is incompatible")
+
+
 @dataclass(frozen=True)
 class TrainingCheckpointState:
     checkpoint_sha256: str
@@ -287,6 +303,7 @@ def load_training_checkpoint(
         raise ValueError("training checkpoint training plan mismatch")
     model_state = _validated_model_state(model, payload, require_dtype=True)
     optimizer_state = _validated_optimizer_state(optimizer, payload)
+    _validate_rng_state_compatibility(payload)
     try:
         optimizer.load_state_dict(optimizer_state)
         model.load_state_dict(model_state, strict=True)

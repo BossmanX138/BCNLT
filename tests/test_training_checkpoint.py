@@ -237,6 +237,24 @@ class TrainingCheckpointTests(unittest.TestCase):
             for name, tensor in target_model.state_dict().items():
                 self.assertTrue(torch.equal(tensor, before[name]), name)
 
+            bad_rng = dict(valid)
+            bad_rng["cpu_rng_state"] = torch.zeros(1, dtype=torch.uint8)
+            bad_rng_path = root / "bad-rng.pt"
+            torch.save(bad_rng, bad_rng_path)
+            with self.assertRaisesRegex(ValueError, "CPU RNG state is incompatible"):
+                module.load_training_checkpoint(
+                    bad_rng_path,
+                    target_model,
+                    target_optimizer,
+                    expected_task_database_identity_sha256="a" * 64,
+                    expected_binding_sha256="b" * 64,
+                    expected_model_fingerprint=config.fingerprint(),
+                    expected_target_epochs=1,
+                    expected_training_plan_sha256="d" * 64,
+                )
+            for name, tensor in target_model.state_dict().items():
+                self.assertTrue(torch.equal(tensor, before[name]), name)
+
             inference_model = EngineeringModel(config).to(dtype=torch.bfloat16)
             inference_state = module.load_model_checkpoint_for_inference(
                 source,
