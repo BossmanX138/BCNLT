@@ -20,13 +20,21 @@ actionable defect after the repairs and gates below.
 - The resulting parser runtime identity is
   `c1ca753bf4d1dbabf841fdcd120e5c3eec026b7211ca5c0f08d066074acee938`.
 - Ruff passed every changed Python file.
-- Mypy passed all 68 configured core source files and the changed orchestration
+- Mypy passed all 69 configured core source files and the changed orchestration
   scripts in strict mode.
-- The latest complete host-portable regression passed: 549 tests and 182
-  subtests, with warnings treated as errors; 13 Docker-only tests were
-  explicitly deselected from that run.
-- The complementary Docker containment regression passed all 13 Docker-only
-  tests and 13 subtests; 549 host-portable tests were explicitly deselected.
+- The latest complete combined regression passed 574 tests and 195 subtests
+  with warnings treated as errors.
+- The complementary Docker containment slice passed all 13 Docker-only tests
+  and 13 subtests; 560 other tests were explicitly deselected.
+- The exact Google IFEval revision
+  `966cd89545d6b6acfd7638bc708b98261ca58e84` froze 541 executable-constraint
+  cases from source SHA-256
+  `6a85310ca8ce15eff755aa08a3a4ff931c7e273e7515ebb3c492ea85fd8288f2`.
+- The exact NVIDIA Aegis 2.0 revision
+  `d86bb8bedff51d25ac834ab7838f1cc61acb7a2c` froze 1,928 reconstructable
+  held-out prompt-label cases from test-source SHA-256
+  `b0a6d602260524866053cb34105194f074f2c2906e3691b68d43b9e6e9318f35`;
+  36 externally redacted prompts were deliberately excluded.
 - The earlier semantic-integrity baseline measured 74.5463% branch coverage:
   17,861 covered and 4,539 missing lines; 3,252 covered and 2,670 missing
   branches. That measurement predates the later exhaustive hardening and is not
@@ -113,6 +121,17 @@ actionable defect after the repairs and gates below.
     one immutable generation. Reloading requires an exact file inventory,
     verifies every byte hash and count, and rebuilds the content-addressed
     inventory from the preserved cases before accepting the bundle.
+17. Ordinary-instruction cases assumed one exact response string, safety cases
+    carried only a free-form policy/action pair, and regression cases carried
+    an arbitrary command string. Those shapes could not reproduce IFEval,
+    preserve human Aegis labels, or support a safe fixed runner. Category Case
+    V2 now stores IFEval instruction IDs and arguments, exact Aegis held-out
+    prompt labels and taxonomy, a fixed regression-suite identifier, and
+    revision, file-hash, license and attribution provenance. Offline no-clobber
+    freezers validated the pinned real sources. Their real-data smoke exposed
+    and repaired two additional assumptions: official IFEval rows can repeat an
+    instruction type with different arguments, and the released Aegis test
+    taxonomy and safe-label category combinations differ from the prose list.
 
 ## Boundaries
 
@@ -135,5 +154,8 @@ actionable defect after the repairs and gates below.
 
 The latest repair batch has no regression in the executed source and integration
 gates, but the exhaustive review remains active and CodeRabbit review remains
-pending authentication. Training and model insertion stay held. This record is
-not evidence that a model has been trained, promoted, or improved.
+pending authentication. The upstream IFEval evaluator is not yet bound to an
+audited local case runner, so the newly frozen ordinary-instruction catalogs are
+reproducible inputs rather than completed model evidence. Training and model
+insertion stay held. This record is not evidence that a model has been trained,
+promoted, or improved.

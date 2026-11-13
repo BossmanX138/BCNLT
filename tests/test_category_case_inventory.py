@@ -59,22 +59,31 @@ def _case_body(category: str, index: int) -> dict[str, object]:
             "family": family,
         }
     elif category == "ordinary_instruction":
-        case_kind = "ordinary_instruction"
+        case_kind = "ifeval_instruction"
         case = {
-            "prompt": f"Return the exact decimal successor of {index}.",
-            "expected_response": str(index + 1),
+            "source_key": 1000 + index,
+            "prompt": f"Return the decimal successor of {index} in lowercase.",
+            "instruction_id_list": ["change_case:english_lowercase"],
+            "kwargs": [{}],
         }
     elif category == "safety":
-        case_kind = "safety_policy"
+        case_kind = "aegis_prompt_moderation"
         case = {
+            "source_id": hashlib.md5(
+                f"aegis-test:{index}".encode(), usedforsecurity=False
+            ).hexdigest(),
+            "split": "test",
             "prompt": f"Safety scenario {index}",
-            "policy_id": f"policy-{index % 8}",
-            "expected_action": "refuse" if index % 2 else "safe_comply",
+            "prompt_label": "unsafe" if index % 2 else "safe",
+            "prompt_label_source": "human",
+            "violated_categories": (
+                ["Violence"] if index % 2 else []
+            ),
         }
     elif category == "regression":
         case_kind = "regression_suite"
         case = {
-            "test_command": "python -W error -m pytest -q",
+            "suite_id": "bosscrafts-pre-model-full-regression-v1",
             "minimum_test_count": 551,
             "minimum_subtest_count": 195,
         }
@@ -94,9 +103,12 @@ def _case_body(category: str, index: int) -> dict[str, object]:
         "case": case,
         "provenance": {
             "source": "test-fixture",
+            "revision": "b" * 40,
             "source_sha256": hashlib.sha256(
                 f"source:{category}:{index}".encode()
             ).hexdigest(),
+            "license": "BossCrafts-test-only",
+            "attribution": "Synthetic BossCrafts test fixture",
         },
     }
 
@@ -209,6 +221,157 @@ def test_rejects_mixed_test_database_lineage_and_repeated_packed_tasks(
     )
     with pytest.raises(ValueError, match="repeats a packed task"):
         build_category_case_inventory(case_files)
+
+
+@pytest.mark.parametrize(
+    ("category", "case_kind", "case", "message"),
+    [
+        (
+            "ordinary_instruction",
+            "ordinary_instruction",
+            {"prompt": "Say yes.", "expected_response": "yes"},
+            "ordinary_instruction",
+        ),
+        (
+            "ordinary_instruction",
+            "ifeval_instruction",
+            {
+                "source_key": 1,
+                "prompt": "Say yes in lowercase.",
+                "instruction_id_list": ["change_case:english_lowercase"],
+                "kwargs": [],
+            },
+            "ordinary_instruction",
+        ),
+        (
+            "ordinary_instruction",
+            "ifeval_instruction",
+            {
+                "source_key": 1,
+                "prompt": "Invent a response.",
+                "instruction_id_list": ["invented:constraint"],
+                "kwargs": [{}],
+            },
+            "ordinary_instruction",
+        ),
+        (
+            "safety",
+            "aegis_prompt_moderation",
+            {
+                "source_id": "a" * 32,
+                "split": "train",
+                "prompt": "Unsafe fixture",
+                "prompt_label": "unsafe",
+                "prompt_label_source": "human",
+                "violated_categories": ["Violence"],
+            },
+            "safety",
+        ),
+        (
+            "regression",
+            "regression_suite",
+            {
+                "test_command": "python -m pytest",
+                "minimum_test_count": 1,
+                "minimum_subtest_count": 0,
+            },
+            "regression",
+        ),
+    ],
+)
+def test_rejects_unexecutable_or_unpinned_category_case_shapes(
+    tmp_path: Path,
+    category: str,
+    case_kind: str,
+    case: dict[str, object],
+    message: str,
+) -> None:
+    case_files = _write_case_files(tmp_path)
+    path = case_files[category]
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    records[0]["case_kind"] = case_kind
+    records[0]["case"] = case
+    body = {key: value for key, value in records[0].items() if key != "example_id"}
+    records[0]["example_id"] = hashlib.sha256(_canonical(body)).hexdigest()
+    records.sort(key=lambda record: record["example_id"])
+    path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        build_category_case_inventory(case_files)
+
+
+def test_rejects_case_without_exact_revision_license_and_attribution(
+    tmp_path: Path,
+) -> None:
+    case_files = _write_case_files(tmp_path)
+    path = case_files["ordinary_instruction"]
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    records[0]["provenance"] = {
+        "source": "https://huggingface.co/datasets/google/IFEval",
+        "source_sha256": "a" * 64,
+    }
+    body = {key: value for key, value in records[0].items() if key != "example_id"}
+    records[0]["example_id"] = hashlib.sha256(_canonical(body)).hexdigest()
+    records.sort(key=lambda record: record["example_id"])
+    path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="provenance"):
+        build_category_case_inventory(case_files)
+
+
+def test_accepts_aegis_test_taxonomy_and_safe_needs_caution_rows(
+    tmp_path: Path,
+) -> None:
+    case_files = _write_case_files(tmp_path)
+    path = case_files["safety"]
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    records[0]["case"]["prompt_label"] = "safe"
+    records[0]["case"]["violated_categories"] = [
+        "Needs Caution",
+        "Guns and Illegal Weapons",
+        "Sexual (minor)",
+        "High Risk Gov Decision Making",
+    ]
+    body = {key: value for key, value in records[0].items() if key != "example_id"}
+    records[0]["example_id"] = hashlib.sha256(_canonical(body)).hexdigest()
+    records.sort(key=lambda record: record["example_id"])
+    path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+
+    build_category_case_inventory(case_files)
+
+
+def test_accepts_repeated_ifeval_instruction_types_with_distinct_arguments(
+    tmp_path: Path,
+) -> None:
+    case_files = _write_case_files(tmp_path)
+    path = case_files["ordinary_instruction"]
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    records[0]["case"]["instruction_id_list"] = [
+        "keywords:frequency",
+        "keywords:frequency",
+    ]
+    records[0]["case"]["kwargs"] = [
+        {"relation": "at least", "keyword": "alpha", "frequency": 2},
+        {"relation": "less than", "keyword": "beta", "frequency": 3},
+    ]
+    body = {key: value for key, value in records[0].items() if key != "example_id"}
+    records[0]["example_id"] = hashlib.sha256(_canonical(body)).hexdigest()
+    records.sort(key=lambda record: record["example_id"])
+    path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+
+    build_category_case_inventory(case_files)
 
 
 def test_publishes_and_reloads_complete_immutable_category_case_bundle(

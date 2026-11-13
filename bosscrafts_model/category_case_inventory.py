@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,7 +24,7 @@ from .model_acceptance import (
     MINIMUM_CATEGORY_EXAMPLES,
 )
 
-CATEGORY_CASE_SCHEMA = "bosscrafts-model-category-case-v1"
+CATEGORY_CASE_SCHEMA = "bosscrafts-model-category-case-v2"
 CATEGORY_CASE_BUNDLE_SCHEMA = "bosscrafts-model-category-case-bundle-v1"
 MAX_CATEGORY_CASE_FILE_BYTES = 128 * 1024 * 1024
 MAX_CATEGORY_CASE_BUNDLE_MANIFEST_BYTES = 16 * 1024 * 1024
@@ -34,6 +36,61 @@ _PACKED_CATEGORIES = {
     "raw_code",
     "execution_correctness",
 }
+_IFEVAL_INSTRUCTION_IDS = {
+    "change_case:capital_word_frequency",
+    "change_case:english_capital",
+    "change_case:english_lowercase",
+    "combination:repeat_prompt",
+    "combination:two_responses",
+    "detectable_content:number_placeholders",
+    "detectable_content:postscript",
+    "detectable_format:constrained_response",
+    "detectable_format:json_format",
+    "detectable_format:multiple_sections",
+    "detectable_format:number_bullet_lists",
+    "detectable_format:number_highlighted_sections",
+    "detectable_format:title",
+    "keywords:existence",
+    "keywords:forbidden_words",
+    "keywords:frequency",
+    "keywords:letter_frequency",
+    "language:response_language",
+    "length_constraints:nth_paragraph_first_word",
+    "length_constraints:number_paragraphs",
+    "length_constraints:number_sentences",
+    "length_constraints:number_words",
+    "punctuation:no_comma",
+    "startend:end_checker",
+    "startend:quotation",
+}
+_AEGIS_SOURCE_ID = re.compile(r"^[0-9a-f]{32}$")
+_SOURCE_REVISION = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+_AEGIS_VIOLATION_CATEGORIES = {
+    "Hate/Identity Hate",
+    "Sexual",
+    "Suicide and Self Harm",
+    "Violence",
+    "Guns and Illegal Weapons",
+    "Threat",
+    "PII/Privacy",
+    "Sexual (minor)",
+    "Criminal Planning/Confessions",
+    "Harassment",
+    "Controlled/Regulated Substances",
+    "Profanity",
+    "Illegal Activity",
+    "Immoral/Unethical",
+    "Unauthorized Advice",
+    "Political/Misinformation/Conspiracy",
+    "Fraud/Deception",
+    "Copyright/Trademark/Plagiarism",
+    "High Risk Gov Decision Making",
+    "Malware",
+    "Manipulation",
+    "Needs Caution",
+    "Other",
+}
+_REGRESSION_SUITE_ID = "bosscrafts-pre-model-full-regression-v1"
 
 
 @dataclass(frozen=True)
@@ -140,6 +197,125 @@ def _validate_packed_case(category: str, case: dict[str, object]) -> str:
     return str(case["language"])
 
 
+def _valid_bounded_json_value(value: object, *, depth: int = 0) -> bool:
+    """Accept the bounded JSON subset used by the upstream IFEval kwargs."""
+    if depth > 4:
+        return False
+    if value is None or type(value) is bool:
+        return True
+    if type(value) is int:
+        return -(2**63) <= value < 2**63
+    if type(value) is float:
+        return math.isfinite(value)
+    if type(value) is str:
+        return len(value) <= 16_384
+    if type(value) is list:
+        return len(value) <= 128 and all(
+            _valid_bounded_json_value(item, depth=depth + 1) for item in value
+        )
+    if type(value) is dict:
+        return len(value) <= 64 and all(
+            type(key) is str
+            and bool(key)
+            and len(key) <= 256
+            and _valid_bounded_json_value(item, depth=depth + 1)
+            for key, item in value.items()
+        )
+    return False
+
+
+def _valid_provenance(value: object) -> bool:
+    if type(value) is not dict or set(value) != {
+        "source",
+        "revision",
+        "source_sha256",
+        "license",
+        "attribution",
+    }:
+        return False
+    source = value.get("source")
+    revision = value.get("revision")
+    license_name = value.get("license")
+    attribution = value.get("attribution")
+    return (
+        type(source) is str
+        and bool(source.strip())
+        and len(source) <= 2_048
+        and type(revision) is str
+        and _SOURCE_REVISION.fullmatch(revision) is not None
+        and _is_sha256(value.get("source_sha256"))
+        and type(license_name) is str
+        and bool(license_name.strip())
+        and len(license_name) <= 256
+        and type(attribution) is str
+        and bool(attribution.strip())
+        and len(attribution) <= 2_048
+    )
+
+
+def _valid_ifeval_case(case: dict[str, object]) -> bool:
+    source_key = case.get("source_key")
+    instruction_ids = case.get("instruction_id_list")
+    kwargs = case.get("kwargs")
+    if (
+        set(case)
+        != {"source_key", "prompt", "instruction_id_list", "kwargs"}
+        or type(source_key) is not int
+        or source_key < 0
+        or type(case.get("prompt")) is not str
+        or not str(case["prompt"]).strip()
+        or len(str(case["prompt"])) > 16_384
+        or type(instruction_ids) is not list
+        or not 1 <= len(instruction_ids) <= 16
+        or type(kwargs) is not list
+        or len(kwargs) != len(instruction_ids)
+    ):
+        return False
+    if any(
+        type(instruction_id) is not str
+        or instruction_id not in _IFEVAL_INSTRUCTION_IDS
+        for instruction_id in instruction_ids
+    ):
+        return False
+    return all(
+        type(item) is dict and _valid_bounded_json_value(item) for item in kwargs
+    )
+
+
+def _valid_aegis_case(case: dict[str, object]) -> bool:
+    violated_categories = case.get("violated_categories")
+    prompt_label = case.get("prompt_label")
+    if (
+        set(case)
+        != {
+            "source_id",
+            "split",
+            "prompt",
+            "prompt_label",
+            "prompt_label_source",
+            "violated_categories",
+        }
+        or type(case.get("source_id")) is not str
+        or _AEGIS_SOURCE_ID.fullmatch(str(case["source_id"])) is None
+        or case.get("split") != "test"
+        or type(case.get("prompt")) is not str
+        or not str(case["prompt"]).strip()
+        or len(str(case["prompt"])) > 16_384
+        or prompt_label not in {"safe", "unsafe"}
+        or case.get("prompt_label_source") != "human"
+        or type(violated_categories) is not list
+        or len(violated_categories) > len(_AEGIS_VIOLATION_CATEGORIES)
+        or any(
+            type(category) is not str
+            or category not in _AEGIS_VIOLATION_CATEGORIES
+            for category in violated_categories
+        )
+        or len(set(violated_categories)) != len(violated_categories)
+    ):
+        return False
+    return prompt_label == "safe" or bool(violated_categories)
+
+
 def _validate_case_payload(
     category: str,
     case_kind: object,
@@ -157,38 +333,19 @@ def _validate_case_payload(
             raise ValueError(f"{category} case kind is invalid")
         return _validate_packed_case(category, case)
     if category == "ordinary_instruction":
-        if (
-            case_kind != "ordinary_instruction"
-            or set(case) != {"prompt", "expected_response"}
-            or any(
-                type(case.get(field)) is not str
-                or not str(case[field]).strip()
-                or len(str(case[field])) > 16_384
-                for field in ("prompt", "expected_response")
-            )
-        ):
+        if case_kind != "ifeval_instruction" or not _valid_ifeval_case(case):
             raise ValueError("ordinary_instruction case payload is invalid")
         return None
     if category == "safety":
-        if (
-            case_kind != "safety_policy"
-            or set(case) != {"prompt", "policy_id", "expected_action"}
-            or type(case.get("prompt")) is not str
-            or not str(case["prompt"]).strip()
-            or len(str(case["prompt"])) > 16_384
-            or type(case.get("policy_id")) is not str
-            or not str(case["policy_id"]).strip()
-            or case.get("expected_action") not in {"refuse", "safe_comply"}
-        ):
+        if case_kind != "aegis_prompt_moderation" or not _valid_aegis_case(case):
             raise ValueError("safety case payload is invalid")
         return None
     if category == "regression":
         if (
             case_kind != "regression_suite"
             or set(case)
-            != {"test_command", "minimum_test_count", "minimum_subtest_count"}
-            or type(case.get("test_command")) is not str
-            or not str(case["test_command"]).strip()
+            != {"suite_id", "minimum_test_count", "minimum_subtest_count"}
+            or case.get("suite_id") != _REGRESSION_SUITE_ID
             or type(case.get("minimum_test_count")) is not int
             or int(case["minimum_test_count"]) < 1
             or type(case.get("minimum_subtest_count")) is not int
@@ -255,11 +412,7 @@ def _build_category_case_inventory_from_contents(
             if (
                 record.get("schema_version") != CATEGORY_CASE_SCHEMA
                 or record.get("category") != category
-                or type(provenance) is not dict
-                or set(provenance) != {"source", "source_sha256"}
-                or type(provenance.get("source")) is not str
-                or not str(provenance["source"]).strip()
-                or not _is_sha256(provenance.get("source_sha256"))
+                or not _valid_provenance(provenance)
             ):
                 raise ValueError(f"{category} category case provenance is invalid")
             body = {key: value for key, value in record.items() if key != "example_id"}
