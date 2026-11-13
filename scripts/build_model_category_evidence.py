@@ -20,6 +20,9 @@ from bosscrafts_model.model_category_evidence import (
     publish_model_category_evidence,
 )
 from bosscrafts_model.resumable_task_packing import audit_task_database
+from bosscrafts_model.semantic_acceptance import (
+    MAX_SEMANTIC_ACCEPTANCE_RECEIPT_BYTES,
+)
 from bosscrafts_model.tokenizer import NativeTokenizerBinding
 
 
@@ -113,6 +116,7 @@ def main() -> int:
     parser.add_argument("--regression-receipt", type=Path)
     parser.add_argument("--tokenizer-fidelity-receipt", type=Path)
     parser.add_argument("--code-acceptance-receipt", type=Path)
+    parser.add_argument("--semantic-acceptance-receipt", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
     plural_databases = (
@@ -130,6 +134,17 @@ def main() -> int:
         if arguments.records is not None:
             parser.error(
                 "tokenizer_fidelity records come from the tokenizer receipt"
+            )
+    elif arguments.category == "semantic_fidelity":
+        if arguments.semantic_acceptance_receipt is None:
+            parser.error(
+                "semantic_fidelity requires --semantic-acceptance-receipt"
+            )
+        if arguments.strict_uncertainty_receipt is None:
+            parser.error("semantic_fidelity requires --strict-uncertainty-receipt")
+        if arguments.records is not None:
+            parser.error(
+                "semantic_fidelity records come from the semantic receipt"
             )
     elif arguments.category in {"raw_code", "execution_correctness"}:
         if arguments.code_acceptance_receipt is None:
@@ -223,6 +238,15 @@ def main() -> int:
         if arguments.code_acceptance_receipt is not None
         else None
     )
+    semantic_receipt = (
+        _read_object(
+            arguments.semantic_acceptance_receipt,
+            "semantic acceptance receipt",
+            maximum_bytes=MAX_SEMANTIC_ACCEPTANCE_RECEIPT_BYTES,
+        )
+        if arguments.semantic_acceptance_receipt is not None
+        else None
+    )
     if arguments.category == "tokenizer_fidelity":
         raw_records = (
             tokenizer_receipt.get("records")
@@ -233,6 +257,17 @@ def main() -> int:
             type(record) is not dict for record in raw_records
         ):
             raise ValueError("tokenizer fidelity receipt records are invalid")
+        records = raw_records
+    elif arguments.category == "semantic_fidelity":
+        raw_records = (
+            semantic_receipt.get("records")
+            if semantic_receipt is not None
+            else None
+        )
+        if type(raw_records) is not list or any(
+            type(record) is not dict for record in raw_records
+        ):
+            raise ValueError("semantic acceptance receipt records are invalid")
         records = raw_records
     elif arguments.category in {"raw_code", "execution_correctness"}:
         raw_records = code_receipt.get("records") if code_receipt is not None else None
@@ -290,6 +325,7 @@ def main() -> int:
         regression_receipt=regression_receipt,
         tokenizer_fidelity_receipt=tokenizer_receipt,
         code_acceptance_receipt=code_receipt,
+        semantic_acceptance_receipt=semantic_receipt,
     )
     publish_model_category_evidence(arguments.output, payload)
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))

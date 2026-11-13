@@ -231,6 +231,19 @@ actionable defect after the repairs and gates below.
     contract enforced by both its publisher and the final reader; all other
     acceptance inputs retain the original 16 MiB limit. Both readers now check
     file size before allocation and reject a file that changes while it is read.
+25. Semantic-fidelity category records still accepted caller-authored claims
+    that a model emitted exact semantic records, preserved lexical ownership
+    and avoided unknown semantics. The strict-uncertainty receipt calibrated
+    the parser/runtime but did not prove any checkpoint output. The semantic
+    acceptance runner now loads only a complete checkpoint with exact frozen
+    training/evaluation lineage, greedily generates every frozen
+    `code_to_semantic` case, decodes each response through the canonical BCNLT
+    semantic codec, and derives exact-stream, ownership-projection and unknown-
+    semantic outcomes from the generated and expected token IDs. Its bounded
+    no-clobber receipt preserves both streams and their task hashes; validators
+    independently rederive every result. Category Evidence Schema V11 and final
+    acceptance now require both this checkpoint-bound model receipt and the
+    separate strict-uncertainty receipt.
 
 ## Boundaries
 
@@ -254,8 +267,8 @@ actionable defect after the repairs and gates below.
 The latest repair batch has no regression in the executed source and integration
 gates, but the exhaustive review remains active and CodeRabbit review remains
 pending authentication. The ordinary-instruction runner is executable and
-audited. The exact current tree passes 616 tests and 195 subtests, along with
-Ruff and strict mypy across 80 source files. The regression receipt path is now
+audited. The exact current tree passes 620 tests and 195 subtests, along with
+Ruff and strict mypy across 83 source files. The regression receipt path is now
 implemented and mandatory, but its fixed worker must still be exercised from a
 clean committed tree. Tokenizer fidelity is also executable and receipt-bound,
 but awaits the final frozen category-case bundle for its production run. The
@@ -279,4 +292,4 @@ matches and 0/12 exact clean-core matches, and failed promotion-quality
 protocol rates. Its evidence and non-promotion decision are recorded in
 `docs/v12-recovery-diagnostic-20261113.md`. Neither diagnostic is evidence that
 a model has been trained, promoted, or improved. The exact current tree passes
-616 tests and 195 subtests.
+620 tests and 195 subtests.

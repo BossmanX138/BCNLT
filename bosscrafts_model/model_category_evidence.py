@@ -36,6 +36,10 @@ from .safety_judge_case_runner import (
     safety_content_receipt_metrics,
     validate_safety_content_receipt,
 )
+from .semantic_acceptance import (
+    semantic_acceptance_receipt_metrics,
+    validate_semantic_acceptance_receipt,
+)
 from .strict_uncertainty_acceptance import (
     StrictUncertaintyAcceptanceReceipt,
     validate_strict_uncertainty_receipt_payload,
@@ -102,6 +106,7 @@ def compile_model_category_evidence(
     regression_receipt: dict[str, object] | None = None,
     tokenizer_fidelity_receipt: dict[str, object] | None = None,
     code_acceptance_receipt: dict[str, object] | None = None,
+    semantic_acceptance_receipt: dict[str, object] | None = None,
 ) -> dict[str, object]:
     if category not in ACCEPTANCE_CATEGORIES:
         raise ValueError("model acceptance category is invalid")
@@ -131,6 +136,7 @@ def compile_model_category_evidence(
                 containment_receipt,
                 regression_receipt,
                 code_acceptance_receipt,
+                semantic_acceptance_receipt,
             )
         ):
             raise ValueError("category receipt is not valid for tokenizer fidelity")
@@ -163,12 +169,26 @@ def compile_model_category_evidence(
             raise ValueError("category receipt is not valid for semantic fidelity")
         if type(strict_uncertainty_receipt) is not dict:
             raise ValueError("semantic fidelity requires a strict uncertainty receipt")
+        if type(semantic_acceptance_receipt) is not dict:
+            raise ValueError("semantic fidelity requires a semantic acceptance receipt")
         receipt = validate_strict_uncertainty_receipt(strict_uncertainty_receipt)
+        semantic_payload = validate_semantic_acceptance_receipt(
+            semantic_acceptance_receipt,
+            expected_checkpoint_sha256=checkpoint_sha256,
+            expected_checkpoint_step=checkpoint_step,
+            expected_example_ids=suite.category_example_ids[category],
+            expected_records=records,
+            expected_task_database_identity_sha256=evidence_database_identity,
+        )
         declared_metrics = {
             "strict_uncertainty_acceptance_passed": receipt.passed,
             "strict_uncertainty_receipt_sha256": receipt.receipt_sha256,
+            **semantic_acceptance_receipt_metrics(semantic_payload),
         }
-        supporting_evidence = {"strict_uncertainty_receipt": receipt.to_dict()}
+        supporting_evidence = {
+            "strict_uncertainty_receipt": receipt.to_dict(),
+            "semantic_acceptance_receipt": semantic_payload,
+        }
     elif category in CODE_ACCEPTANCE_CATEGORIES:
         if any(
             receipt is not None
@@ -179,6 +199,7 @@ def compile_model_category_evidence(
                 containment_receipt,
                 regression_receipt,
                 tokenizer_fidelity_receipt,
+                semantic_acceptance_receipt,
             )
         ):
             raise ValueError("category receipt is not valid for code acceptance")
@@ -205,6 +226,7 @@ def compile_model_category_evidence(
                 regression_receipt,
                 tokenizer_fidelity_receipt,
                 code_acceptance_receipt,
+                semantic_acceptance_receipt,
             )
         ):
             raise ValueError("category receipt is not valid for ordinary instruction")
@@ -227,6 +249,7 @@ def compile_model_category_evidence(
                 regression_receipt,
                 tokenizer_fidelity_receipt,
                 code_acceptance_receipt,
+                semantic_acceptance_receipt,
             )
         ):
             raise ValueError("category receipt is not valid for safety")
@@ -287,6 +310,7 @@ def compile_model_category_evidence(
                 containment_receipt,
                 tokenizer_fidelity_receipt,
                 code_acceptance_receipt,
+                semantic_acceptance_receipt,
             )
         ):
             raise ValueError("category receipt is not valid for regression")
@@ -311,6 +335,7 @@ def compile_model_category_evidence(
             regression_receipt,
             tokenizer_fidelity_receipt,
             code_acceptance_receipt,
+            semantic_acceptance_receipt,
         )
     ):
         raise ValueError("category receipt is not valid for this category")

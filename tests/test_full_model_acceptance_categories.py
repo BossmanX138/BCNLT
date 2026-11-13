@@ -18,9 +18,11 @@ from bosscrafts_model.artifact_schemas import (
     MODEL_CATEGORY_EVIDENCE_SCHEMA,
     MODEL_HELDOUT_SUITE_SCHEMA,
 )
+from bosscrafts_model.bcnlt_adapter import BCNLTCanonicalRecord
 from bosscrafts_model.bcnlt_source_pipeline import (
     CURRENT_RUNTIME_SPEC_SHA256,
     PARSER_RUNTIME_IDENTITY_SHA256,
+    _NativeSemanticStreamCodec,
 )
 from bosscrafts_model.code_acceptance import (
     CodeAcceptanceBatchResult,
@@ -56,6 +58,10 @@ from bosscrafts_model.safety_judge_case_runner import (
 )
 from bosscrafts_model.safety_judge_runtime import (
     EXPECTED_SAFETY_JUDGE_RUNTIME_MANIFEST_SHA256,
+)
+from bosscrafts_model.semantic_acceptance import (
+    SemanticAcceptanceBatchResult,
+    build_semantic_acceptance_receipt,
 )
 from bosscrafts_model.strict_uncertainty_acceptance import (
     StrictUncertaintyAcceptanceReceipt,
@@ -328,6 +334,7 @@ def _metrics(category: str) -> dict[str, object]:
     tokenizer_fidelity = _tokenizer_fidelity_receipt_payload()
     raw_code_receipt = _code_receipt_payload("raw_code")
     execution_receipt = _code_receipt_payload("execution_correctness")
+    semantic_receipt = _semantic_receipt_payload()
     return {
         "tokenizer_fidelity": {
             "exact_roundtrip_rate": 1.0,
@@ -344,6 +351,9 @@ def _metrics(category: str) -> dict[str, object]:
             "language_passes": language_passes,
             "strict_uncertainty_acceptance_passed": True,
             "strict_uncertainty_receipt_sha256": strict_receipt["receipt_sha256"],
+            "semantic_acceptance_receipt_sha256": semantic_receipt[
+                "receipt_sha256"
+            ],
         },
         "raw_code": {
             "exact_roundtrip_rate": 1.0,
@@ -608,6 +618,119 @@ def _tokenizer_fidelity_receipt_payload() -> dict[str, object]:
     )
 
 
+@lru_cache(maxsize=1)
+def _cached_semantic_receipt_payload() -> dict[str, object]:
+    payload = {
+        "ast_relation": "identifier.self",
+        "confidence_band": "high",
+        "defines": "value",
+        "event": "DEFINE",
+        "ir": {
+            "children": [],
+            "kind": "variable",
+            "metadata": {},
+            "name": "value",
+            "value": None,
+        },
+        "metadata": {
+            "knowledge_state": "known",
+            "uncertainty_signals": [],
+            "uyr_rounds": 0,
+        },
+        "recent_history": [],
+        "scope": "module",
+        "span": [1, 0, 1, 5],
+        "surface": "value",
+        "symbol_id": "module.value",
+        "uncertainty_band": "low",
+    }
+    canonical = json.dumps(
+        payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    )
+    canonical_record = BCNLTCanonicalRecord(
+        language="python",
+        canonical_json=canonical,
+        payload_sha256=hashlib.sha256(canonical.encode()).hexdigest(),
+        event="DEFINE",
+        surface="value",
+        confidence_band="high",
+        uncertainty_band="low",
+        span=(1, 0, 1, 5),
+    )
+    expected_ids = [
+        *_NativeSemanticStreamCodec(BINDING).encode((canonical_record,)),
+        BINDING.structural_token_ids["<|bcnlt:task:end|>"],
+    ]
+    jsonl = canonical + "\n"
+    projection = [
+        {
+            key: payload.get(key)
+            for key in (
+                "event",
+                "scope",
+                "defines",
+                "symbol_id",
+                "span",
+                "ast_relation",
+            )
+        }
+    ]
+    records = tuple(_records("semantic_fidelity"))
+    details = tuple(
+        {
+            "example_id": record["example_id"],
+            "task_example_id": hashlib.sha256(
+                f"semantic-task:{record['example_id']}".encode()
+            ).hexdigest(),
+            "language": record["language"],
+            "task_input_ids_sha256": hashlib.sha256(
+                f"semantic-input:{record['example_id']}".encode()
+            ).hexdigest(),
+            "expected_ids": expected_ids,
+            "expected_ids_sha256": hashlib.sha256(
+                _canonical(expected_ids)
+            ).hexdigest(),
+            "generated_ids": expected_ids,
+            "generated_ids_sha256": hashlib.sha256(
+                _canonical(expected_ids)
+            ).hexdigest(),
+            "protocol_complete": True,
+            "expected_semantic_jsonl_sha256": hashlib.sha256(
+                jsonl.encode()
+            ).hexdigest(),
+            "generated_semantic_jsonl_sha256": hashlib.sha256(
+                jsonl.encode()
+            ).hexdigest(),
+            "expected_record_count": 1,
+            "generated_record_count": 1,
+            "expected_ownership_sha256": hashlib.sha256(
+                _canonical(projection)
+            ).hexdigest(),
+            "generated_ownership_sha256": hashlib.sha256(
+                _canonical(projection)
+            ).hexdigest(),
+        }
+        for record in records
+    )
+    return build_semantic_acceptance_receipt(
+        SemanticAcceptanceBatchResult(
+            case_bundle_manifest_sha256="7" * 64,
+            case_inventory_sha256="8" * 64,
+            task_database_identity_sha256=DATABASE_ID,
+            binding_sha256=BINDING.binding_sha256,
+            tokenizer_sha256=TOKENIZER_ID,
+            records=records,
+            details=details,
+        ),
+        checkpoint_sha256=CHECKPOINT_ID,
+        checkpoint_step=86_016,
+    )
+
+
+def _semantic_receipt_payload() -> dict[str, object]:
+    return copy.deepcopy(_cached_semantic_receipt_payload())
+
+
 @lru_cache(maxsize=2)
 def _cached_code_receipt_payload(category: str) -> dict[str, object]:
     if category not in {"raw_code", "execution_correctness"}:
@@ -693,7 +816,8 @@ def _category(category: str) -> dict[str, object]:
         }
     elif category == "semantic_fidelity":
         supporting_evidence = {
-            "strict_uncertainty_receipt": _strict_receipt_payload()
+            "strict_uncertainty_receipt": _strict_receipt_payload(),
+            "semantic_acceptance_receipt": _semantic_receipt_payload(),
         }
     elif category in {"raw_code", "execution_correctness"}:
         supporting_evidence = {
@@ -1004,7 +1128,10 @@ class FullModelAcceptanceCategoryTests(unittest.TestCase):
             key: value for key, value in semantic.items() if key != "artifact_sha256"
         }
         semantic["artifact_sha256"] = hashlib.sha256(_canonical(body)).hexdigest()
-        with self.assertRaisesRegex(ValueError, "does not pass every language"):
+        with self.assertRaisesRegex(
+            ValueError,
+            "does not pass every language|semantic acceptance receipt expected records mismatch",
+        ):
             self._verify(tuple(language_failure))
 
     def test_semantic_fidelity_requires_strict_uncertainty_receipt(self):
@@ -1043,7 +1170,8 @@ class FullModelAcceptanceCategoryTests(unittest.TestCase):
         )
         receipt = replace(receipt, receipt_sha256=receipt.compute_sha256())
         forged_semantic["supporting_evidence"] = {
-            "strict_uncertainty_receipt": receipt.to_dict()
+            "strict_uncertainty_receipt": receipt.to_dict(),
+            "semantic_acceptance_receipt": _semantic_receipt_payload(),
         }
         forged_semantic["metrics"]["strict_uncertainty_receipt_sha256"] = (
             receipt.receipt_sha256

@@ -14,20 +14,19 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bosscrafts_model.category_case_inventory import load_category_case_bundle
+from bosscrafts_model.checkpoint_case_generation import (
+    MAX_FROZEN_GENERATED_TOKENS,
+    generate_frozen_category_candidates,
+)
 from bosscrafts_model.code_acceptance import (
     CODE_ACCEPTANCE_CATEGORIES,
-    MAX_GENERATED_TOKENS,
     build_code_acceptance_receipt,
     publish_code_acceptance_receipt,
     run_code_acceptance_cases,
 )
-from bosscrafts_model.inference_protocol import task_end_token_id
 from bosscrafts_model.model import EngineeringModel
 from bosscrafts_model.model_acceptance import verify_heldout_suite_manifest
-from bosscrafts_model.resumable_task_packing import (
-    ResumableTaskDataset,
-    audit_task_database,
-)
+from bosscrafts_model.resumable_task_packing import audit_task_database
 from bosscrafts_model.scientific_sandbox import DockerScientificSandbox
 from bosscrafts_model.tokenizer import NativeTokenizerBinding, bound_native_65k_config
 from bosscrafts_model.training_checkpoint import load_model_checkpoint_for_inference
@@ -59,60 +58,6 @@ def _read_heldout_manifest(path: Path) -> dict[str, object]:
     return payload
 
 
-def _generate_candidates(
-    *,
-    model: EngineeringModel,
-    binding: NativeTokenizerBinding,
-    category: str,
-    case_bundle_root: Path,
-    test_task_database: Path,
-    device: torch.device,
-    maximum_new_tokens: int,
-) -> dict[str, list[int]]:
-    bundle = load_category_case_bundle(case_bundle_root)
-    references = bundle.inventory.packed_task_references[category]
-    if not references:
-        raise ValueError("code acceptance category has no frozen cases")
-    dataset = ResumableTaskDataset(binding, test_task_database)
-    task_ids = tuple(reference.task_example_id for reference in references)
-    tasks = {
-        task["example_id"]: task
-        for task in dataset.iter_examples_by_id(task_ids, split="test")
-    }
-    generated_by_example_id: dict[str, list[int]] = {}
-    end_token = task_end_token_id(binding, "semantic_to_code")
-    for reference in references:
-        task = tasks.get(reference.task_example_id)
-        if (
-            task is None
-            or task["family"] != "semantic_to_code"
-            or task["language"] != reference.language
-        ):
-            raise ValueError("code acceptance generation task lineage mismatch")
-        input_ids = task["input_ids"]
-        loss_start = task["loss_start_index"]
-        if not 0 < loss_start < len(input_ids):
-            raise ValueError("code acceptance generation prompt is invalid")
-        prompt_ids = input_ids[:loss_start]
-        per_case_limit = min(
-            maximum_new_tokens,
-            model.config.max_sequence - len(prompt_ids),
-        )
-        if per_case_limit < 1:
-            raise ValueError("code acceptance generation has no response capacity")
-        prompt = torch.tensor([prompt_ids], dtype=torch.long, device=device)
-        generated = model.generate(
-            prompt,
-            max_new_tokens=per_case_limit,
-            eos_token_id=end_token,
-        )
-        response_ids = generated[0, len(prompt_ids) :].tolist()
-        if len(response_ids) > MAX_GENERATED_TOKENS:
-            raise ValueError("code acceptance generation exceeded its receipt bound")
-        generated_by_example_id[reference.category_example_id] = response_ids
-    return generated_by_example_id
-
-
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -134,14 +79,15 @@ def main() -> int:
         "--dtype", choices=("float32", "bfloat16"), default="bfloat16"
     )
     parser.add_argument(
-        "--max-new-tokens", type=int, default=MAX_GENERATED_TOKENS
+        "--max-new-tokens", type=int, default=MAX_FROZEN_GENERATED_TOKENS
     )
     parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
 
-    if not 1 <= arguments.max_new_tokens <= MAX_GENERATED_TOKENS:
+    if not 1 <= arguments.max_new_tokens <= MAX_FROZEN_GENERATED_TOKENS:
         parser.error(
-            f"max-new-tokens must be between 1 and {MAX_GENERATED_TOKENS}"
+            "max-new-tokens must be between 1 and "
+            f"{MAX_FROZEN_GENERATED_TOKENS}"
         )
     if arguments.device == "cuda" and not torch.cuda.is_available():
         parser.error("CUDA was requested but is unavailable")
@@ -196,13 +142,13 @@ def main() -> int:
     ):
         raise ValueError("code acceptance requires a completed checkpoint")
 
-    generated_ids = _generate_candidates(
+    generated_ids = generate_frozen_category_candidates(
         model=model,
         binding=binding,
         category=arguments.category,
+        family="semantic_to_code",
         case_bundle_root=arguments.case_bundle,
         test_task_database=arguments.test_database,
-        device=device,
         maximum_new_tokens=arguments.max_new_tokens,
     )
     sandbox = DockerScientificSandbox(arguments.sandbox_manifest)

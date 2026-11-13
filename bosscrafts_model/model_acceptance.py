@@ -1318,7 +1318,17 @@ def _validated_category_supporting_evidence(
         if value != {}:
             raise ValueError(f"{category} supporting evidence must be empty")
         return {}
-    if type(value) is not dict or set(value) != {"strict_uncertainty_receipt"}:
+    if (
+        type(value) is not dict
+        or set(value)
+        != {
+            "strict_uncertainty_receipt",
+            "semantic_acceptance_receipt",
+        }
+        or type(checkpoint_sha256) is not str
+        or type(checkpoint_step) is not int
+        or type(expected_records) is not list
+    ):
         raise ValueError("semantic_fidelity supporting evidence is incomplete")
     raw_receipt = value.get("strict_uncertainty_receipt")
     if type(raw_receipt) is not dict:
@@ -1328,9 +1338,26 @@ def _validated_category_supporting_evidence(
         expected_parser_runtime_identity_sha256=PARSER_RUNTIME_IDENTITY_SHA256,
         expected_languages=EXPECTED_LANGUAGES,
     )
+    from .semantic_acceptance import (
+        semantic_acceptance_receipt_metrics,
+        validate_semantic_acceptance_receipt,
+    )
+
+    semantic_receipt = value.get("semantic_acceptance_receipt")
+    validate_semantic_acceptance_receipt(
+        semantic_receipt,
+        expected_checkpoint_sha256=checkpoint_sha256,
+        expected_checkpoint_step=checkpoint_step,
+        expected_example_ids=expected_example_ids,
+        expected_records=expected_records,
+        expected_task_database_identity_sha256=(
+            expected_task_database_identity_sha256
+        ),
+    )
     return {
         "strict_uncertainty_acceptance_passed": receipt.passed,
         "strict_uncertainty_receipt_sha256": receipt.receipt_sha256,
+        **semantic_acceptance_receipt_metrics(semantic_receipt),
     }
 
 
@@ -1503,6 +1530,9 @@ def recompute_category_metrics(
             "strict_uncertainty_receipt_sha256": declared_metrics.get(
                 "strict_uncertainty_receipt_sha256"
             ),
+            "semantic_acceptance_receipt_sha256": declared_metrics.get(
+                "semantic_acceptance_receipt_sha256"
+            ),
         }
     if category == "raw_code":
         if type(declared_metrics) is not dict:
@@ -1672,6 +1702,7 @@ def verify_category_metrics(category: str, value: object) -> None:
             "language_passes",
             "strict_uncertainty_acceptance_passed",
             "strict_uncertainty_receipt_sha256",
+            "semantic_acceptance_receipt_sha256",
         }:
             raise ValueError("semantic_fidelity metric fields are invalid")
         _language_passes(metrics)
@@ -1681,6 +1712,7 @@ def verify_category_metrics(category: str, value: object) -> None:
             or _metric_rate(metrics, "unknown_semantic_rate") > 0.02
             or metrics.get("strict_uncertainty_acceptance_passed") is not True
             or not _is_sha256(metrics.get("strict_uncertainty_receipt_sha256"))
+            or not _is_sha256(metrics.get("semantic_acceptance_receipt_sha256"))
         ):
             raise ValueError("semantic_fidelity acceptance gate failed")
         return

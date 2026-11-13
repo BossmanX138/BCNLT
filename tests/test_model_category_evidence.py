@@ -28,6 +28,7 @@ from test_full_model_acceptance_categories import (
     _records,
     _regression_receipt_payload,
     _safety_content_receipt_payload,
+    _semantic_receipt_payload,
     _tokenizer_fidelity_receipt_payload,
     verify_model_acceptance,
 )
@@ -98,6 +99,7 @@ def _compile(
     regression_receipt: dict[str, object] | None = None,
     tokenizer_receipt: dict[str, object] | None = None,
     code_receipt: dict[str, object] | None = None,
+    semantic_receipt: dict[str, object] | None = None,
 ):
     return compile_model_category_evidence(
         category=category,
@@ -113,6 +115,7 @@ def _compile(
         regression_receipt=regression_receipt,
         tokenizer_fidelity_receipt=tokenizer_receipt,
         code_acceptance_receipt=code_receipt,
+        semantic_acceptance_receipt=semantic_receipt,
     )
 
 
@@ -163,12 +166,20 @@ def test_compiler_binds_plural_suite_categories_to_the_test_database():
 
 def test_semantic_compiler_requires_and_validates_current_runtime_receipt():
     receipt = _strict_receipt()
-    compiled = _compile("semantic_fidelity", receipt=receipt.to_dict())
+    semantic_receipt = _semantic_receipt_payload()
+    compiled = _compile(
+        "semantic_fidelity",
+        receipt=receipt.to_dict(),
+        semantic_receipt=semantic_receipt,
+    )
     assert compiled["passed"] is True
     assert compiled["metrics"]["strict_uncertainty_receipt_sha256"] == (
         receipt.receipt_sha256
     )
     assert validate_strict_uncertainty_receipt(receipt.to_dict()) == receipt
+    assert compiled["metrics"]["semantic_acceptance_receipt_sha256"] == (
+        semantic_receipt["receipt_sha256"]
+    )
 
     weak = replace(
         receipt,
@@ -180,7 +191,14 @@ def test_semantic_compiler_requires_and_validates_current_runtime_receipt():
     )
     weak = replace(weak, receipt_sha256=weak.compute_sha256())
     with pytest.raises(ValueError, match="current runtime gates"):
-        _compile("semantic_fidelity", receipt=weak.to_dict())
+        _compile(
+            "semantic_fidelity",
+            receipt=weak.to_dict(),
+            semantic_receipt=semantic_receipt,
+        )
+
+    with pytest.raises(ValueError, match="semantic acceptance receipt"):
+        _compile("semantic_fidelity", receipt=receipt.to_dict())
 
 
 def test_ordinary_compiler_requires_grounded_ifeval_receipt():
@@ -338,6 +356,7 @@ def test_checkpoint_digest_and_script_entrypoint(tmp_path: Path):
     assert "--ifeval-batch-receipt" in completed.stdout
     assert "--safety-content-receipt" in completed.stdout
     assert "--containment-receipt" in completed.stdout
+    assert "--semantic-acceptance-receipt" in completed.stdout
     assert "--regression-receipt" in completed.stdout
     assert "--tokenizer-fidelity-receipt" in completed.stdout
     assert "--code-acceptance-receipt" in completed.stdout
