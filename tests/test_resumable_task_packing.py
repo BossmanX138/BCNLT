@@ -635,6 +635,26 @@ class ResumableTaskPackingTests(unittest.TestCase):
                 cell: tuple(sorted(example_ids))
                 for cell, example_ids in cells.items()
             }
+            selected_cells = dataset.select_frozen_example_ids_by_cell(
+                split="validation",
+                expected_cells={cell: 1 for cell in frozen_cells},
+            )
+            self.assertEqual(set(selected_cells), set(frozen_cells))
+            self.assertTrue(
+                all(len(example_ids) == 1 for example_ids in selected_cells.values())
+            )
+            self.assertEqual(
+                selected_cells,
+                dataset.select_frozen_example_ids_by_cell(
+                    split="validation",
+                    expected_cells={cell: 1 for cell in frozen_cells},
+                ),
+            )
+            with self.assertRaisesRegex(ValueError, "complete"):
+                dataset.select_frozen_example_ids_by_cell(
+                    split="validation",
+                    expected_cells={next(iter(frozen_cells)): 10_000},
+                )
             suite = acceptance.GroundedHeldoutSuite(
                 manifest_sha256="a" * 64,
                 task_database_identity_sha256="b" * 64,

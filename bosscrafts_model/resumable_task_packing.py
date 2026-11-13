@@ -10,7 +10,7 @@ import sys
 import zlib
 from array import array
 from collections import Counter, defaultdict
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypedDict, cast
@@ -355,6 +355,67 @@ class ResumableTaskDataset:
             raise ValueError("one or more requested example IDs belong to another split")
         for example_id in requested:
             yield selected[example_id]
+
+    def select_frozen_example_ids_by_cell(
+        self,
+        *,
+        split: str,
+        expected_cells: Mapping[str, int],
+    ) -> dict[str, tuple[str, ...]]:
+        """Select the first deterministic IDs per cell without decoding token blobs."""
+        if split not in {"validation", "test"}:
+            raise ValueError("frozen selection split must be validation or test")
+        if not isinstance(expected_cells, Mapping) or not expected_cells:
+            raise ValueError("frozen selection cells must be a non-empty mapping")
+        if len(expected_cells) > 1_000:
+            raise ValueError("frozen selection names too many cells")
+        requested: dict[str, int] = {}
+        for cell, count in expected_cells.items():
+            language, separator, family = (
+                cell.partition("|") if type(cell) is str else ("", "", "")
+            )
+            if (
+                not separator
+                or language not in CURRENT_RUNTIME_SPEC_SHA256
+                or family not in _TASK_FAMILIES
+                or type(count) is not int
+                or not 1 <= count <= 100_000
+            ):
+                raise ValueError("frozen selection cell contract is invalid")
+            requested[cell] = count
+
+        selected: dict[str, list[str]] = {cell: [] for cell in requested}
+        remaining = set(requested)
+        connection = ResumableCurrentTaskPacking._ro_connect(self.database_path)
+        try:
+            rows = connection.execute(
+                "SELECT example_id,language,family FROM tasks "
+                "WHERE split=? ORDER BY example_id",
+                (split,),
+            )
+            for example_id, language, family in rows:
+                cell = f"{language}|{family}"
+                if cell not in remaining:
+                    continue
+                if (
+                    type(example_id) is not str
+                    or len(example_id) != 64
+                    or any(
+                        character not in "0123456789abcdef"
+                        for character in example_id
+                    )
+                ):
+                    raise ValueError("frozen selection encountered an invalid example ID")
+                selected[cell].append(example_id)
+                if len(selected[cell]) == requested[cell]:
+                    remaining.remove(cell)
+                    if not remaining:
+                        break
+        finally:
+            connection.close()
+        if remaining:
+            raise ValueError("task database cannot complete the frozen cell inventory")
+        return {cell: tuple(example_ids) for cell, example_ids in selected.items()}
 
     def _decode_task_row(self, row: Sequence[object]) -> TaskExample:
         family = row[3]
