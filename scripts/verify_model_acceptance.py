@@ -57,10 +57,10 @@ def _canonical_json(value: object) -> str:
 
 
 def _ground_heldout_cases(
+    binding: NativeTokenizerBinding,
     database: Path,
     inferences: tuple[dict[str, object], ...],
 ) -> tuple[str, dict[str, HeldoutInferenceCase]]:
-    binding = NativeTokenizerBinding.load()
     audit = audit_task_database(binding, database)
     requested: dict[str, str] = {}
     for payload in inferences:
@@ -129,12 +129,14 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
 
+    binding = NativeTokenizerBinding.load()
     inferences = (
         _read_payload(arguments.code_to_semantic_inference),
         _read_payload(arguments.semantic_continuation_inference),
         _read_payload(arguments.semantic_to_code_inference),
     )
     database_identity, heldout_cases = _ground_heldout_cases(
+        binding,
         arguments.task_database,
         inferences,
     )
@@ -149,6 +151,7 @@ def main() -> int:
             _read_payload(getattr(arguments, f"{category}_evidence"))
             for category in ACCEPTANCE_CATEGORIES
         ),
+        binding=binding,
         heldout_cases=heldout_cases,
         task_database_identity_sha256=database_identity,
     )

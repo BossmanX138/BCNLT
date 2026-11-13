@@ -15,14 +15,20 @@ from bosscrafts_model.bcnlt_source_pipeline import (
     CURRENT_RUNTIME_SPEC_SHA256,
     PARSER_RUNTIME_IDENTITY_SHA256,
 )
-from bosscrafts_model.inference_protocol import HeldoutInferenceCase
+from bosscrafts_model.inference_protocol import (
+    HeldoutInferenceCase,
+    response_payload_token_ids,
+)
 from bosscrafts_model.model_acceptance import (
     EXPECTED_MODEL_FINGERPRINT,
 )
 from bosscrafts_model.model_acceptance import (
     verify_model_acceptance as _verify_model_acceptance,
 )
-from bosscrafts_model.tokenizer import EXPECTED_TOKENIZER_SHA256
+from bosscrafts_model.tokenizer import (
+    EXPECTED_TOKENIZER_SHA256,
+    NativeTokenizerBinding,
+)
 
 DATABASE_ID = "a" * 64
 MODEL_ID = EXPECTED_MODEL_FINGERPRINT
@@ -31,6 +37,7 @@ HELDOUT_ID = "d" * 64
 CHECKPOINT_ID = "e" * 64
 FAMILIES = ("code_to_semantic", "semantic_continuation", "semantic_to_code")
 LANGUAGES = tuple(sorted(CURRENT_RUNTIME_SPEC_SHA256))
+BINDING = NativeTokenizerBinding.load()
 CATEGORIES = (
     "tokenizer_fidelity",
     "semantic_fidelity",
@@ -50,11 +57,29 @@ def _canonical(value: object) -> bytes:
 
 
 def _heldout_case(task: str) -> HeldoutInferenceCase:
+    binding = BINDING
+    ids = binding.structural_token_ids
+    prompt_ids = (ids[f"<|bcnlt:task:{task}|>"],)
+    if task == "semantic_to_code":
+        expected_ids = (
+            ids["<|bcnlt:stream:begin|>"],
+            ids["<|bcnlt:mode:raw_code|>"],
+            *binding.encode_payload("x = 1\n"),
+            ids["<|bcnlt:stream:end|>"],
+            ids["<|bcnlt:task:end|>"],
+        )
+    else:
+        expected_ids = (
+            ids["<|bcnlt:stream:begin|>"],
+            ids["<|bcnlt:mode:semantic_code|>"],
+            ids["<|bcnlt:stream:end|>"],
+            ids["<|bcnlt:task:end|>"],
+        )
     return HeldoutInferenceCase(
         example_id=hashlib.sha256(f"acceptance:{task}".encode()).hexdigest(),
         family=task,
-        prompt_ids=(100,),
-        expected_ids=tuple(range(1, 21)),
+        prompt_ids=prompt_ids,
+        expected_ids=expected_ids,
     )
 
 
@@ -67,6 +92,7 @@ def verify_model_acceptance(evaluations: object, inferences: object, categories:
         evaluations,
         inferences,
         categories,
+        binding=BINDING,
         heldout_cases=_heldout_cases(),
         task_database_identity_sha256=DATABASE_ID,
     )
@@ -133,7 +159,11 @@ def _evaluation(split: str) -> dict[str, object]:
 
 
 def _inference(task: str) -> dict[str, object]:
-    expected_ids = list(range(1, 21))
+    binding = BINDING
+    case = _heldout_case(task)
+    prompt_ids = list(case.prompt_ids)
+    expected_ids = list(case.expected_ids)
+    payload_ids = response_payload_token_ids(binding, task, expected_ids)
     return {
         "schema_version": CHECKPOINT_INFERENCE_SCHEMA,
         "checkpoint_epoch_index": 1,
@@ -147,18 +177,19 @@ def _inference(task: str) -> dict[str, object]:
         "dtype": "float32",
         "evaluation_task_database_identity_sha256": DATABASE_ID,
         "full_model": True,
-        "full_text": "",
-        "generated_protocol_text": "",
-        "generated_text": "",
+        "full_text": binding.decode([*prompt_ids, *expected_ids]),
+        "generated_protocol_text": binding.decode(expected_ids),
+        "generated_text": binding.decode(payload_ids),
         "heldout_exact_match": True,
         "model_fingerprint": MODEL_ID,
-        "new_token_count": 20,
+        "new_token_count": len(expected_ids),
         "new_token_ids": list(expected_ids),
-        "prompt_token_count": 1,
+        "prompt_token_count": len(prompt_ids),
+        "prompt_token_ids": prompt_ids,
         "prompt_source": "heldout_database",
         "response_protocol_complete": True,
         "heldout_example_id": _heldout_case(task).example_id,
-        "heldout_expected_target_token_count": 20,
+        "heldout_expected_target_token_count": len(expected_ids),
         "heldout_expected_token_ids": expected_ids,
         "heldout_split": "test",
         "heldout_target_token_accuracy": 1.0,

@@ -20,10 +20,18 @@ from .bcnlt_source_pipeline import (
     PARSER_RUNTIME_IDENTITY_SHA256,
 )
 from .config import ModelConfig
-from .inference_protocol import HeldoutInferenceCase
-from .tokenizer import EXPECTED_BINDING_SHA256, EXPECTED_TOKENIZER_SHA256
+from .inference_protocol import (
+    HeldoutInferenceCase,
+    response_payload_token_ids,
+    response_protocol_complete,
+)
+from .tokenizer import (
+    EXPECTED_BINDING_SHA256,
+    EXPECTED_TOKENIZER_SHA256,
+    NativeTokenizerBinding,
+)
 
-ACCEPTANCE_SCHEMA = "bosscrafts-model-acceptance-v6"
+ACCEPTANCE_SCHEMA = "bosscrafts-model-acceptance-v7"
 EXPECTED_MODEL_FINGERPRINT = ModelConfig(
     tokenizer_manifest=EXPECTED_BINDING_SHA256
 ).fingerprint()
@@ -145,6 +153,7 @@ _INFERENCE_FIELDS = frozenset(
         "new_token_ids",
         "prompt_source",
         "prompt_token_count",
+        "prompt_token_ids",
         "response_protocol_complete",
         "schema_version",
         "task",
@@ -418,6 +427,7 @@ def verify_model_acceptance(
     inferences: Sequence[dict[str, object]],
     category_evidence: Sequence[dict[str, object]],
     *,
+    binding: NativeTokenizerBinding,
     heldout_cases: Mapping[str, HeldoutInferenceCase],
     task_database_identity_sha256: str,
 ) -> ModelAcceptanceResult:
@@ -431,6 +441,8 @@ def verify_model_acceptance(
         raise ValueError("acceptance requires every independent category")
     if not _is_sha256(task_database_identity_sha256):
         raise ValueError("acceptance ground-truth database identity is invalid")
+    if type(binding) is not NativeTokenizerBinding:
+        raise TypeError("acceptance requires a verified NativeTokenizerBinding")
     if not isinstance(heldout_cases, Mapping) or set(heldout_cases) != set(
         STRUCTURED_TASKS
     ):
@@ -445,7 +457,7 @@ def verify_model_acceptance(
             or not case.prompt_ids
             or not case.expected_ids
             or any(
-                type(token_id) is not int or not 0 <= token_id <= 65_535
+                type(token_id) is not int or not 0 <= token_id < binding.vocab_size
                 for token_id in (*case.prompt_ids, *case.expected_ids)
             )
             or case.example_id in heldout_example_ids
@@ -577,6 +589,7 @@ def verify_model_acceptance(
         heldout_accuracy = payload.get("heldout_target_token_accuracy")
         expected_ids = payload.get("heldout_expected_token_ids")
         generated_ids = payload.get("new_token_ids")
+        prompt_ids = payload.get("prompt_token_ids")
         expected_count = payload.get("heldout_expected_target_token_count")
         grounded_case = heldout_cases[inference_task]
         if type(expected_count) is not int:
@@ -585,18 +598,21 @@ def verify_model_acceptance(
             payload.get("prompt_source") != "heldout_database"
             or payload.get("heldout_split") != "test"
             or payload.get("heldout_example_id") != grounded_case.example_id
+            or type(prompt_ids) is not list
+            or prompt_ids != list(grounded_case.prompt_ids)
+            or payload.get("prompt_token_count") != len(grounded_case.prompt_ids)
             or expected_count < 1
             or expected_count != len(grounded_case.expected_ids)
             or type(expected_ids) is not list
             or len(expected_ids) != expected_count
             or expected_ids != list(grounded_case.expected_ids)
             or any(
-                type(token_id) is not int or not 0 <= token_id <= 65_535
+                type(token_id) is not int or not 0 <= token_id < binding.vocab_size
                 for token_id in expected_ids
             )
             or type(generated_ids) is not list
             or any(
-                type(token_id) is not int or not 0 <= token_id <= 65_535
+                type(token_id) is not int or not 0 <= token_id < binding.vocab_size
                 for token_id in generated_ids
             )
             or generated_ids != expected_ids
@@ -608,10 +624,24 @@ def verify_model_acceptance(
                 f"{inference_task} inference is not valid held-out evidence"
             )
         new_token_count = payload.get("new_token_count")
+        protocol_complete = response_protocol_complete(
+            binding,
+            task=inference_task,
+            generated_ids=generated_ids,
+        )
+        generated_protocol_text = binding.decode(generated_ids)
+        generated_text = binding.decode(
+            response_payload_token_ids(binding, inference_task, generated_ids)
+        )
+        full_text = binding.decode([*grounded_case.prompt_ids, *generated_ids])
         if (
-            payload.get("response_protocol_complete") is not True
+            protocol_complete is not True
+            or payload.get("response_protocol_complete") is not protocol_complete
             or type(new_token_count) is not int
             or new_token_count != len(generated_ids)
+            or payload.get("generated_protocol_text") != generated_protocol_text
+            or payload.get("generated_text") != generated_text
+            or payload.get("full_text") != full_text
         ):
             raise ValueError(f"{inference_task} response protocol is incomplete")
         inference_by_task[inference_task] = payload

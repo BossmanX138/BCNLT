@@ -23,7 +23,10 @@ from bosscrafts_model.bcnlt_source_pipeline import (
     CURRENT_RUNTIME_SPEC_SHA256,
     PARSER_RUNTIME_IDENTITY_SHA256,
 )
-from bosscrafts_model.inference_protocol import HeldoutInferenceCase
+from bosscrafts_model.inference_protocol import (
+    HeldoutInferenceCase,
+    response_payload_token_ids,
+)
 from bosscrafts_model.model_acceptance import (
     EXPECTED_MODEL_FINGERPRINT,
 )
@@ -41,6 +44,7 @@ DATABASE_ID = "a" * 64
 MODEL_ID = EXPECTED_MODEL_FINGERPRINT
 CHECKPOINT_ID = "e" * 64
 FAMILIES = ("code_to_semantic", "semantic_continuation", "semantic_to_code")
+BINDING = NativeTokenizerBinding.load()
 
 
 def _categories():
@@ -48,7 +52,25 @@ def _categories():
 
 
 def _heldout_case(task: str) -> HeldoutInferenceCase:
-    input_ids = [100, *range(1, 21)]
+    binding = BINDING
+    ids = binding.structural_token_ids
+    prompt_ids = (ids[f"<|bcnlt:task:{task}|>"],)
+    if task == "semantic_to_code":
+        expected_ids = (
+            ids["<|bcnlt:stream:begin|>"],
+            ids["<|bcnlt:mode:raw_code|>"],
+            *binding.encode_payload("x = 1\n"),
+            ids["<|bcnlt:stream:end|>"],
+            ids["<|bcnlt:task:end|>"],
+        )
+    else:
+        expected_ids = (
+            ids["<|bcnlt:stream:begin|>"],
+            ids["<|bcnlt:mode:semantic_code|>"],
+            ids["<|bcnlt:stream:end|>"],
+            ids["<|bcnlt:task:end|>"],
+        )
+    input_ids = [*prompt_ids, *expected_ids]
     input_sha256 = hashlib.sha256(
         json.dumps(input_ids, separators=(",", ":")).encode()
     ).hexdigest()
@@ -68,8 +90,8 @@ def _heldout_case(task: str) -> HeldoutInferenceCase:
     return HeldoutInferenceCase(
         example_id=example_id,
         family=task,
-        prompt_ids=(100,),
-        expected_ids=tuple(range(1, 21)),
+        prompt_ids=prompt_ids,
+        expected_ids=expected_ids,
     )
 
 
@@ -86,13 +108,14 @@ def verify_model_acceptance(
         evaluations,
         inferences,
         categories,
+        binding=BINDING,
         heldout_cases=_heldout_cases(),
         task_database_identity_sha256=DATABASE_ID,
     )
 
 
 def _write_ground_truth_database(path: Path) -> str:
-    binding = NativeTokenizerBinding.load()
+    binding = BINDING
     connection = sqlite3.connect(path)
     try:
         connection.execute(
@@ -242,7 +265,11 @@ def _evaluation(split: str) -> dict[str, object]:
 
 
 def _inference(task: str) -> dict[str, object]:
-    expected_ids = list(range(1, 21))
+    binding = BINDING
+    case = _heldout_case(task)
+    prompt_ids = list(case.prompt_ids)
+    expected_ids = list(case.expected_ids)
+    payload_ids = response_payload_token_ids(binding, task, expected_ids)
     return {
         "schema_version": CHECKPOINT_INFERENCE_SCHEMA,
         "checkpoint_epoch_index": 1,
@@ -256,18 +283,19 @@ def _inference(task: str) -> dict[str, object]:
         "dtype": "float32",
         "evaluation_task_database_identity_sha256": DATABASE_ID,
         "full_model": True,
-        "full_text": "",
-        "generated_protocol_text": "",
-        "generated_text": "",
+        "full_text": binding.decode([*prompt_ids, *expected_ids]),
+        "generated_protocol_text": binding.decode(expected_ids),
+        "generated_text": binding.decode(payload_ids),
         "heldout_exact_match": True,
         "model_fingerprint": MODEL_ID,
-        "new_token_count": 20,
+        "new_token_count": len(expected_ids),
         "new_token_ids": list(expected_ids),
-        "prompt_token_count": 1,
+        "prompt_token_count": len(prompt_ids),
+        "prompt_token_ids": prompt_ids,
         "prompt_source": "heldout_database",
         "response_protocol_complete": True,
         "heldout_example_id": _heldout_case(task).example_id,
-        "heldout_expected_target_token_count": 20,
+        "heldout_expected_target_token_count": len(expected_ids),
         "heldout_expected_token_ids": expected_ids,
         "heldout_split": "test",
         "heldout_target_token_accuracy": 1.0,
@@ -416,13 +444,14 @@ class ModelAcceptanceTests(unittest.TestCase):
             example_id=original.example_id,
             family=original.family,
             prompt_ids=original.prompt_ids,
-            expected_ids=tuple(range(2, 22)),
+            expected_ids=(*original.expected_ids[:-1], original.expected_ids[-1] - 1),
         )
         with self.assertRaisesRegex(ValueError, "held-out"):
             _verify_model_acceptance(
                 (_evaluation("validation"), _evaluation("test")),
                 tuple(_inference(task) for task in FAMILIES),
                 _categories(),
+                binding=BINDING,
                 heldout_cases=cases,
                 task_database_identity_sha256=DATABASE_ID,
             )
@@ -432,6 +461,7 @@ class ModelAcceptanceTests(unittest.TestCase):
                 (_evaluation("validation"), _evaluation("test")),
                 tuple(_inference(task) for task in FAMILIES),
                 _categories(),
+                binding=BINDING,
                 heldout_cases=_heldout_cases(),
                 task_database_identity_sha256="f" * 64,
             )
@@ -448,6 +478,70 @@ class ModelAcceptanceTests(unittest.TestCase):
                     _inference("semantic_to_code"),
                 ),
                 _categories(),
+            )
+
+        for field, value, message in (
+            (
+                "prompt_token_ids",
+                [int(broken["prompt_token_ids"][0]) + 1],
+                "held-out",
+            ),
+            ("prompt_token_count", 2, "held-out"),
+            ("generated_protocol_text", "fabricated", "protocol"),
+            ("generated_text", "fabricated", "protocol"),
+            ("full_text", "fabricated", "protocol"),
+        ):
+            with self.subTest(field=field):
+                fabricated = _inference("code_to_semantic")
+                fabricated[field] = value
+                with self.assertRaisesRegex(ValueError, message):
+                    verify_model_acceptance(
+                        (_evaluation("validation"), _evaluation("test")),
+                        (
+                            fabricated,
+                            _inference("semantic_continuation"),
+                            _inference("semantic_to_code"),
+                        ),
+                        _categories(),
+                    )
+
+        cases = _heldout_cases()
+        original = cases["code_to_semantic"]
+        malformed_expected = original.expected_ids[:-1]
+        cases["code_to_semantic"] = HeldoutInferenceCase(
+            example_id=original.example_id,
+            family=original.family,
+            prompt_ids=original.prompt_ids,
+            expected_ids=malformed_expected,
+        )
+        forged = _inference("code_to_semantic")
+        malformed_ids = list(malformed_expected)
+        forged["new_token_count"] = len(malformed_ids)
+        forged["new_token_ids"] = malformed_ids
+        forged["heldout_expected_target_token_count"] = len(malformed_ids)
+        forged["heldout_expected_token_ids"] = malformed_ids
+        forged["generated_protocol_text"] = BINDING.decode(malformed_ids)
+        forged["generated_text"] = BINDING.decode(
+            response_payload_token_ids(
+                BINDING, "code_to_semantic", malformed_ids
+            )
+        )
+        forged["full_text"] = BINDING.decode(
+            [*original.prompt_ids, *malformed_ids]
+        )
+        forged["response_protocol_complete"] = True
+        with self.assertRaisesRegex(ValueError, "protocol"):
+            _verify_model_acceptance(
+                (_evaluation("validation"), _evaluation("test")),
+                (
+                    forged,
+                    _inference("semantic_continuation"),
+                    _inference("semantic_to_code"),
+                ),
+                _categories(),
+                binding=BINDING,
+                heldout_cases=cases,
+                task_database_identity_sha256=DATABASE_ID,
             )
 
         mismatched = copy.deepcopy(_evaluation("test"))

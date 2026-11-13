@@ -231,6 +231,7 @@ def main() -> int:
         "new_token_count": len(new_ids),
         "new_token_ids": new_ids,
         "prompt_token_count": len(prompt_ids),
+        "prompt_token_ids": prompt_ids,
         "response_protocol_complete": response_protocol_complete(
             binding, task=task, generated_ids=new_ids
         ),
