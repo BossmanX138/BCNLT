@@ -41,9 +41,30 @@ def _sha256_file(path: Path) -> str:
     return hashlib.sha256(_identity_bytes(path)).hexdigest()
 
 
-def _aggregate_sha256(root: Path, pattern: str) -> str:
+def _is_generated_python_bytecode(path: Path, root: Path) -> bool:
+    relative = path.relative_to(root)
+    return (
+        "__pycache__" in relative.parts
+        and path.suffix.casefold() in {".pyc", ".pyo"}
+    )
+
+
+def _aggregate_sha256(
+    root: Path,
+    pattern: str,
+    *,
+    ignore_generated_python_bytecode: bool = False,
+) -> str:
     paths = sorted(
-        (path for path in root.rglob(pattern) if path.is_file()),
+        (
+            path
+            for path in root.rglob(pattern)
+            if path.is_file()
+            and not (
+                ignore_generated_python_bytecode
+                and _is_generated_python_bytecode(path, root)
+            )
+        ),
         key=lambda item: item.relative_to(root).as_posix(),
     )
     digest = hashlib.sha256()
@@ -68,7 +89,9 @@ _RUNTIME_COMPONENTS = {
         SITE_PACKAGES / "tree_sitter_language_pack" / "_native.pyd"
     ),
     "grammars": _aggregate_sha256(GRAMMARS, "*.dll"),
-    "site_packages": _aggregate_sha256(SITE_PACKAGES, "*"),
+    "site_packages": _aggregate_sha256(
+        SITE_PACKAGES, "*", ignore_generated_python_bytecode=True
+    ),
 }
 PARSER_RUNTIME_IDENTITY_SHA256 = hashlib.sha256(
     json.dumps(_RUNTIME_COMPONENTS, sort_keys=True, separators=(",", ":")).encode(
@@ -79,6 +102,16 @@ _GRAMMAR_SHA256 = {
     path.stem.removeprefix("tree_sitter_"): _sha256_file(path)
     for path in GRAMMARS.glob("tree_sitter_*.dll")
 }
+
+if not sys.dont_write_bytecode or sys.pycache_prefix is None:
+    raise RuntimeError("BCNLT sidecar requires an isolated bytecode-cache policy")
+if any(
+    path.is_file()
+    and "__pycache__" in path.relative_to(SITE_PACKAGES).parts
+    and not _is_generated_python_bytecode(path, SITE_PACKAGES)
+    for path in SITE_PACKAGES.rglob("*")
+):
+    raise RuntimeError("BCNLT sidecar cache contains non-bytecode")
 
 from bcnlt.adapters import BCNLTMultilingualAdapter, LanguageCarousel  # noqa: E402
 from bcnlt.adapters.tree_sitter import TreeSitterSemanticEngine  # noqa: E402

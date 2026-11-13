@@ -5,6 +5,7 @@ import hashlib
 import json
 import subprocess
 import sys
+import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
@@ -132,6 +133,9 @@ class RawAstWitnessClient:
         BCNLTSourcePipeline.validate_contained_runtime(_PYTHON_313)
         self._timeout_seconds = float(timeout_seconds)
         self._expected_sidecar_sha256 = expected
+        self._bytecode_cache = tempfile.TemporaryDirectory(
+            prefix="bosscrafts-raw-ast-pycache-"
+        )
         self._process: subprocess.Popen[bytes] | None = None
         self._reader = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="raw-ast-witness-reader"
@@ -158,6 +162,8 @@ class RawAstWitnessClient:
                 str(_PYTHON_313),
                 "-I",
                 "-B",
+                "-X",
+                f"pycache_prefix={self._bytecode_cache.name}",
                 "-X",
                 "utf8",
                 str(_SIDECAR),
@@ -210,6 +216,7 @@ class RawAstWitnessClient:
                 finally:
                     _close_process_streams(process)
             self._reader.shutdown(wait=True, cancel_futures=True)
+            self._bytecode_cache.cleanup()
 
     def __enter__(self) -> "RawAstWitnessClient":
         return self

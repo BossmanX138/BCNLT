@@ -20,9 +20,32 @@ def sha256_file(path: Path) -> str:
     return hashlib.sha256(identity_bytes(path)).hexdigest()
 
 
-def aggregate_sha256(root: Path, pattern: str) -> tuple[str, int, int]:
+def is_generated_python_bytecode(path: Path, root: Path) -> bool:
+    """Return whether *path* is an ordinary interpreter cache below *root*."""
+
+    relative = path.relative_to(root)
+    return (
+        "__pycache__" in relative.parts
+        and path.suffix.casefold() in {".pyc", ".pyo"}
+    )
+
+
+def aggregate_sha256(
+    root: Path,
+    pattern: str,
+    *,
+    ignore_generated_python_bytecode: bool = False,
+) -> tuple[str, int, int]:
     paths = sorted(
-        (path for path in root.rglob(pattern) if path.is_file()),
+        (
+            path
+            for path in root.rglob(pattern)
+            if path.is_file()
+            and not (
+                ignore_generated_python_bytecode
+                and is_generated_python_bytecode(path, root)
+            )
+        ),
         key=lambda item: item.relative_to(root).as_posix(),
     )
     digest = hashlib.sha256()

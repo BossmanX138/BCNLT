@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -22,16 +23,28 @@ def _records(language: str, source: str) -> list[dict[str, object]]:
         "learning_mode": "ephemeral",
         "learned_memory_root": None,
     }
-    completed = subprocess.run(
-        [str(PYTHON_313), "-I", "-B", "-X", "utf8", str(SIDECAR)],
-        input=json.dumps(request),
-        text=True,
-        encoding="utf-8",
-        capture_output=True,
-        timeout=30,
-        check=False,
-        cwd=RUNTIME,
-    )
+    with tempfile.TemporaryDirectory(
+        prefix="bosscrafts-semantic-integrity-pycache-"
+    ) as bytecode_cache:
+        completed = subprocess.run(
+            [
+                str(PYTHON_313),
+                "-I",
+                "-B",
+                "-X",
+                f"pycache_prefix={bytecode_cache}",
+                "-X",
+                "utf8",
+                str(SIDECAR),
+            ],
+            input=json.dumps(request),
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            timeout=30,
+            check=False,
+            cwd=RUNTIME,
+        )
     assert completed.returncode == 0, completed.stderr
     response = json.loads(completed.stdout)
     return [

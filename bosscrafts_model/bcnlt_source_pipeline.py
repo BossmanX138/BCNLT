@@ -21,6 +21,7 @@ import math
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
@@ -45,6 +46,9 @@ from .runtime_identity import (
 )
 from .runtime_identity import (
     identity_bytes as _identity_bytes,
+)
+from .runtime_identity import (
+    is_generated_python_bytecode as _is_generated_python_bytecode,
 )
 from .runtime_identity import (
     sha256_file as _sha256,
@@ -77,17 +81,17 @@ _DEFAULT_PYTHON_313 = Path(sys.executable).resolve()
 _RUNTIME_MANIFEST = _RUNTIME_ROOT / "runtime-manifest.json"
 _EXPECTED_RUNTIME_IDENTITY = {
     "source": "c5623e97f3f1e1e884e1d54a316d174292fbcbf61da3ddfdbf3b432418e0450a",
-    "sidecar": "08e18ae47dfeee41a0f41ead30af617b3ef49bd2027309e33e1752cfa0fd12c7",
+    "sidecar": "5eb8df0226ada9b5ba9d7d5b845d86abb6b4dbd22423c35a7ba6bff1f31be1f3",
     "tree_sitter": "d8efa5533a1c79cc404df3a0ff03d76626ad50d54b74d97e4cf6e30ab85bebe4",
     "language_pack": "18fda57fbe2f52f85cf09fd1fc5af6509bfe0a8c6d3d425cafe3d7b63f8dca6e",
     "grammars": "19fc42827e8ab3b37282c0666caa1ddd8abcd3708298fb1665c10df440c3d090",
     "site_packages": "3daa4575bdd757c649febf2c8514c80ab1311641c0205463b1c89b1e928b262c",
 }
 _EXPECTED_RUNTIME_MANIFEST_SHA256 = (
-    "8eb8dda50d188a2ed844f7de1e10fb71ac3eeed86c8fd4e2508e40fff0d5720d"
+    "cb7b0df010bbe162b0b9c0877addded2f5b06f3bc0fbbd9b39b58a7bdad6ed20"
 )
 PARSER_RUNTIME_IDENTITY_SHA256 = (
-    "85992d7b5695166ac23717efeb1314b6f9eb3a44ae15b4392e74c85f5b10b8cb"
+    "c1ca753bf4d1dbabf841fdcd120e5c3eec026b7211ca5c0f08d066074acee938"
 )
 PARSER_RUNTIME_NOT_APPLICABLE = "not_applicable"
 _FIELD_ORDER = (
@@ -185,6 +189,16 @@ def _sidecar_environment() -> dict[str, str]:
     }
 
 
+def _unexpected_runtime_cache_entries(root: Path) -> tuple[Path, ...]:
+    return tuple(
+        path
+        for path in root.rglob("*")
+        if path.is_file()
+        and "__pycache__" in path.relative_to(root).parts
+        and not _is_generated_python_bytecode(path, root)
+    )
+
+
 class _PersistentSidecarWorker:
     """One serial, restartable parser process with bounded framed I/O."""
 
@@ -193,6 +207,9 @@ class _PersistentSidecarWorker:
         self._timeout_seconds = timeout_seconds
         self._lock = threading.Lock()
         self._process: subprocess.Popen[bytes] | None = None
+        self._bytecode_cache = tempfile.TemporaryDirectory(
+            prefix="bosscrafts-bcnlt-pycache-"
+        )
         self._reader = ThreadPoolExecutor(
             max_workers=1,
             thread_name_prefix="bcnlt-sidecar-reader",
@@ -223,6 +240,8 @@ class _PersistentSidecarWorker:
                     str(self._python),
                     "-I",
                     "-B",
+                    "-X",
+                    f"pycache_prefix={self._bytecode_cache.name}",
                     "-X",
                     "utf8",
                     str(_SIDECAR),
@@ -332,6 +351,7 @@ class _PersistentSidecarWorker:
         with self._lock:
             self._stop_locked(force=False)
         self._reader.shutdown(wait=True, cancel_futures=True)
+        self._bytecode_cache.cleanup()
 
 
 class _NativeSemanticStreamCodec:
@@ -691,9 +711,19 @@ class BCNLTSourcePipeline:
         grammar_hash, grammar_count, grammar_bytes = _aggregate_sha256(
             _RUNTIME_ROOT / "grammars", "*.dll"
         )
+        site_packages_root = _RUNTIME_ROOT / "site-packages"
         site_packages_hash, site_packages_count, site_packages_bytes = (
-            _aggregate_sha256(_RUNTIME_ROOT / "site-packages", "*")
+            _aggregate_sha256(
+                site_packages_root,
+                "*",
+                ignore_generated_python_bytecode=True,
+            )
         )
+        unexpected_cache_entries = _unexpected_runtime_cache_entries(
+            site_packages_root
+        )
+        if unexpected_cache_entries:
+            raise ValueError("project-contained BCNLT runtime cache contains non-bytecode")
         source_manifest = manifest.get("source", {})
         runtime_manifest = manifest.get("runtime", {})
         actual = {
@@ -810,22 +840,27 @@ class BCNLTSourcePipeline:
                     "BCNLT parser sidecar source identity changed"
                 )
             try:
-                completed = subprocess.run(
-                    [
-                        str(self._python),
-                        "-I",
-                        "-B",
-                        "-X",
-                        "utf8",
-                        str(_SIDECAR),
-                    ],
-                    input=request_bytes,
-                    capture_output=True,
-                    timeout=self._timeout_seconds,
-                    check=False,
-                    env=_sidecar_environment(),
-                    creationflags=creationflags,
-                )
+                with tempfile.TemporaryDirectory(
+                    prefix="bosscrafts-bcnlt-pycache-"
+                ) as bytecode_cache:
+                    completed = subprocess.run(
+                        [
+                            str(self._python),
+                            "-I",
+                            "-B",
+                            "-X",
+                            f"pycache_prefix={bytecode_cache}",
+                            "-X",
+                            "utf8",
+                            str(_SIDECAR),
+                        ],
+                        input=request_bytes,
+                        capture_output=True,
+                        timeout=self._timeout_seconds,
+                        check=False,
+                        env=_sidecar_environment(),
+                        creationflags=creationflags,
+                    )
             except (OSError, subprocess.TimeoutExpired) as error:
                 raise BCNLTPreprocessingError(
                     "BCNLT parser sidecar could not complete"
