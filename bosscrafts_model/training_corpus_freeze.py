@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import sqlite3
-import tempfile
 from collections import Counter, defaultdict
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
@@ -15,6 +13,7 @@ from types import MappingProxyType
 from typing import Any, ClassVar
 
 from .current_corpus import APPROVED_LICENSES, SourceCandidate, SQLiteSourceCatalog
+from .immutable_artifacts import publish_new_files
 from .jsonl import split_jsonl_records
 
 FREEZE_MANIFEST_SCHEMA = "bosscrafts-training-source-freeze-v1"
@@ -54,23 +53,6 @@ def _is_sha256(value: object) -> bool:
         and len(value) == 64
         and all(character in "0123456789abcdef" for character in value)
     )
-
-
-def _atomic_write(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
 
 
 def assign_source_split(split_group: str) -> str:
@@ -421,8 +403,16 @@ class TrainingCorpusFreezer:
         }
         manifest_sha256 = _sha256_bytes(_canonical(unsigned).encode("utf-8"))
         manifest = {**unsigned, "manifest_sha256": manifest_sha256}
-        _atomic_write(output / "documents.jsonl", documents_text.encode("utf-8"))
-        _atomic_write(output / "manifest.json", f"{_canonical(manifest)}\n".encode())
+        publish_new_files(
+            (
+                (output / "documents.jsonl", documents_text.encode("utf-8")),
+                (
+                    output / "manifest.json",
+                    f"{_canonical(manifest)}\n".encode("utf-8"),
+                ),
+            ),
+            artifact_label="training source freeze",
+        )
         return TrainingCorpusFreezeResult(
             output_root=output,
             source_document_count=len(records),
