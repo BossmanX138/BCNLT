@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from .artifact_schemas import MODEL_HELDOUT_SUITE_SCHEMA_V2
@@ -23,8 +24,30 @@ from .model_acceptance import (
 from .resumable_task_packing import ResumableTaskDataset, audit_task_database
 from .tokenizer import EXPECTED_TOKENIZER_SHA256, NativeTokenizerBinding
 
-CATEGORY_CASE_INVENTORY_SCHEMA = "bosscrafts-model-category-case-inventory-v1"
+CATEGORY_CASE_INVENTORY_SCHEMA = "bosscrafts-model-category-case-inventory-v2"
 MAX_CATEGORY_CASE_INVENTORY_BYTES = 16 * 1024 * 1024
+PACKED_ACCEPTANCE_CATEGORIES = (
+    "tokenizer_fidelity",
+    "semantic_fidelity",
+    "raw_code",
+    "execution_correctness",
+)
+
+
+@dataclass(frozen=True)
+class PackedTaskReference:
+    category_example_id: str
+    task_example_id: str
+    language: str
+    family: str | None
+
+
+@dataclass(frozen=True)
+class CategoryCaseInventory:
+    inventory_sha256: str
+    test_task_database_identity_sha256: str
+    category_example_ids: dict[str, tuple[str, ...]]
+    packed_task_references: dict[str, tuple[PackedTaskReference, ...]]
 
 
 def _canonical(value: object) -> bytes:
@@ -60,7 +83,7 @@ def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]
 
 def load_category_case_inventory(
     path: str | Path,
-) -> dict[str, tuple[str, ...]]:
+) -> CategoryCaseInventory:
     """Load the pre-training category case catalog and verify its self-hash."""
     try:
         content = Path(path).resolve().read_bytes()
@@ -73,13 +96,16 @@ def load_category_case_inventory(
         raise ValueError("category case inventory is unreadable") from error
     if type(payload) is not dict or set(payload) != {
         "schema_version",
+        "test_task_database_identity_sha256",
         "categories",
+        "packed_task_references",
         "inventory_sha256",
     }:
         raise ValueError("category case inventory fields are invalid")
     unsigned = {key: value for key, value in payload.items() if key != "inventory_sha256"}
     if (
         payload.get("schema_version") != CATEGORY_CASE_INVENTORY_SCHEMA
+        or not _is_sha256(payload.get("test_task_database_identity_sha256"))
         or not _is_sha256(payload.get("inventory_sha256"))
         or payload.get("inventory_sha256") != _sha256(unsigned)
     ):
@@ -88,6 +114,7 @@ def load_category_case_inventory(
     if type(categories) is not dict or set(categories) != set(ACCEPTANCE_CATEGORIES):
         raise ValueError("category case inventory is incomplete")
     result: dict[str, tuple[str, ...]] = {}
+    global_example_ids: set[str] = set()
     for category in ACCEPTANCE_CATEGORIES:
         entry = categories.get(category)
         if type(entry) is not dict or set(entry) != {
@@ -107,8 +134,119 @@ def load_category_case_inventory(
             or entry.get("example_ids_sha256") != _sha256(example_ids)
         ):
             raise ValueError(f"{category} category case inventory is invalid")
-        result[category] = tuple(example_ids)
-    return result
+        category_ids = tuple(example_ids)
+        if global_example_ids.intersection(category_ids):
+            raise ValueError("category case inventory repeats an identity")
+        global_example_ids.update(category_ids)
+        result[category] = category_ids
+
+    packed_payload = payload.get("packed_task_references")
+    if type(packed_payload) is not dict or set(packed_payload) != set(
+        PACKED_ACCEPTANCE_CATEGORIES
+    ):
+        raise ValueError("packed category task references are incomplete")
+    packed_references: dict[str, tuple[PackedTaskReference, ...]] = {}
+    for category in PACKED_ACCEPTANCE_CATEGORIES:
+        entry = packed_payload.get(category)
+        if type(entry) is not dict or set(entry) != {
+            "references",
+            "references_sha256",
+        }:
+            raise ValueError(f"{category} packed task references are invalid")
+        references_payload = entry.get("references")
+        if (
+            type(references_payload) is not list
+            or len(references_payload) != len(result[category])
+            or entry.get("references_sha256") != _sha256(references_payload)
+        ):
+            raise ValueError(f"{category} packed task references are invalid")
+        expected_family = {
+            "tokenizer_fidelity": None,
+            "semantic_fidelity": "code_to_semantic",
+            "raw_code": "semantic_to_code",
+            "execution_correctness": "semantic_to_code",
+        }[category]
+        parsed: list[PackedTaskReference] = []
+        task_ids: set[str] = set()
+        for index, reference in enumerate(references_payload):
+            if (
+                type(reference) is not dict
+                or set(reference)
+                != {
+                    "category_example_id",
+                    "task_example_id",
+                    "language",
+                    "family",
+                }
+                or reference.get("category_example_id") != result[category][index]
+                or not _is_sha256(reference.get("task_example_id"))
+                or reference.get("language") not in EXPECTED_LANGUAGES
+                or reference.get("family") != expected_family
+            ):
+                raise ValueError(f"{category} packed task references are invalid")
+            task_id = str(reference["task_example_id"])
+            if task_id in task_ids:
+                raise ValueError(f"{category} packed task references repeat a task")
+            task_ids.add(task_id)
+            parsed.append(
+                PackedTaskReference(
+                    category_example_id=str(reference["category_example_id"]),
+                    task_example_id=task_id,
+                    language=str(reference["language"]),
+                    family=(
+                        str(reference["family"])
+                        if reference["family"] is not None
+                        else None
+                    ),
+                )
+            )
+        packed_references[category] = tuple(parsed)
+    return CategoryCaseInventory(
+        inventory_sha256=str(payload["inventory_sha256"]),
+        test_task_database_identity_sha256=str(
+            payload["test_task_database_identity_sha256"]
+        ),
+        category_example_ids=result,
+        packed_task_references=packed_references,
+    )
+
+
+def validate_category_case_inventory_against_test_database(
+    inventory: CategoryCaseInventory,
+    *,
+    test_task_database_identity_sha256: str,
+    task_rows: Mapping[str, Mapping[str, object]],
+) -> None:
+    """Ground every packed category case in the exact audited test database."""
+    if type(inventory) is not CategoryCaseInventory:
+        raise TypeError("inventory must be a loaded CategoryCaseInventory")
+    if (
+        not _is_sha256(test_task_database_identity_sha256)
+        or inventory.test_task_database_identity_sha256
+        != test_task_database_identity_sha256
+    ):
+        raise ValueError("category inventory test database identity mismatch")
+    expected_task_ids = {
+        reference.task_example_id
+        for references in inventory.packed_task_references.values()
+        for reference in references
+    }
+    if set(task_rows) != expected_task_ids:
+        raise ValueError("category inventory packed task set is incomplete")
+    for references in inventory.packed_task_references.values():
+        for reference in references:
+            row = task_rows.get(reference.task_example_id)
+            if (
+                not isinstance(row, Mapping)
+                or row.get("example_id") != reference.task_example_id
+                or row.get("split") != "test"
+                or row.get("language") != reference.language
+                or (
+                    reference.family is not None
+                    and row.get("family") != reference.family
+                )
+            ):
+                raise ValueError("category inventory packed task metadata mismatch")
 
 
 def assemble_heldout_suite_manifest(
@@ -166,7 +304,7 @@ def build_heldout_suite_manifest(
     *,
     validation_database: str | Path,
     test_database: str | Path,
-    category_example_ids: Mapping[str, Sequence[str]],
+    category_case_inventory: CategoryCaseInventory,
 ) -> dict[str, object]:
     """Audit both immutable databases and freeze deterministic per-cell IDs."""
     if type(binding) is not NativeTokenizerBinding:
@@ -196,13 +334,32 @@ def build_heldout_suite_manifest(
         )
         for split, dataset in datasets.items()
     }
+    packed_task_ids = sorted(
+        {
+            reference.task_example_id
+            for references in category_case_inventory.packed_task_references.values()
+            for reference in references
+        }
+    )
+    packed_task_rows = {
+        row["example_id"]: row
+        for row in datasets["test"].iter_examples_by_id(
+            packed_task_ids,
+            split="test",
+        )
+    }
+    validate_category_case_inventory_against_test_database(
+        category_case_inventory,
+        test_task_database_identity_sha256=audits["test"].database_identity_sha256,
+        task_rows=packed_task_rows,
+    )
     return assemble_heldout_suite_manifest(
         evaluation_task_database_identities_sha256={
             split: audit.database_identity_sha256
             for split, audit in audits.items()
         },
         evaluation_example_ids=evaluation_example_ids,
-        category_example_ids=category_example_ids,
+        category_example_ids=category_case_inventory.category_example_ids,
     )
 
 

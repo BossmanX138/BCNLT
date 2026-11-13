@@ -133,9 +133,17 @@ def test_builds_content_addressed_category_inventory(tmp_path: Path) -> None:
     publish_category_case_inventory(output, inventory)
 
     loaded = load_category_case_inventory(output)
-    assert set(loaded) == set(ACCEPTANCE_CATEGORIES)
+    assert loaded.test_task_database_identity_sha256 == "a" * 64
+    assert set(loaded.category_example_ids) == set(ACCEPTANCE_CATEGORIES)
+    assert set(loaded.packed_task_references) == {
+        "tokenizer_fidelity",
+        "semantic_fidelity",
+        "raw_code",
+        "execution_correctness",
+    }
     assert all(
-        len(loaded[category]) == MINIMUM_CATEGORY_EXAMPLES[category]
+        len(loaded.category_example_ids[category])
+        == MINIMUM_CATEGORY_EXAMPLES[category]
         for category in ACCEPTANCE_CATEGORIES
     )
 
@@ -166,6 +174,37 @@ def test_rejects_case_content_substitution_and_missing_language(
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="every language"):
+        build_category_case_inventory(case_files)
+
+
+def test_rejects_mixed_test_database_lineage_and_repeated_packed_tasks(
+    tmp_path: Path,
+) -> None:
+    case_files = _write_case_files(tmp_path)
+    tokenizer_path = case_files["tokenizer_fidelity"]
+    records = [json.loads(line) for line in tokenizer_path.read_text().splitlines()]
+    records[0]["case"]["task_database_identity_sha256"] = "b" * 64
+    body = {key: value for key, value in records[0].items() if key != "example_id"}
+    records[0]["example_id"] = hashlib.sha256(_canonical(body)).hexdigest()
+    records.sort(key=lambda record: record["example_id"])
+    tokenizer_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="one test task database"):
+        build_category_case_inventory(case_files)
+
+    case_files = _write_case_files(tmp_path)
+    records = [json.loads(line) for line in tokenizer_path.read_text().splitlines()]
+    records[1]["case"]["task_example_id"] = records[0]["case"]["task_example_id"]
+    body = {key: value for key, value in records[1].items() if key != "example_id"}
+    records[1]["example_id"] = hashlib.sha256(_canonical(body)).hexdigest()
+    records.sort(key=lambda record: record["example_id"])
+    tokenizer_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="repeats a packed task"):
         build_category_case_inventory(case_files)
 
 

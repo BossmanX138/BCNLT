@@ -31,7 +31,7 @@ def main() -> int:
         NativeTokenizerBinding.load(),
         validation_database=arguments.validation_database,
         test_database=arguments.test_database,
-        category_example_ids=load_category_case_inventory(
+        category_case_inventory=load_category_case_inventory(
             arguments.category_inventory
         ),
     )

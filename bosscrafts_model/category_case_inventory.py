@@ -7,7 +7,10 @@ import json
 from collections.abc import Mapping
 from pathlib import Path
 
-from .heldout_suite_builder import CATEGORY_CASE_INVENTORY_SCHEMA
+from .heldout_suite_builder import (
+    CATEGORY_CASE_INVENTORY_SCHEMA,
+    PACKED_ACCEPTANCE_CATEGORIES,
+)
 from .immutable_artifacts import publish_new_files
 from .model_acceptance import (
     ACCEPTANCE_CATEGORIES,
@@ -196,7 +199,9 @@ def build_category_case_inventory(
     ):
         raise ValueError("category case files are incomplete")
     global_ids: set[str] = set()
+    packed_database_identities: set[str] = set()
     categories: dict[str, object] = {}
+    packed_task_references: dict[str, object] = {}
     for category in ACCEPTANCE_CATEGORIES:
         records = _read_case_records(Path(case_files[category]), category)
         if not MINIMUM_CATEGORY_EXAMPLES[category] <= len(
@@ -205,6 +210,8 @@ def build_category_case_inventory(
             raise ValueError(f"{category} category case count is invalid")
         example_ids: list[str] = []
         observed_languages: set[str] = set()
+        packed_task_ids: set[str] = set()
+        category_task_references: list[dict[str, object]] = []
         for record in records:
             if set(record) != {
                 "schema_version",
@@ -237,6 +244,25 @@ def build_category_case_inventory(
             )
             if language is not None:
                 observed_languages.add(language)
+                packed_case = record["case"]
+                if type(packed_case) is not dict:
+                    raise AssertionError("validated packed case is not an object")
+                database_identity = str(
+                    packed_case["task_database_identity_sha256"]
+                )
+                task_example_id = str(packed_case["task_example_id"])
+                packed_database_identities.add(database_identity)
+                if task_example_id in packed_task_ids:
+                    raise ValueError(f"{category} category repeats a packed task")
+                packed_task_ids.add(task_example_id)
+                category_task_references.append(
+                    {
+                        "category_example_id": str(example_id),
+                        "task_example_id": task_example_id,
+                        "language": language,
+                        "family": packed_case.get("family"),
+                    }
+                )
             if example_id in global_ids:
                 raise ValueError("category case identity is duplicated")
             global_ids.add(example_id)
@@ -251,9 +277,20 @@ def build_category_case_inventory(
             "example_ids": example_ids,
             "example_ids_sha256": _sha256(example_ids),
         }
+        if category in PACKED_ACCEPTANCE_CATEGORIES:
+            packed_task_references[category] = {
+                "references": category_task_references,
+                "references_sha256": _sha256(category_task_references),
+            }
+    if len(packed_database_identities) != 1:
+        raise ValueError("packed category cases must use one test task database")
     unsigned: dict[str, object] = {
         "schema_version": CATEGORY_CASE_INVENTORY_SCHEMA,
+        "test_task_database_identity_sha256": next(
+            iter(packed_database_identities)
+        ),
         "categories": categories,
+        "packed_task_references": packed_task_references,
     }
     return {**unsigned, "inventory_sha256": _sha256(unsigned)}
 
