@@ -257,6 +257,58 @@ class TrainingCheckpointTests(unittest.TestCase):
                     expected_training_plan_sha256="d" * 64,
                 )
 
+    def test_rejects_nonfinite_checkpoint_state_on_save_and_load(self):
+        module = importlib.import_module("bosscrafts_model.training_checkpoint")
+        config = ModelConfig.tiny()
+        model = EngineeringModel(config)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
+        common = {
+            "step": 1,
+            "examples_seen": 1,
+            "epoch_index": 0,
+            "target_epochs": 1,
+            "last_example_id": "c" * 64,
+            "cursor_after_example_id": "c" * 64,
+            "task_database_identity_sha256": "a" * 64,
+            "binding_sha256": "b" * 64,
+            "model_fingerprint": config.fingerprint(),
+            "training_plan_sha256": "d" * 64,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            valid_path = root / "valid.pt"
+            module.save_training_checkpoint(valid_path, model, optimizer, **common)
+            payload = torch.load(valid_path, map_location="cpu", weights_only=True)
+            poisoned_state = dict(payload["model_state_dict"])
+            first_name = next(iter(poisoned_state))
+            poisoned_tensor = poisoned_state[first_name].clone()
+            poisoned_tensor.view(-1)[0] = float("nan")
+            poisoned_state[first_name] = poisoned_tensor
+            payload["model_state_dict"] = poisoned_state
+            poisoned_path = root / "poisoned.pt"
+            torch.save(payload, poisoned_path)
+
+            with self.assertRaisesRegex(ValueError, "non-finite model state"):
+                module.load_training_checkpoint(
+                    poisoned_path,
+                    model,
+                    optimizer,
+                    expected_task_database_identity_sha256="a" * 64,
+                    expected_binding_sha256="b" * 64,
+                    expected_model_fingerprint=config.fingerprint(),
+                    expected_target_epochs=1,
+                    expected_training_plan_sha256="d" * 64,
+                )
+
+            with torch.no_grad():
+                next(model.parameters()).view(-1)[0] = float("inf")
+            rejected_path = root / "rejected.pt"
+            with self.assertRaisesRegex(ValueError, "non-finite model state"):
+                module.save_training_checkpoint(
+                    rejected_path, model, optimizer, **common
+                )
+            self.assertFalse(rejected_path.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

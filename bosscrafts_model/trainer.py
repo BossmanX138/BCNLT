@@ -64,9 +64,30 @@ def run_training_steps(
         raise ValueError("step_offset must be a nonnegative integer")
     if learning_rate_schedule is not None and not callable(learning_rate_schedule):
         raise TypeError("learning_rate_schedule must be callable or None")
-    parameter = next(model.parameters(), None)
-    if parameter is None or not _device_matches(parameter.device, device):
+    model_parameters = list(model.parameters())
+    if not model_parameters or any(
+        not _device_matches(parameter.device, device)
+        for parameter in model_parameters
+    ):
         raise ValueError("model parameters must already be on the requested device")
+    trainable_parameters = [
+        parameter for parameter in model_parameters if parameter.requires_grad
+    ]
+    optimizer_parameters = [
+        parameter
+        for group in optimizer.param_groups
+        for parameter in group.get("params", [])
+    ]
+    optimizer_parameter_ids = [id(parameter) for parameter in optimizer_parameters]
+    if (
+        not trainable_parameters
+        or len(optimizer_parameter_ids) != len(set(optimizer_parameter_ids))
+        or set(optimizer_parameter_ids)
+        != {id(parameter) for parameter in trainable_parameters}
+    ):
+        raise ValueError(
+            "optimizer parameters must match the trainable model parameters exactly"
+        )
 
     model.train()
     optimizer.zero_grad(set_to_none=True)
@@ -103,6 +124,21 @@ def run_training_steps(
                 group["lr"] = learning_rate
             last_learning_rate = learning_rate
         optimizer.step()
+        if any(
+            not bool(torch.isfinite(current.detach()).all())
+            for current in model_parameters
+        ):
+            optimizer.zero_grad(set_to_none=True)
+            raise RuntimeError("training produced a non-finite model parameter")
+        if any(
+            isinstance(value, torch.Tensor)
+            and (value.is_floating_point() or value.is_complex())
+            and not bool(torch.isfinite(value).all())
+            for state in optimizer.state.values()
+            for value in state.values()
+        ):
+            optimizer.zero_grad(set_to_none=True)
+            raise RuntimeError("training produced non-finite optimizer state")
         optimizer.zero_grad(set_to_none=True)
         optimizer_steps += 1
         pending = 0

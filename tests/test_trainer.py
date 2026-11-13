@@ -122,6 +122,57 @@ class TrainerTests(unittest.TestCase):
         ):
             self.assertTrue(torch.allclose(expected, actual, atol=1e-7, rtol=1e-6))
 
+    def test_rejects_optimizer_bound_to_a_different_model(self):
+        module = importlib.import_module("bosscrafts_model.trainer")
+        model = EngineeringModel(ModelConfig.tiny())
+        other_model = EngineeringModel(ModelConfig.tiny())
+        optimizer = torch.optim.SGD(other_model.parameters(), lr=0.01)
+        example = {
+            "example_id": "a" * 64,
+            "input_ids": [1, 2, 3],
+            "loss_start_index": 1,
+            "sampling_weight": 1.0,
+        }
+
+        with self.assertRaisesRegex(ValueError, "optimizer.*model"):
+            module.run_training_steps(
+                model,
+                optimizer,
+                [example],
+                device=torch.device("cpu"),
+                max_steps=1,
+            )
+
+    def test_rejects_nonfinite_parameters_created_by_optimizer_step(self):
+        module = importlib.import_module("bosscrafts_model.trainer")
+        model = EngineeringModel(ModelConfig.tiny())
+
+        class PoisonOptimizer(torch.optim.Optimizer):
+            def __init__(self, parameters):
+                super().__init__(parameters, {"lr": 0.01})
+
+            def step(self, closure=None):
+                del closure
+                with torch.no_grad():
+                    self.param_groups[0]["params"][0].fill_(float("inf"))
+
+        optimizer = PoisonOptimizer(model.parameters())
+        example = {
+            "example_id": "b" * 64,
+            "input_ids": [1, 2, 3],
+            "loss_start_index": 1,
+            "sampling_weight": 1.0,
+        }
+
+        with self.assertRaisesRegex(RuntimeError, "non-finite model parameter"):
+            module.run_training_steps(
+                model,
+                optimizer,
+                [example],
+                device=torch.device("cpu"),
+                max_steps=1,
+            )
+
     def test_bounded_training_script_checkpoints_and_resumes_after_cursor(self):
         binding = NativeTokenizerBinding.load()
         project_root = Path(__file__).resolve().parents[1]

@@ -1,6 +1,7 @@
 """Atomic, lineage-bound checkpoints for BossCrafts model training."""
 from __future__ import annotations
 
+import math
 import os
 import tempfile
 from dataclasses import dataclass
@@ -38,6 +39,36 @@ def _is_sha256(value: object) -> TypeGuard[str]:
         and len(value) == 64
         and all(character in "0123456789abcdef" for character in value)
     )
+
+
+def _state_values_are_finite(value: object) -> bool:
+    """Reject non-finite scalar or tensor values in nested checkpoint state."""
+    pending = [value]
+    seen_containers: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if isinstance(current, torch.Tensor):
+            if (
+                current.is_floating_point() or current.is_complex()
+            ) and not bool(torch.isfinite(current).all()):
+                return False
+        elif type(current) is float:
+            if not math.isfinite(current):
+                return False
+        elif type(current) is complex:
+            if not math.isfinite(current.real) or not math.isfinite(current.imag):
+                return False
+        elif isinstance(current, dict):
+            identity = id(current)
+            if identity not in seen_containers:
+                seen_containers.add(identity)
+                pending.extend(current.values())
+        elif isinstance(current, (list, tuple)):
+            identity = id(current)
+            if identity not in seen_containers:
+                seen_containers.add(identity)
+                pending.extend(current)
+    return True
 
 
 @dataclass(frozen=True)
@@ -100,6 +131,12 @@ def save_training_checkpoint(
     destination = Path(path).resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None
+    model_state = model.state_dict()
+    optimizer_state = optimizer.state_dict()
+    if not _state_values_are_finite(model_state):
+        raise ValueError("training checkpoint contains non-finite model state")
+    if not _state_values_are_finite(optimizer_state):
+        raise ValueError("training checkpoint contains non-finite optimizer state")
     payload = {
         "schema_version": CHECKPOINT_SCHEMA,
         "step": step,
@@ -112,8 +149,8 @@ def save_training_checkpoint(
         "binding_sha256": binding_sha256,
         "model_fingerprint": model_fingerprint,
         "training_plan_sha256": training_plan_sha256,
-        "model_state_dict": model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
+        "model_state_dict": model_state,
+        "optimizer_state_dict": optimizer_state,
         "cpu_rng_state": torch.get_rng_state(),
         "cuda_rng_state_all": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
     }
@@ -221,14 +258,24 @@ def _load_verified_payload(
     optimizer_state = payload.get("optimizer_state_dict")
     cpu_rng_state = payload.get("cpu_rng_state")
     cuda_rng_states = payload.get("cuda_rng_state_all")
-    if not isinstance(model_state, dict) or any(
-        type(key) is not str for key in model_state
+    if (
+        not isinstance(model_state, dict)
+        or not model_state
+        or any(type(key) is not str for key in model_state)
+        or any(not isinstance(value, torch.Tensor) for value in model_state.values())
     ):
         raise ValueError("training checkpoint model state is invalid")
-    if not isinstance(optimizer_state, dict) or any(
-        type(key) is not str for key in optimizer_state
+    if not _state_values_are_finite(model_state):
+        raise ValueError("training checkpoint contains non-finite model state")
+    if (
+        not isinstance(optimizer_state, dict)
+        or set(optimizer_state) != {"state", "param_groups"}
+        or not isinstance(optimizer_state.get("state"), dict)
+        or not isinstance(optimizer_state.get("param_groups"), list)
     ):
         raise ValueError("training checkpoint optimizer state is invalid")
+    if not _state_values_are_finite(optimizer_state):
+        raise ValueError("training checkpoint contains non-finite optimizer state")
     if not isinstance(cpu_rng_state, torch.Tensor):
         raise ValueError("training checkpoint CPU RNG state is invalid")
     if cpu_rng_state.dtype != torch.uint8 or cpu_rng_state.device.type != "cpu":
