@@ -42,11 +42,20 @@ def main() -> int:
     parser.add_argument("--prompt", required=True)
     parser.add_argument("--task", choices=INFERENCE_TASKS, default="code_to_semantic")
     parser.add_argument("--max-new-tokens", type=int, default=128)
+    parser.add_argument("--expected-bundle-sha256")
     arguments = parser.parse_args()
     if not arguments.prompt:
         parser.error("prompt must not be empty")
     if not 1 <= arguments.max_new_tokens <= 256:
         parser.error("max-new-tokens must be between 1 and 256")
+    if arguments.expected_bundle_sha256 is not None and (
+        len(arguments.expected_bundle_sha256) != 64
+        or any(
+            character not in "0123456789abcdef"
+            for character in arguments.expected_bundle_sha256
+        )
+    ):
+        parser.error("expected-bundle-sha256 must be a lowercase SHA-256 digest")
     if arguments.device == "cuda" and not torch.cuda.is_available():
         parser.error("CUDA was requested but is unavailable")
     if (
@@ -68,6 +77,7 @@ def main() -> int:
         expected_task_database_identity_sha256=None,
         expected_binding_sha256=binding.binding_sha256,
         expected_model_fingerprint=config.fingerprint(),
+        expected_bundle_sha256=arguments.expected_bundle_sha256,
     )
     model = model.to(device=device).eval()
     prompt_ids = build_inference_prompt(
