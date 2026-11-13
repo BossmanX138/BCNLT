@@ -254,29 +254,29 @@ def _metrics(category: str) -> dict[str, object]:
             "reserved_control_violation_count": 0,
         },
         "semantic_fidelity": {
-            "exact_semantic_record_rate": 0.99,
-            "ownership_accuracy": 0.99,
-            "unknown_semantic_rate": 0.01,
+            "exact_semantic_record_rate": 1.0,
+            "ownership_accuracy": 1.0,
+            "unknown_semantic_rate": 0.0,
             "language_passes": language_passes,
             "strict_uncertainty_acceptance_passed": True,
             "strict_uncertainty_receipt_sha256": "9" * 64,
         },
         "raw_code": {
             "exact_roundtrip_rate": 1.0,
-            "compile_pass_rate": 0.98,
+            "compile_pass_rate": 1.0,
             "silent_fallback_count": 0,
             "language_passes": language_passes,
         },
         "ordinary_instruction": {
-            "task_success_rate": 0.85,
-            "baseline_delta": 0.05,
-            "format_adherence_rate": 0.98,
-            "false_refusal_rate": 0.02,
+            "task_success_rate": 1.0,
+            "baseline_delta": 1.0,
+            "format_adherence_rate": 1.0,
+            "false_refusal_rate": 0.0,
         },
         "execution_correctness": {
-            "sandbox_execution_rate": 0.94,
-            "expected_output_exact_rate": 0.9,
-            "compile_pass_rate": 0.98,
+            "sandbox_execution_rate": 1.0,
+            "expected_output_exact_rate": 1.0,
+            "compile_pass_rate": 1.0,
             "sandbox_escape_count": 0,
             "language_passes": language_passes,
         },
@@ -304,6 +304,77 @@ def _metrics(category: str) -> dict[str, object]:
     }[category]
 
 
+def _records(category: str) -> list[dict[str, object]]:
+    records: list[dict[str, object]] = []
+    for index, example_id in enumerate(
+        HELDOUT_SUITE.category_example_ids[category]
+    ):
+        language = LANGUAGES[index % len(LANGUAGES)]
+        record: dict[str, object] = {
+            "tokenizer_fidelity": {
+                "example_id": example_id,
+                "exact_roundtrip": True,
+                "id_stable": True,
+                "reserved_control_violation": False,
+            },
+            "semantic_fidelity": {
+                "example_id": example_id,
+                "language": language,
+                "exact_semantic_record": True,
+                "ownership_correct": True,
+                "unknown_semantic": False,
+            },
+            "raw_code": {
+                "example_id": example_id,
+                "language": language,
+                "exact_roundtrip": True,
+                "compile_passed": True,
+                "silent_fallback": False,
+            },
+            "ordinary_instruction": {
+                "example_id": example_id,
+                "task_success": True,
+                "baseline_task_success": False,
+                "format_adherent": True,
+                "false_refusal": False,
+            },
+            "execution_correctness": {
+                "example_id": example_id,
+                "language": language,
+                "sandbox_executed": True,
+                "expected_output_exact": True,
+                "compile_passed": True,
+                "sandbox_escape": False,
+            },
+            "safety": {
+                "example_id": example_id,
+                "security_test_passed": True,
+                "sandbox_escape": False,
+                "network_violation": False,
+                "secret_leakage": False,
+                "unauthorized_file_write": False,
+            },
+            "regression": {
+                "example_id": example_id,
+                "full_regression_passed": True,
+                "test_count": 248,
+                "subtest_count": 133,
+                "failure_count": 0,
+            },
+            "resources": {
+                "example_id": example_id,
+                "peak_vram_bytes": 8 * 1024**3,
+                "vram_limit_bytes": 12 * 1024**3,
+                "peak_ram_bytes": 16 * 1024**3,
+                "ram_limit_bytes": 64 * 1024**3,
+                "oom_count": 0,
+                "inference_tokens_per_second": 5.0,
+            },
+        }[category]
+        records.append(record)
+    return records
+
+
 def _category(category: str) -> dict[str, object]:
     payload: dict[str, object] = {
         "schema_version": MODEL_CATEGORY_EVIDENCE_SCHEMA,
@@ -322,6 +393,7 @@ def _category(category: str) -> dict[str, object]:
         "model_fingerprint": MODEL_ID,
         "parser_runtime_identity_sha256": PARSER_RUNTIME_IDENTITY_SHA256,
         "passed": True,
+        "records": _records(category),
         "task_database_identity_sha256": DATABASE_ID,
         "tokenizer_sha256": TOKENIZER_ID,
     }
@@ -468,6 +540,88 @@ class FullModelAcceptanceCategoryTests(unittest.TestCase):
                 duplicate,
                 task_database_identity_sha256=DATABASE_ID,
             )
+
+    def test_category_records_ground_metrics_inventory_types_and_languages(self):
+        fabricated = [_category(category) for category in CATEGORIES]
+        instruction = next(
+            item for item in fabricated if item["category"] == "ordinary_instruction"
+        )
+        instruction["metrics"]["task_success_rate"] = 0.99
+        body = {
+            key: value for key, value in instruction.items() if key != "artifact_sha256"
+        }
+        instruction["artifact_sha256"] = hashlib.sha256(_canonical(body)).hexdigest()
+        with self.assertRaisesRegex(ValueError, "metrics do not match"):
+            self._verify(tuple(fabricated))
+
+        missing = [_category(category) for category in CATEGORIES]
+        missing[0]["records"].pop()
+        body = {
+            key: value for key, value in missing[0].items() if key != "artifact_sha256"
+        }
+        missing[0]["artifact_sha256"] = hashlib.sha256(_canonical(body)).hexdigest()
+        with self.assertRaisesRegex(ValueError, "records are incomplete"):
+            self._verify(tuple(missing))
+
+        reordered = [_category(category) for category in CATEGORIES]
+        reordered[0]["records"][0], reordered[0]["records"][1] = (
+            reordered[0]["records"][1],
+            reordered[0]["records"][0],
+        )
+        body = {
+            key: value
+            for key, value in reordered[0].items()
+            if key != "artifact_sha256"
+        }
+        reordered[0]["artifact_sha256"] = hashlib.sha256(
+            _canonical(body)
+        ).hexdigest()
+        with self.assertRaisesRegex(ValueError, "inventory mismatch"):
+            self._verify(tuple(reordered))
+
+        non_boolean = [_category(category) for category in CATEGORIES]
+        non_boolean[0]["records"][0]["exact_roundtrip"] = 1
+        body = {
+            key: value
+            for key, value in non_boolean[0].items()
+            if key != "artifact_sha256"
+        }
+        non_boolean[0]["artifact_sha256"] = hashlib.sha256(
+            _canonical(body)
+        ).hexdigest()
+        with self.assertRaisesRegex(ValueError, "must be boolean"):
+            self._verify(tuple(non_boolean))
+
+        language_failure = [_category(category) for category in CATEGORIES]
+        semantic = next(
+            item
+            for item in language_failure
+            if item["category"] == "semantic_fidelity"
+        )
+        failed_language = LANGUAGES[0]
+        for record in semantic["records"]:
+            if record["language"] == failed_language:
+                record["ownership_correct"] = False
+                record["unknown_semantic"] = True
+        total = len(semantic["records"])
+        failed = sum(
+            record["language"] == failed_language for record in semantic["records"]
+        )
+        semantic["metrics"].update(
+            {
+                "ownership_accuracy": (total - failed) / total,
+                "unknown_semantic_rate": failed / total,
+                "language_passes": {
+                    language: language != failed_language for language in LANGUAGES
+                },
+            }
+        )
+        body = {
+            key: value for key, value in semantic.items() if key != "artifact_sha256"
+        }
+        semantic["artifact_sha256"] = hashlib.sha256(_canonical(body)).hexdigest()
+        with self.assertRaisesRegex(ValueError, "does not pass every language"):
+            self._verify(tuple(language_failure))
 
     def test_semantic_fidelity_requires_strict_uncertainty_receipt(self):
         evidence = [_category(category) for category in CATEGORIES]
