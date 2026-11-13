@@ -6,7 +6,9 @@ import hashlib
 import heapq
 import json
 import math
+import os
 import sqlite3
+import tempfile
 import zlib
 from collections import Counter, defaultdict
 from collections.abc import Mapping
@@ -212,6 +214,18 @@ def _validate_map(name: str, value: Mapping[str, object]) -> None:
         raise ValueError(f"{name} must define train, validation and test")
 
 
+def _unique_scratch_path(destination: Path, *, label: str) -> Path:
+    descriptor, raw_path = tempfile.mkstemp(
+        dir=destination.parent,
+        prefix=f".{destination.name}.{label}.",
+        suffix=".tmp",
+    )
+    os.close(descriptor)
+    path = Path(raw_path)
+    path.unlink()
+    return path
+
+
 def _load_eligibility(
     admission_path: Path,
     eligibility_root: Path,
@@ -378,6 +392,13 @@ def build_audited_balanced_curriculum(
             split=split,
             expected_catalog_sha256=catalog_sha256,
         )
+    overlapping_documents = (
+        (eligible_by_split["train"] & eligible_by_split["validation"])
+        | (eligible_by_split["train"] & eligible_by_split["test"])
+        | (eligible_by_split["validation"] & eligible_by_split["test"])
+    )
+    if overlapping_documents:
+        raise ValueError("eligible document appears in multiple frozen splits")
     lineage_values = (
         "binding_sha256",
         "tokenizer_sha256",
@@ -416,7 +437,7 @@ def build_audited_balanced_curriculum(
         ],
     ] = {}
     processed_documents = 0
-    prompt_scratch = destination.with_name(f".{destination.name}.prompt-claims.tmp")
+    prompt_scratch = _unique_scratch_path(destination, label="prompt-claims")
     with _PromptClaimIndex(prompt_scratch) as prompt_claims:
         catalog = _ro_connect(catalog_path)
         try:
@@ -476,14 +497,24 @@ def build_audited_balanced_curriculum(
                                 raise ValueError(
                                     "eligible canonical payload SHA-256 mismatch"
                                 )
-                            expected_semantic_bytes = int(admission_row[9]) * 2
+                            semantic_token_count = admission_row[9]
+                            if (
+                                type(semantic_token_count) is not int
+                                or not 3
+                                <= semantic_token_count
+                                <= MAX_CANONICAL_OUTPUT_BYTES
+                            ):
+                                raise ValueError(
+                                    "eligible semantic token count is invalid"
+                                )
+                            expected_semantic_bytes = semantic_token_count * 2
                             semantic_ids = _decode_u16(
                                 decompress_bounded(
                                     admission_row[7],
                                     maximum_output_bytes=expected_semantic_bytes,
                                 )
                             )
-                            if len(semantic_ids) != int(admission_row[9]):
+                            if len(semantic_ids) != semantic_token_count:
                                 raise ValueError(
                                     "eligible semantic token count mismatch"
                                 )
@@ -698,9 +729,14 @@ def build_audited_balanced_curriculum(
         },
     }
     policy_sha = hashlib.sha256(_canonical_json(policy).encode("utf-8")).hexdigest()
-    temporary = destination.with_name(f".{destination.name}.tmp")
-    if temporary.exists():
-        temporary.unlink()
+    temporary_handle = tempfile.NamedTemporaryFile(
+        dir=destination.parent,
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+        delete=False,
+    )
+    temporary = Path(temporary_handle.name)
+    temporary_handle.close()
     output = sqlite3.connect(temporary)
     try:
         output.execute("PRAGMA journal_mode=DELETE")
@@ -796,11 +832,19 @@ def build_audited_balanced_curriculum(
         output.close()
     try:
         audit = audit_task_database(binding, temporary)
+        with temporary.open("r+b") as stream:
+            os.fsync(stream.fileno())
+        if destination.exists():
+            raise ValueError("destination curriculum already exists")
+        try:
+            os.link(temporary, destination)
+        except FileExistsError as error:
+            raise ValueError("destination curriculum already exists") from error
     except BaseException:
         if temporary.exists():
             temporary.unlink()
         raise
-    temporary.replace(destination)
+    temporary.unlink()
     return AuditedBalancedCurriculumResult(
         database_path=destination,
         database_identity_sha256=audit.database_identity_sha256,

@@ -178,7 +178,7 @@ def _write_balanced_fixture(root: Path, binding: NativeTokenizerBinding):
     admission_paths: dict[str, Path] = {}
     canonical_jsonl = '{"fixture":true}\n'
     canonical_sha256 = hashlib.sha256(canonical_jsonl.encode()).hexdigest()
-    semantic_ids = _encode_u16([1, 2])
+    semantic_ids = _encode_u16([1, 2, 3])
     for split, document_ids in documents_by_split.items():
         admission_path = root / f"{split}-admission.sqlite"
         admission_paths[split] = admission_path
@@ -207,7 +207,7 @@ def _write_balanced_fixture(root: Path, binding: NativeTokenizerBinding):
                         zlib.compress(canonical_jsonl.encode(), 6),
                         zlib.compress(semantic_ids, 6),
                         1,
-                        2,
+                        3,
                         "admitted",
                         "python",
                     )
@@ -278,6 +278,10 @@ def test_materializes_exact_balanced_cells_and_is_deterministic(tmp_path: Path) 
         "oversample_factor": 2,
         "max_sequence": 256,
     }
+    prompt_sentinel = tmp_path / ".first.sqlite.prompt-claims.tmp"
+    output_sentinel = tmp_path / ".first.sqlite.tmp"
+    prompt_sentinel.write_bytes(b"unrelated prompt sentinel")
+    output_sentinel.write_bytes(b"unrelated output sentinel")
     with (
         patch(
             "bosscrafts_model.audited_balanced_curriculum._load_eligibility",
@@ -299,6 +303,33 @@ def test_materializes_exact_balanced_cells_and_is_deterministic(tmp_path: Path) 
             **arguments,
         )
 
+    overlapping_document = next(iter(documents_by_split["train"]))
+
+    def load_overlapping_eligibility(*args, **kwargs):
+        eligible, manifest, metadata, identity = load_eligibility(*args, **kwargs)
+        if kwargs["split"] == "validation":
+            eligible = {*eligible, overlapping_document}
+        return eligible, manifest, metadata, identity
+
+    with (
+        patch(
+            "bosscrafts_model.audited_balanced_curriculum._load_eligibility",
+            side_effect=load_overlapping_eligibility,
+        ),
+        patch(
+            "bosscrafts_model.audited_balanced_curriculum.CompactCurrentCorpusTaskPacker",
+            _FixturePacker,
+        ),
+        pytest.raises(ValueError, match="multiple frozen splits"),
+    ):
+        build_audited_balanced_curriculum(
+            binding,
+            destination_database=tmp_path / "overlap.sqlite",
+            **arguments,
+        )
+
+    assert prompt_sentinel.read_bytes() == b"unrelated prompt sentinel"
+    assert output_sentinel.read_bytes() == b"unrelated output sentinel"
     assert first.example_count == 72
     assert first.processed_document_count == 24
     assert first.selected_document_count == 24
