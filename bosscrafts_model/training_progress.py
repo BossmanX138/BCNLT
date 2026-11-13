@@ -122,7 +122,10 @@ def load_training_progress(
         raise ValueError("training progress counters are inconsistent")
     if payload["training_complete"] is not (remaining_steps == 0):
         raise ValueError("training progress completion is inconsistent")
-    if any(payload.get(key) != value for key, value in expected_fields.items()):
+    if any(
+        key not in payload or payload[key] != value
+        for key, value in expected_fields.items()
+    ):
         raise ValueError("training progress lineage mismatch")
     if checkpoint_path is not None:
         checkpoint = Path(checkpoint_path).resolve()

@@ -14,9 +14,17 @@ from .artifact_schemas import (
     CHECKPOINT_INFERENCE_SCHEMA,
     MODEL_CATEGORY_EVIDENCE_SCHEMA,
 )
-from .bcnlt_source_pipeline import CURRENT_RUNTIME_SPEC_SHA256
+from .bcnlt_source_pipeline import (
+    CURRENT_RUNTIME_SPEC_SHA256,
+    PARSER_RUNTIME_IDENTITY_SHA256,
+)
+from .config import ModelConfig
+from .tokenizer import EXPECTED_BINDING_SHA256, EXPECTED_TOKENIZER_SHA256
 
-ACCEPTANCE_SCHEMA = "bosscrafts-model-acceptance-v4"
+ACCEPTANCE_SCHEMA = "bosscrafts-model-acceptance-v5"
+EXPECTED_MODEL_FINGERPRINT = ModelConfig(
+    tokenizer_manifest=EXPECTED_BINDING_SHA256
+).fingerprint()
 STRUCTURED_TASKS = (
     "code_to_semantic",
     "semantic_continuation",
@@ -94,6 +102,7 @@ _EVALUATION_FIELDS = frozenset(
         "mean_loss",
         "model_fingerprint",
         "perplexity",
+        "promotion_blockers",
         "promotion_gate_passed",
         "promotion_threshold",
         "relative_loss_improvement",
@@ -488,7 +497,8 @@ def verify_model_acceptance(
         threshold = payload.get("promotion_threshold")
         improvement = payload.get("relative_loss_improvement")
         if (
-            payload.get("promotion_gate_passed") is not True
+            payload.get("promotion_blockers") != []
+            or payload.get("promotion_gate_passed") is not True
             or not _finite_number(threshold)
             or float(threshold) < 0.02
             or not _finite_number(improvement)
@@ -659,7 +669,7 @@ def verify_model_acceptance(
     checkpoint_step_value = next(iter(checkpoint_steps))
     if (
         not _is_sha256(database_identity_value)
-        or not _is_sha256(model_fingerprint_value)
+        or model_fingerprint_value != EXPECTED_MODEL_FINGERPRINT
         or not _is_sha256(checkpoint_sha256_value)
         or type(checkpoint_step_value) is not int
         or checkpoint_step_value < 1
@@ -678,9 +688,9 @@ def verify_model_acceptance(
     }
     if (
         len(parser_ids) != 1
-        or not _is_sha256(next(iter(parser_ids)))
+        or next(iter(parser_ids)) != PARSER_RUNTIME_IDENTITY_SHA256
         or len(tokenizer_ids) != 1
-        or not _is_sha256(next(iter(tokenizer_ids)))
+        or next(iter(tokenizer_ids)) != EXPECTED_TOKENIZER_SHA256
         or len(heldout_ids) != 1
         or not _is_sha256(next(iter(heldout_ids)))
     ):

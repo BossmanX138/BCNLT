@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import math
 import subprocess
@@ -16,11 +17,14 @@ from bosscrafts_model.artifact_schemas import (
     CHECKPOINT_INFERENCE_SCHEMA,
 )
 from bosscrafts_model.bcnlt_source_pipeline import CURRENT_RUNTIME_SPEC_SHA256
-from bosscrafts_model.model_acceptance import verify_model_acceptance
+from bosscrafts_model.model_acceptance import (
+    EXPECTED_MODEL_FINGERPRINT,
+    verify_model_acceptance,
+)
 from scripts.verify_model_acceptance import _read_payload
 
 DATABASE_ID = "a" * 64
-MODEL_ID = "b" * 64
+MODEL_ID = EXPECTED_MODEL_FINGERPRINT
 CHECKPOINT_ID = "e" * 64
 FAMILIES = ("code_to_semantic", "semantic_continuation", "semantic_to_code")
 
@@ -83,6 +87,7 @@ def _evaluation(split: str) -> dict[str, object]:
         "mean_loss": 8.5,
         "model_fingerprint": MODEL_ID,
         "perplexity": math.exp(8.5),
+        "promotion_blockers": [],
         "promotion_gate_passed": True,
         "promotion_threshold": 0.02,
         "relative_loss_improvement": 0.15,
@@ -149,6 +154,15 @@ class ModelAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "complete split"):
             verify_model_acceptance(
                 (incomplete, _evaluation("test")),
+                tuple(_inference(task) for task in FAMILIES),
+                _categories(),
+            )
+
+        blocked = _evaluation("validation")
+        blocked["promotion_blockers"] = ["manually blocked"]
+        with self.assertRaisesRegex(ValueError, "promotion gate"):
+            verify_model_acceptance(
+                (blocked, _evaluation("test")),
                 tuple(_inference(task) for task in FAMILIES),
                 _categories(),
             )
@@ -287,6 +301,33 @@ class ModelAcceptanceTests(unittest.TestCase):
                     _inference("semantic_to_code"),
                 ),
                 _categories(),
+            )
+
+        wrong_architecture = tuple(_category(category) for category in CATEGORIES)
+        for item in wrong_architecture:
+            item["model_fingerprint"] = "f" * 64
+            body = {
+                key: value for key, value in item.items() if key != "artifact_sha256"
+            }
+            item["artifact_sha256"] = hashlib.sha256(
+                json.dumps(
+                    body,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).hexdigest()
+        wrong_evaluations = (_evaluation("validation"), _evaluation("test"))
+        for item in wrong_evaluations:
+            item["model_fingerprint"] = "f" * 64
+        wrong_inferences = tuple(_inference(task) for task in FAMILIES)
+        for item in wrong_inferences:
+            item["model_fingerprint"] = "f" * 64
+        with self.assertRaisesRegex(ValueError, "lineage"):
+            verify_model_acceptance(
+                wrong_evaluations,
+                wrong_inferences,
+                wrong_architecture,
             )
 
         manual = _inference("code_to_semantic")

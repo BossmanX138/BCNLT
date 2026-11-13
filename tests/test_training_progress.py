@@ -61,6 +61,20 @@ def test_loads_valid_progress_and_returns_narrowed_values(tmp_path: Path) -> Non
     assert progress["training_complete"] is False
 
 
+def test_rejects_absent_expected_field_even_when_expected_value_is_none(
+    tmp_path: Path,
+) -> None:
+    feature = _feature()
+    path = tmp_path / "training-progress.json"
+    path.write_text(json.dumps(_payload()), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="training progress lineage mismatch"):
+        feature.load_training_progress(
+            path,
+            expected_fields={"absent_field": None},
+        )
+
+
 def test_binds_progress_to_exact_checkpoint_bytes(tmp_path: Path) -> None:
     feature = _feature()
     checkpoint = tmp_path / "checkpoint.pt"

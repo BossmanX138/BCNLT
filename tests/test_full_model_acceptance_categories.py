@@ -15,11 +15,15 @@ from bosscrafts_model.bcnlt_source_pipeline import (
     CURRENT_RUNTIME_SPEC_SHA256,
     PARSER_RUNTIME_IDENTITY_SHA256,
 )
-from bosscrafts_model.model_acceptance import verify_model_acceptance
+from bosscrafts_model.model_acceptance import (
+    EXPECTED_MODEL_FINGERPRINT,
+    verify_model_acceptance,
+)
+from bosscrafts_model.tokenizer import EXPECTED_TOKENIZER_SHA256
 
 DATABASE_ID = "a" * 64
-MODEL_ID = "b" * 64
-TOKENIZER_ID = "c" * 64
+MODEL_ID = EXPECTED_MODEL_FINGERPRINT
+TOKENIZER_ID = EXPECTED_TOKENIZER_SHA256
 HELDOUT_ID = "d" * 64
 CHECKPOINT_ID = "e" * 64
 FAMILIES = ("code_to_semantic", "semantic_continuation", "semantic_to_code")
@@ -90,6 +94,7 @@ def _evaluation(split: str) -> dict[str, object]:
         "mean_loss": 8.5,
         "model_fingerprint": MODEL_ID,
         "perplexity": math.exp(8.5),
+        "promotion_blockers": [],
         "promotion_gate_passed": True,
         "promotion_threshold": 0.02,
         "relative_loss_improvement": 0.15,
@@ -292,6 +297,26 @@ class FullModelAcceptanceCategoryTests(unittest.TestCase):
         ).hexdigest()
         with self.assertRaisesRegex(ValueError, "lineage"):
             self._verify(tuple(different_checkpoint))
+
+        wrong_parser = copy.deepcopy(evidence)
+        for item in wrong_parser:
+            item["parser_runtime_identity_sha256"] = "f" * 64
+            body = {
+                key: value for key, value in item.items() if key != "artifact_sha256"
+            }
+            item["artifact_sha256"] = hashlib.sha256(_canonical(body)).hexdigest()
+        with self.assertRaisesRegex(ValueError, "category lineage"):
+            self._verify(tuple(wrong_parser))
+
+        wrong_tokenizer = copy.deepcopy(evidence)
+        for item in wrong_tokenizer:
+            item["tokenizer_sha256"] = "f" * 64
+            body = {
+                key: value for key, value in item.items() if key != "artifact_sha256"
+            }
+            item["artifact_sha256"] = hashlib.sha256(_canonical(body)).hexdigest()
+        with self.assertRaisesRegex(ValueError, "category lineage"):
+            self._verify(tuple(wrong_tokenizer))
 
     def test_semantic_fidelity_requires_strict_uncertainty_receipt(self):
         evidence = [_category(category) for category in CATEGORIES]
