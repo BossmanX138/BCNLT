@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections.abc import Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from typing import Sequence, TypeGuard
@@ -19,9 +20,10 @@ from .bcnlt_source_pipeline import (
     PARSER_RUNTIME_IDENTITY_SHA256,
 )
 from .config import ModelConfig
+from .inference_protocol import HeldoutInferenceCase
 from .tokenizer import EXPECTED_BINDING_SHA256, EXPECTED_TOKENIZER_SHA256
 
-ACCEPTANCE_SCHEMA = "bosscrafts-model-acceptance-v5"
+ACCEPTANCE_SCHEMA = "bosscrafts-model-acceptance-v6"
 EXPECTED_MODEL_FINGERPRINT = ModelConfig(
     tokenizer_manifest=EXPECTED_BINDING_SHA256
 ).fingerprint()
@@ -415,6 +417,9 @@ def verify_model_acceptance(
     evaluations: Sequence[dict[str, object]],
     inferences: Sequence[dict[str, object]],
     category_evidence: Sequence[dict[str, object]],
+    *,
+    heldout_cases: Mapping[str, HeldoutInferenceCase],
+    task_database_identity_sha256: str,
 ) -> ModelAcceptanceResult:
     if type(evaluations) not in {tuple, list} or len(evaluations) != 2:
         raise ValueError("acceptance requires validation and test evaluations")
@@ -424,6 +429,29 @@ def verify_model_acceptance(
         ACCEPTANCE_CATEGORIES
     ):
         raise ValueError("acceptance requires every independent category")
+    if not _is_sha256(task_database_identity_sha256):
+        raise ValueError("acceptance ground-truth database identity is invalid")
+    if not isinstance(heldout_cases, Mapping) or set(heldout_cases) != set(
+        STRUCTURED_TASKS
+    ):
+        raise ValueError("acceptance requires grounded held-out cases for every task")
+    heldout_example_ids: set[str] = set()
+    for task in STRUCTURED_TASKS:
+        case = heldout_cases[task]
+        if (
+            type(case) is not HeldoutInferenceCase
+            or case.family != task
+            or not _is_sha256(case.example_id)
+            or not case.prompt_ids
+            or not case.expected_ids
+            or any(
+                type(token_id) is not int or not 0 <= token_id <= 65_535
+                for token_id in (*case.prompt_ids, *case.expected_ids)
+            )
+            or case.example_id in heldout_example_ids
+        ):
+            raise ValueError(f"{task} held-out ground truth is invalid")
+        heldout_example_ids.add(case.example_id)
 
     evaluation_by_split: dict[str, dict[str, object]] = {}
     for payload in evaluations:
@@ -530,35 +558,38 @@ def verify_model_acceptance(
     for payload in inferences:
         if type(payload) is not dict:
             raise TypeError("inference payloads must be dictionaries")
-        task = payload.get("task")
+        inference_task = payload.get("task")
         if (
-            type(task) is not str
-            or task not in STRUCTURED_TASKS
-            or task in inference_by_task
+            type(inference_task) is not str
+            or inference_task not in STRUCTURED_TASKS
+            or inference_task in inference_by_task
         ):
             raise ValueError("acceptance requires one result for every structured task")
-        _verify_inference_consistency(payload, task=task)
+        _verify_inference_consistency(payload, task=inference_task)
         if not (
             payload.get("checkpoint_lineage_verified") is True
             and payload.get("checkpoint_training_complete") is True
             and payload.get("full_model") is True
         ):
             raise ValueError(
-                f"{task} inference is not a complete full-model checkpoint"
+                f"{inference_task} inference is not a complete full-model checkpoint"
             )
         heldout_accuracy = payload.get("heldout_target_token_accuracy")
         expected_ids = payload.get("heldout_expected_token_ids")
         generated_ids = payload.get("new_token_ids")
         expected_count = payload.get("heldout_expected_target_token_count")
+        grounded_case = heldout_cases[inference_task]
         if type(expected_count) is not int:
-            raise ValueError(f"{task} expected target count is invalid")
+            raise ValueError(f"{inference_task} expected target count is invalid")
         if (
             payload.get("prompt_source") != "heldout_database"
             or payload.get("heldout_split") != "test"
-            or not _is_sha256(payload.get("heldout_example_id"))
+            or payload.get("heldout_example_id") != grounded_case.example_id
             or expected_count < 1
+            or expected_count != len(grounded_case.expected_ids)
             or type(expected_ids) is not list
             or len(expected_ids) != expected_count
+            or expected_ids != list(grounded_case.expected_ids)
             or any(
                 type(token_id) is not int or not 0 <= token_id <= 65_535
                 for token_id in expected_ids
@@ -573,15 +604,17 @@ def verify_model_acceptance(
             or not _finite_number(heldout_accuracy)
             or float(heldout_accuracy) != 1.0
         ):
-            raise ValueError(f"{task} inference is not valid held-out evidence")
+            raise ValueError(
+                f"{inference_task} inference is not valid held-out evidence"
+            )
         new_token_count = payload.get("new_token_count")
         if (
             payload.get("response_protocol_complete") is not True
             or type(new_token_count) is not int
             or new_token_count != len(generated_ids)
         ):
-            raise ValueError(f"{task} response protocol is incomplete")
-        inference_by_task[task] = payload
+            raise ValueError(f"{inference_task} response protocol is incomplete")
+        inference_by_task[inference_task] = payload
     if set(inference_by_task) != set(STRUCTURED_TASKS):
         raise ValueError("acceptance requires all structured response protocols")
 
@@ -669,6 +702,7 @@ def verify_model_acceptance(
     checkpoint_step_value = next(iter(checkpoint_steps))
     if (
         not _is_sha256(database_identity_value)
+        or database_identity_value != task_database_identity_sha256
         or model_fingerprint_value != EXPECTED_MODEL_FINGERPRINT
         or not _is_sha256(checkpoint_sha256_value)
         or type(checkpoint_step_value) is not int

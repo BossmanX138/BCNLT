@@ -15,9 +15,12 @@ from bosscrafts_model.bcnlt_source_pipeline import (
     CURRENT_RUNTIME_SPEC_SHA256,
     PARSER_RUNTIME_IDENTITY_SHA256,
 )
+from bosscrafts_model.inference_protocol import HeldoutInferenceCase
 from bosscrafts_model.model_acceptance import (
     EXPECTED_MODEL_FINGERPRINT,
-    verify_model_acceptance,
+)
+from bosscrafts_model.model_acceptance import (
+    verify_model_acceptance as _verify_model_acceptance,
 )
 from bosscrafts_model.tokenizer import EXPECTED_TOKENIZER_SHA256
 
@@ -44,6 +47,29 @@ def _canonical(value: object) -> bytes:
     return json.dumps(
         value, ensure_ascii=False, separators=(",", ":"), sort_keys=True
     ).encode("utf-8")
+
+
+def _heldout_case(task: str) -> HeldoutInferenceCase:
+    return HeldoutInferenceCase(
+        example_id=hashlib.sha256(f"acceptance:{task}".encode()).hexdigest(),
+        family=task,
+        prompt_ids=(100,),
+        expected_ids=tuple(range(1, 21)),
+    )
+
+
+def _heldout_cases() -> dict[str, HeldoutInferenceCase]:
+    return {task: _heldout_case(task) for task in FAMILIES}
+
+
+def verify_model_acceptance(evaluations: object, inferences: object, categories: object):
+    return _verify_model_acceptance(
+        evaluations,
+        inferences,
+        categories,
+        heldout_cases=_heldout_cases(),
+        task_database_identity_sha256=DATABASE_ID,
+    )
 
 
 def _evaluation(split: str) -> dict[str, object]:
@@ -131,7 +157,7 @@ def _inference(task: str) -> dict[str, object]:
         "prompt_token_count": 1,
         "prompt_source": "heldout_database",
         "response_protocol_complete": True,
-        "heldout_example_id": "e" * 64,
+        "heldout_example_id": _heldout_case(task).example_id,
         "heldout_expected_target_token_count": 20,
         "heldout_expected_token_ids": expected_ids,
         "heldout_split": "test",

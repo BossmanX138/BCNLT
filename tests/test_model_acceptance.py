@@ -4,10 +4,13 @@ import copy
 import hashlib
 import json
 import math
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
+import zlib
+from array import array
 from pathlib import Path
 
 from test_full_model_acceptance_categories import CATEGORIES, _category
@@ -16,11 +19,22 @@ from bosscrafts_model.artifact_schemas import (
     CHECKPOINT_EVALUATION_SCHEMA,
     CHECKPOINT_INFERENCE_SCHEMA,
 )
-from bosscrafts_model.bcnlt_source_pipeline import CURRENT_RUNTIME_SPEC_SHA256
+from bosscrafts_model.bcnlt_source_pipeline import (
+    CURRENT_RUNTIME_SPEC_SHA256,
+    PARSER_RUNTIME_IDENTITY_SHA256,
+)
+from bosscrafts_model.inference_protocol import HeldoutInferenceCase
 from bosscrafts_model.model_acceptance import (
     EXPECTED_MODEL_FINGERPRINT,
-    verify_model_acceptance,
 )
+from bosscrafts_model.model_acceptance import (
+    verify_model_acceptance as _verify_model_acceptance,
+)
+from bosscrafts_model.resumable_task_packing import (
+    TASK_DATABASE_SCHEMA,
+    audit_task_database,
+)
+from bosscrafts_model.tokenizer import NativeTokenizerBinding
 from scripts.verify_model_acceptance import _read_payload
 
 DATABASE_ID = "a" * 64
@@ -31,6 +45,134 @@ FAMILIES = ("code_to_semantic", "semantic_continuation", "semantic_to_code")
 
 def _categories():
     return tuple(_category(category) for category in CATEGORIES)
+
+
+def _heldout_case(task: str) -> HeldoutInferenceCase:
+    input_ids = [100, *range(1, 21)]
+    input_sha256 = hashlib.sha256(
+        json.dumps(input_ids, separators=(",", ":")).encode()
+    ).hexdigest()
+    document_id = f"acceptance-{task}"
+    example_id = hashlib.sha256(
+        json.dumps(
+            {
+                "document_id": document_id,
+                "family": task,
+                "input_ids_sha256": input_sha256,
+                "record_index": 0,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+    return HeldoutInferenceCase(
+        example_id=example_id,
+        family=task,
+        prompt_ids=(100,),
+        expected_ids=tuple(range(1, 21)),
+    )
+
+
+def _heldout_cases() -> dict[str, HeldoutInferenceCase]:
+    return {task: _heldout_case(task) for task in FAMILIES}
+
+
+def verify_model_acceptance(
+    evaluations: object,
+    inferences: object,
+    categories: object,
+):
+    return _verify_model_acceptance(
+        evaluations,
+        inferences,
+        categories,
+        heldout_cases=_heldout_cases(),
+        task_database_identity_sha256=DATABASE_ID,
+    )
+
+
+def _write_ground_truth_database(path: Path) -> str:
+    binding = NativeTokenizerBinding.load()
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute(
+            "CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        connection.executemany(
+            "INSERT INTO metadata VALUES(?,?)",
+            sorted(
+                {
+                    "schema_version": TASK_DATABASE_SCHEMA,
+                    "binding_sha256": binding.binding_sha256,
+                    "tokenizer_sha256": binding.tokenizer_sha256,
+                    "vocabulary_size": str(binding.vocab_size),
+                    "packing_complete": "true",
+                    "maximum_sequence_tokens": "21",
+                    "parser_runtime_identity_sha256": PARSER_RUNTIME_IDENTITY_SHA256,
+                }.items()
+            ),
+        )
+        connection.execute(
+            """CREATE TABLE tasks (
+                   example_id TEXT PRIMARY KEY,
+                   document_id TEXT NOT NULL,
+                   language TEXT NOT NULL,
+                   family TEXT NOT NULL,
+                   record_index INTEGER NOT NULL,
+                   split TEXT NOT NULL,
+                   input_ids_zlib BLOB NOT NULL,
+                   token_count INTEGER NOT NULL,
+                   loss_start_index INTEGER NOT NULL,
+                   semantic_spec_sha256 TEXT NOT NULL,
+                   parser_runtime_identity_sha256 TEXT NOT NULL,
+                   source_sha256 TEXT NOT NULL
+               )"""
+        )
+        for task in FAMILIES:
+            case = _heldout_case(task)
+            document_id = f"acceptance-{task}"
+            input_ids = [*case.prompt_ids, *case.expected_ids]
+            connection.execute(
+                "INSERT INTO tasks VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    case.example_id,
+                    document_id,
+                    "python",
+                    task,
+                    0,
+                    "test",
+                    zlib.compress(array("H", input_ids).tobytes()),
+                    len(input_ids),
+                    len(case.prompt_ids),
+                    CURRENT_RUNTIME_SPEC_SHA256["python"],
+                    PARSER_RUNTIME_IDENTITY_SHA256,
+                    hashlib.sha256(document_id.encode()).hexdigest(),
+                ),
+            )
+        connection.commit()
+    finally:
+        connection.close()
+    return audit_task_database(binding, path).database_identity_sha256
+
+
+def _rebind_database(payload: dict[str, object], database_identity: str) -> None:
+    for field in (
+        "task_database_identity_sha256",
+        "checkpoint_task_database_identity_sha256",
+        "evaluation_task_database_identity_sha256",
+    ):
+        if field in payload:
+            payload[field] = database_identity
+    if "artifact_sha256" in payload:
+        body = {key: value for key, value in payload.items() if key != "artifact_sha256"}
+        payload["artifact_sha256"] = hashlib.sha256(
+            json.dumps(
+                body,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
 
 
 def _evaluation(split: str) -> dict[str, object]:
@@ -124,7 +266,7 @@ def _inference(task: str) -> dict[str, object]:
         "prompt_token_count": 1,
         "prompt_source": "heldout_database",
         "response_protocol_complete": True,
-        "heldout_example_id": "d" * 64,
+        "heldout_example_id": _heldout_case(task).example_id,
         "heldout_expected_target_token_count": 20,
         "heldout_expected_token_ids": expected_ids,
         "heldout_split": "test",
@@ -267,6 +409,33 @@ class ModelAcceptanceTests(unittest.TestCase):
                 _categories(),
             )
 
+    def test_rejects_self_reported_expected_ids_without_database_ground_truth(self):
+        cases = _heldout_cases()
+        original = cases["code_to_semantic"]
+        cases["code_to_semantic"] = HeldoutInferenceCase(
+            example_id=original.example_id,
+            family=original.family,
+            prompt_ids=original.prompt_ids,
+            expected_ids=tuple(range(2, 22)),
+        )
+        with self.assertRaisesRegex(ValueError, "held-out"):
+            _verify_model_acceptance(
+                (_evaluation("validation"), _evaluation("test")),
+                tuple(_inference(task) for task in FAMILIES),
+                _categories(),
+                heldout_cases=cases,
+                task_database_identity_sha256=DATABASE_ID,
+            )
+
+        with self.assertRaisesRegex(ValueError, "lineage"):
+            _verify_model_acceptance(
+                (_evaluation("validation"), _evaluation("test")),
+                tuple(_inference(task) for task in FAMILIES),
+                _categories(),
+                heldout_cases=_heldout_cases(),
+                task_database_identity_sha256="f" * 64,
+            )
+
     def test_rejects_incomplete_protocol_or_lineage_mismatch(self):
         broken = _inference("code_to_semantic")
         broken["response_protocol_complete"] = False
@@ -373,6 +542,7 @@ class ModelAcceptanceTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("--task-database", completed.stdout)
         self.assertIn("--validation-evaluation", completed.stdout)
         self.assertIn("--code-to-semantic-inference", completed.stdout)
         self.assertIn("--tokenizer-fidelity-evidence", completed.stdout)
@@ -399,12 +569,16 @@ class ModelAcceptanceTests(unittest.TestCase):
         project_root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            database = root / "tasks.sqlite"
+            database_identity = _write_ground_truth_database(database)
             evidence = {
                 "validation.json": _evaluation("validation"),
                 "test.json": _evaluation("test"),
                 **{f"{task}.json": _inference(task) for task in FAMILIES},
                 **{f"{category}.json": _category(category) for category in CATEGORIES},
             }
+            for payload in evidence.values():
+                _rebind_database(payload, database_identity)
             for name, payload in evidence.items():
                 (root / name).write_text(json.dumps(payload), encoding="utf-8")
             output = root / "acceptance.json"
@@ -412,6 +586,8 @@ class ModelAcceptanceTests(unittest.TestCase):
                 [
                     sys.executable,
                     str(project_root / "scripts" / "verify_model_acceptance.py"),
+                    "--task-database",
+                    str(database),
                     "--validation-evaluation",
                     str(root / "validation.json"),
                     "--test-evaluation",

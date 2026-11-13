@@ -13,6 +13,11 @@ import time
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from bosscrafts_model.model_acceptance import ACCEPTANCE_CATEGORIES, ACCEPTANCE_SCHEMA
+
 V8_ROOT = PROJECT_ROOT.parent / ".codex_staging_bosscrafts_model_v8_candidate"
 V7_ROOT = PROJECT_ROOT.parent / ".codex_staging_bosscrafts_model_v7_candidate"
 DATABASE = (
@@ -205,6 +210,47 @@ def _inference_command(family: str, output: Path) -> list[str]:
     ]
 
 
+def _acceptance_command(
+    inference_paths: dict[str, Path],
+    category_paths: dict[str, Path],
+    output: Path,
+) -> list[str]:
+    expected_families = {
+        "code_to_semantic",
+        "semantic_continuation",
+        "semantic_to_code",
+    }
+    if set(inference_paths) != expected_families:
+        raise ValueError("formal acceptance inference paths are incomplete")
+    if set(category_paths) != set(ACCEPTANCE_CATEGORIES):
+        raise ValueError("formal acceptance category paths are incomplete")
+    command = [
+        sys.executable,
+        str(PROJECT_ROOT / "scripts" / "verify_model_acceptance.py"),
+        "--task-database",
+        str(DATABASE),
+        "--validation-evaluation",
+        str(EVALUATION_ROOT / "validation.json"),
+        "--test-evaluation",
+        str(EVALUATION_ROOT / "test.json"),
+        "--code-to-semantic-inference",
+        str(inference_paths["code_to_semantic"]),
+        "--semantic-continuation-inference",
+        str(inference_paths["semantic_continuation"]),
+        "--semantic-to-code-inference",
+        str(inference_paths["semantic_to_code"]),
+    ]
+    for category in ACCEPTANCE_CATEGORIES:
+        command.extend(
+            (
+                f"--{category.replace('_', '-')}-evidence",
+                str(category_paths[category]),
+            )
+        )
+    command.extend(("--output", str(output)))
+    return command
+
+
 def _is_finite_number(value: object) -> bool:
     return (
         (type(value) is int or type(value) is float)
@@ -388,30 +434,34 @@ def main() -> int:
     for family, output in inference_paths.items():
         if not output.is_file():
             _run(_inference_command(family, output), f"{family} held-out inference")
+    category_paths = {
+        category: EVALUATION_ROOT / f"{category}-evidence.json"
+        for category in ACCEPTANCE_CATEGORIES
+    }
+    missing_categories = sorted(
+        category for category, path in category_paths.items() if not path.is_file()
+    )
+    if missing_categories:
+        _publish_status(
+            arguments.status,
+            stage="acceptance_evidence_pending",
+            checkpoint_sha256=checkpoint_sha256,
+            training_plan_sha256=training_plan_sha256,
+            extra={
+                "promotion_ready": False,
+                "missing_acceptance_categories": missing_categories,
+            },
+        )
+        return 0
     acceptance_path = EVALUATION_ROOT / "model-acceptance.json"
     if not acceptance_path.is_file():
         _run(
-            [
-                sys.executable,
-                str(PROJECT_ROOT / "scripts" / "verify_model_acceptance.py"),
-                "--validation-evaluation",
-                str(EVALUATION_ROOT / "validation.json"),
-                "--test-evaluation",
-                str(EVALUATION_ROOT / "test.json"),
-                "--code-to-semantic-inference",
-                str(inference_paths["code_to_semantic"]),
-                "--semantic-continuation-inference",
-                str(inference_paths["semantic_continuation"]),
-                "--semantic-to-code-inference",
-                str(inference_paths["semantic_to_code"]),
-                "--output",
-                str(acceptance_path),
-            ],
+            _acceptance_command(inference_paths, category_paths, acceptance_path),
             "formal model acceptance",
         )
     acceptance = _load_json(acceptance_path, "formal model acceptance")
     if not (
-        acceptance.get("schema_version") == "bosscrafts-model-acceptance-v1"
+        acceptance.get("schema_version") == ACCEPTANCE_SCHEMA
         and acceptance.get("acceptance_passed") is True
         and acceptance.get("checkpoint_step") == EXPECTED_OPTIMIZER_STEPS
         and acceptance.get("task_database_identity_sha256")
