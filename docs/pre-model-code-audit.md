@@ -20,27 +20,31 @@ actionable defect after the repairs and gates below.
 - The resulting parser runtime identity is
   `c1ca753bf4d1dbabf841fdcd120e5c3eec026b7211ca5c0f08d066074acee938`.
 - Ruff passed every changed Python file.
-- Mypy passed all 65 configured core source files and the changed orchestration
+- Mypy passed all 68 configured core source files and the changed orchestration
   scripts in strict mode.
-- The latest complete regression passed: 541 tests and 195 subtests, with
-  warnings treated as errors.
+- The latest complete host-portable regression passed: 548 tests and 182
+  subtests, with warnings treated as errors; 13 Docker-only tests were
+  explicitly deselected from that run.
+- The complementary Docker containment regression passed all 13 Docker-only
+  tests and 13 subtests; 548 host-portable tests were explicitly deselected.
 - The earlier semantic-integrity baseline measured 74.5463% branch coverage:
   17,861 covered and 4,539 missing lines; 3,252 covered and 2,670 missing
   branches. That measurement predates the later exhaustive hardening and is not
   presented as current coverage.
-- `pip-audit` reported no known dependency vulnerabilities after upgrading the
-  pinned PyTorch and setuptools chain.
+- A fresh locked production dependency export passed `pip-audit` 2.9.0 with no
+  known vulnerabilities after upgrading the pinned PyTorch and setuptools
+  chain.
 - Bandit reported no medium- or high-severity findings. The remaining 82 low
   findings were reviewed as intentional subprocess use without a shell,
   non-secret protocol constants, destructor cleanup suppression, or
   deterministic non-cryptographic sampling.
 - A comprehensive security scan inventoried 514 files and found one actionable
   resource-exhaustion path. That defect is included in the repairs below.
-
-PyTorch emits one environment warning because optional NumPy is not installed.
-No repository source uses NumPy conversion APIs, so this is not an exercised or
-required runtime path. It remains an optional integration dependency rather
-than a hidden functional failure.
+- An expanded Ruff diagnostic pass over security, Bugbear, pylint error/warning,
+  simplification, performance and Ruff-specific rules found no Bugbear or
+  pylint error/warning defects. Security reports were re-traced to fixed
+  `shell=False` argument vectors, bound SQL values with count-only generated
+  placeholders, and a URL opener guarded by literal-loopback-only validation.
 
 ## Repaired defects
 
@@ -93,6 +97,16 @@ than a hidden functional failure.
 13. A baseline evaluation could come from a different held-out suite than the
     candidate. Baseline loading now carries and validates the checkpoint-bound
     suite identity, and candidate evaluation requires an exact match.
+14. Category case inventories could mix test-database identities or count the
+    same packed task more than once under different provenance. Inventory V2
+    now freezes one test-database identity and exact packed-task references;
+    held-out publication proves every referenced task exists in the audited
+    test database with the declared split, language and family.
+15. The Project CodeNet pilot writer could overwrite prior evidence, expose a
+    partial corpus/report pair after interruption, and publish an empty pilot
+    before failing. Corpus and report now publish as one staged, synced,
+    no-clobber generation and reject empty or count-mismatched inputs before
+    creating either artifact.
 
 ## Boundaries
 
@@ -107,6 +121,9 @@ than a hidden functional failure.
   requires an interactive user login. That does not affect the local gates or
   remote Git store, but an actual CodeRabbit review result must not be claimed
   until authentication and review complete.
+- The canonical review surface is draft PR
+  `https://github.com/BossmanX138/BCNLT/pull/2`; its head follows the audit
+  branch automatically.
 
 ## Current decision
 
