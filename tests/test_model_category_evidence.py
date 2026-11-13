@@ -23,6 +23,7 @@ from test_full_model_acceptance_categories import (
     _ifeval_receipt_payload,
     _inference,
     _records,
+    _regression_receipt_payload,
     _safety_content_receipt_payload,
     verify_model_acceptance,
 )
@@ -77,6 +78,7 @@ def _compile(
     ifeval_receipt: dict[str, object] | None = None,
     safety_receipt: dict[str, object] | None = None,
     containment_receipt: dict[str, object] | None = None,
+    regression_receipt: dict[str, object] | None = None,
 ):
     return compile_model_category_evidence(
         category=category,
@@ -89,6 +91,7 @@ def _compile(
         ifeval_batch_receipt=ifeval_receipt,
         safety_content_receipt=safety_receipt,
         containment_receipt=containment_receipt,
+        regression_receipt=regression_receipt,
     )
 
 
@@ -227,6 +230,24 @@ def test_safety_compiler_requires_content_and_containment_receipts():
     assert compiled["metrics"]["response_safety_rate"] == 1.0
 
 
+def test_regression_compiler_requires_grounded_receipt():
+    with pytest.raises(ValueError, match="regression receipt"):
+        _compile("regression")
+
+    receipt = _regression_receipt_payload()
+    compiled = _compile("regression", regression_receipt=receipt)
+    assert compiled["passed"] is True
+    assert compiled["supporting_evidence"] == {"regression_receipt": receipt}
+    assert compiled["metrics"]["regression_receipt_sha256"] == (
+        receipt["receipt_sha256"]
+    )
+
+    forged = dict(receipt)
+    forged["checkpoint_sha256"] = "f" * 64
+    with pytest.raises(ValueError, match="integrity|lineage"):
+        _compile("regression", regression_receipt=forged)
+
+
 def test_checkpoint_digest_and_script_entrypoint(tmp_path: Path):
     checkpoint = tmp_path / "checkpoint.pt"
     checkpoint.write_bytes(b"checkpoint-fixture")
@@ -250,3 +271,4 @@ def test_checkpoint_digest_and_script_entrypoint(tmp_path: Path):
     assert "--ifeval-batch-receipt" in completed.stdout
     assert "--safety-content-receipt" in completed.stdout
     assert "--containment-receipt" in completed.stdout
+    assert "--regression-receipt" in completed.stdout

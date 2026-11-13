@@ -183,6 +183,17 @@ actionable defect after the repairs and gates below.
     separation mandatory. The live containment probe set passed with zero
     counted violations; the pinned Nemotron weights still require installation
     and a real run before safety acceptance can be claimed.
+21. Regression-category evidence accepted caller-authored pass counts without
+    proving which source revision or test cases produced them. The fixed
+    regression worker now requires a clean Git commit, records the exact Python
+    and pytest versions, content-addresses every test, subtest and collection
+    result, hashes captured output, and publishes an atomic no-clobber receipt
+    bound to the checkpoint, step and frozen regression example. Category
+    Evidence Schema V8 derives the regression record from that receipt, and
+    final acceptance independently revalidates its lineage and minimum suite
+    coverage. The exact current tree passed 603 tests and 195 subtests; the
+    receipt worker still requires a clean committed-tree execution before its
+    own production receipt can be claimed.
 
 ## Boundaries
 
@@ -206,7 +217,10 @@ actionable defect after the repairs and gates below.
 The latest repair batch has no regression in the executed source and integration
 gates, but the exhaustive review remains active and CodeRabbit review remains
 pending authentication. The ordinary-instruction runner is executable and
-audited. The safety content runner, runtime sealer and separate containment
+audited. The exact current tree passes 603 tests and 195 subtests, along with
+Ruff and strict mypy across 75 source files. The regression receipt path is now
+implemented and mandatory, but its fixed worker must still be exercised from a
+clean committed tree. The safety content runner, runtime sealer and separate containment
 runner are implemented and mandatory at both category compilation and final
 acceptance; the live containment probes pass, while the 8.64 GB pinned safety
 judge has not yet been installed or executed. Other remaining category runners

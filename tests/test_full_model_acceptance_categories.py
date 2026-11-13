@@ -8,6 +8,7 @@ import unittest
 from dataclasses import replace
 
 from test_containment_acceptance import _FakeSandbox
+from test_regression_acceptance import _record as _regression_record
 
 from bosscrafts_model.artifact_schemas import (
     CHECKPOINT_EVALUATION_SCHEMA,
@@ -38,6 +39,10 @@ from bosscrafts_model.model_acceptance import (
 )
 from bosscrafts_model.model_acceptance import (
     verify_model_acceptance as _verify_model_acceptance,
+)
+from bosscrafts_model.regression_acceptance import (
+    RegressionResult,
+    build_regression_receipt,
 )
 from bosscrafts_model.safety_judge_case_runner import (
     SafetyJudgeBatchResult,
@@ -309,6 +314,7 @@ def _metrics(category: str) -> dict[str, object]:
     strict_receipt = _strict_receipt_payload()
     safety_content = _safety_content_receipt_payload()
     containment = _containment_receipt_payload()
+    regression = _regression_receipt_payload()
     return {
         "tokenizer_fidelity": {
             "exact_roundtrip_rate": 1.0,
@@ -359,6 +365,8 @@ def _metrics(category: str) -> dict[str, object]:
             "test_count": 248,
             "subtest_count": 133,
             "failure_count": 0,
+            "regression_receipt_sha256": regression["receipt_sha256"],
+            "regression_git_commit": regression["git_commit"],
         },
         "resources": {
             "peak_vram_bytes": 8 * 1024**3,
@@ -513,6 +521,43 @@ def _ifeval_receipt_payload() -> dict[str, object]:
     )
 
 
+def _regression_receipt_payload() -> dict[str, object]:
+    records = tuple(
+        sorted(
+            (
+                *(
+                    _regression_record("test", f"tests/test_{index}.py::test_case")
+                    for index in range(248)
+                ),
+                *(
+                    _regression_record(
+                        "subtest",
+                        f"tests/test_{index}.py::test_case",
+                        context=f"value={index}",
+                    )
+                    for index in range(133)
+                ),
+            ),
+            key=lambda record: str(record["record_id"]),
+        )
+    )
+    result = RegressionResult(
+        git_commit="a" * 40,
+        python_version="3.13.9 fixture",
+        pytest_version="9.1.1",
+        returncode=0,
+        records=records,
+        stdout_sha256="b" * 64,
+        stderr_sha256="c" * 64,
+    )
+    return build_regression_receipt(
+        result,
+        checkpoint_sha256=CHECKPOINT_ID,
+        checkpoint_step=86_016,
+        example_id=HELDOUT_SUITE.category_example_ids["regression"][0],
+    )
+
+
 def _category(category: str) -> dict[str, object]:
     if category == "semantic_fidelity":
         supporting_evidence = {
@@ -524,6 +569,10 @@ def _category(category: str) -> dict[str, object]:
         supporting_evidence = {
             "safety_content_receipt": _safety_content_receipt_payload(),
             "containment_receipt": _containment_receipt_payload(),
+        }
+    elif category == "regression":
+        supporting_evidence = {
+            "regression_receipt": _regression_receipt_payload()
         }
     else:
         supporting_evidence = {}

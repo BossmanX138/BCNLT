@@ -23,6 +23,10 @@ from .model_acceptance import (
     verify_category_metrics,
     verify_heldout_suite_manifest,
 )
+from .regression_acceptance import (
+    regression_receipt_metrics,
+    validate_regression_receipt,
+)
 from .safety_judge_case_runner import (
     safety_content_receipt_metrics,
     validate_safety_content_receipt,
@@ -85,6 +89,7 @@ def compile_model_category_evidence(
     ifeval_batch_receipt: dict[str, object] | None = None,
     safety_content_receipt: dict[str, object] | None = None,
     containment_receipt: dict[str, object] | None = None,
+    regression_receipt: dict[str, object] | None = None,
 ) -> dict[str, object]:
     if category not in ACCEPTANCE_CATEGORIES:
         raise ValueError("model acceptance category is invalid")
@@ -111,6 +116,7 @@ def compile_model_category_evidence(
                 ifeval_batch_receipt,
                 safety_content_receipt,
                 containment_receipt,
+                regression_receipt,
             )
         ):
             raise ValueError("category receipt is not valid for semantic fidelity")
@@ -129,6 +135,7 @@ def compile_model_category_evidence(
                 strict_uncertainty_receipt,
                 safety_content_receipt,
                 containment_receipt,
+                regression_receipt,
             )
         ):
             raise ValueError("category receipt is not valid for ordinary instruction")
@@ -143,7 +150,14 @@ def compile_model_category_evidence(
         )
         supporting_evidence = {"ifeval_batch_receipt": receipt_payload}
     elif category == "safety":
-        if strict_uncertainty_receipt is not None or ifeval_batch_receipt is not None:
+        if any(
+            receipt is not None
+            for receipt in (
+                strict_uncertainty_receipt,
+                ifeval_batch_receipt,
+                regression_receipt,
+            )
+        ):
             raise ValueError("category receipt is not valid for safety")
         if type(safety_content_receipt) is not dict:
             raise ValueError("safety requires a safety content receipt")
@@ -192,6 +206,28 @@ def compile_model_category_evidence(
             "safety_content_receipt": content_payload,
             "containment_receipt": containment_payload,
         }
+    elif category == "regression":
+        if any(
+            receipt is not None
+            for receipt in (
+                strict_uncertainty_receipt,
+                ifeval_batch_receipt,
+                safety_content_receipt,
+                containment_receipt,
+            )
+        ):
+            raise ValueError("category receipt is not valid for regression")
+        if type(regression_receipt) is not dict:
+            raise ValueError("regression requires a regression receipt")
+        receipt_payload = validate_regression_receipt(
+            regression_receipt,
+            expected_checkpoint_sha256=checkpoint_sha256,
+            expected_checkpoint_step=checkpoint_step,
+            expected_example_ids=suite.category_example_ids[category],
+            expected_records=records,
+        )
+        declared_metrics = regression_receipt_metrics(receipt_payload)
+        supporting_evidence = {"regression_receipt": receipt_payload}
     elif any(
         receipt is not None
         for receipt in (
@@ -199,6 +235,7 @@ def compile_model_category_evidence(
             ifeval_batch_receipt,
             safety_content_receipt,
             containment_receipt,
+            regression_receipt,
         )
     ):
         raise ValueError("category receipt is not valid for this category")

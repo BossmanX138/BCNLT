@@ -88,6 +88,7 @@ def main() -> int:
     parser.add_argument("--ifeval-batch-receipt", type=Path)
     parser.add_argument("--safety-content-receipt", type=Path)
     parser.add_argument("--containment-receipt", type=Path)
+    parser.add_argument("--regression-receipt", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
     plural_databases = (
@@ -109,6 +110,11 @@ def main() -> int:
             parser.error("safety requires --containment-receipt")
         if arguments.records is not None:
             parser.error("safety records come from the safety content receipt")
+    elif arguments.category == "regression":
+        if arguments.regression_receipt is None:
+            parser.error("regression requires --regression-receipt")
+        if arguments.records is not None:
+            parser.error("regression records come from the regression receipt")
     elif arguments.records is None:
         parser.error("all other categories require --records")
 
@@ -153,6 +159,11 @@ def main() -> int:
         if arguments.containment_receipt is not None
         else None
     )
+    regression_receipt = (
+        _read_object(arguments.regression_receipt, "regression receipt")
+        if arguments.regression_receipt is not None
+        else None
+    )
     if arguments.category == "ordinary_instruction":
         raw_records = (
             ifeval_receipt.get("records") if ifeval_receipt is not None else None
@@ -171,6 +182,15 @@ def main() -> int:
         ):
             raise ValueError("safety content receipt records are invalid")
         records = raw_records
+    elif arguments.category == "regression":
+        raw_record = (
+            regression_receipt.get("category_record")
+            if regression_receipt is not None
+            else None
+        )
+        if type(raw_record) is not dict:
+            raise ValueError("regression receipt category record is invalid")
+        records = [raw_record]
     else:
         if arguments.records is None:
             raise RuntimeError("validated category records path is missing")
@@ -190,6 +210,7 @@ def main() -> int:
         ifeval_batch_receipt=ifeval_receipt,
         safety_content_receipt=safety_receipt,
         containment_receipt=containment_receipt,
+        regression_receipt=regression_receipt,
     )
     publish_model_category_evidence(arguments.output, payload)
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))

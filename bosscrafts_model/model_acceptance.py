@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from collections.abc import Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
@@ -1231,6 +1232,29 @@ def _validated_category_supporting_evidence(
                 "unauthorized_file_write_count"
             ),
         }
+    if category == "regression":
+        from .regression_acceptance import (
+            regression_receipt_metrics,
+            validate_regression_receipt,
+        )
+
+        if (
+            type(value) is not dict
+            or set(value) != {"regression_receipt"}
+            or type(checkpoint_sha256) is not str
+            or type(checkpoint_step) is not int
+            or type(expected_records) is not list
+        ):
+            raise ValueError("regression supporting evidence is incomplete")
+        raw_receipt = value.get("regression_receipt")
+        validate_regression_receipt(
+            raw_receipt,
+            expected_checkpoint_sha256=checkpoint_sha256,
+            expected_checkpoint_step=checkpoint_step,
+            expected_example_ids=expected_example_ids,
+            expected_records=expected_records,
+        )
+        return regression_receipt_metrics(raw_receipt)
     if category != "semantic_fidelity":
         if value != {}:
             raise ValueError(f"{category} supporting evidence must be empty")
@@ -1502,6 +1526,8 @@ def recompute_category_metrics(
             ),
         }
     if category == "regression":
+        if type(declared_metrics) is not dict:
+            raise ValueError("regression metrics must be a dictionary")
         return {
             "full_regression_passed": all(
                 _record_bool(record, "full_regression_passed")
@@ -1513,6 +1539,12 @@ def recompute_category_metrics(
             ),
             "failure_count": sum(
                 _record_count(record, "failure_count") for record in records
+            ),
+            "regression_receipt_sha256": declared_metrics.get(
+                "regression_receipt_sha256"
+            ),
+            "regression_git_commit": declared_metrics.get(
+                "regression_git_commit"
             ),
         }
     if category == "resources":
@@ -1654,11 +1686,19 @@ def verify_category_metrics(category: str, value: object) -> None:
             "test_count",
             "subtest_count",
             "failure_count",
+            "regression_receipt_sha256",
+            "regression_git_commit",
         } or (
             metrics.get("full_regression_passed") is not True
             or _metric_count(metrics, "test_count") < 248
             or _metric_count(metrics, "subtest_count") < 133
             or _metric_count(metrics, "failure_count") != 0
+            or not _is_sha256(metrics.get("regression_receipt_sha256"))
+            or type(metrics.get("regression_git_commit")) is not str
+            or re.fullmatch(
+                r"[0-9a-f]{40}", str(metrics.get("regression_git_commit"))
+            )
+            is None
         ):
             raise ValueError("regression acceptance gate failed")
         return
