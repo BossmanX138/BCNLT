@@ -86,6 +86,20 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _paths_alias(left: Path, right: Path) -> bool:
+    """Return whether two paths name the same destination, including hard links."""
+    left = left.resolve()
+    right = right.resolve()
+    if left == right:
+        return True
+    if not left.exists() or not right.exists():
+        return False
+    try:
+        return os.path.samefile(left, right)
+    except OSError:
+        return False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--database", type=Path, default=DEFAULT_DATABASE)
@@ -154,16 +168,25 @@ def main() -> int:
         and not arguments.resume
     ):
         parser.error("fingerprint-only initialization is allowed only when resuming")
+    output_paths = {"checkpoint": arguments.checkpoint}
+    if arguments.status_output is not None:
+        output_paths["status output"] = arguments.status_output
+    input_paths = {"training database": arguments.database}
+    if arguments.initial_model_checkpoint is not None:
+        input_paths["initial checkpoint"] = arguments.initial_model_checkpoint
+    if arguments.initial_checkpoint_database is not None:
+        input_paths["initial checkpoint database"] = arguments.initial_checkpoint_database
+    for output_name, output_path in output_paths.items():
+        for input_name, input_path in input_paths.items():
+            if _paths_alias(output_path, input_path):
+                parser.error(f"{output_name} and {input_name} must differ")
     if (
-        not arguments.resume
-        and arguments.checkpoint.exists()
+        arguments.status_output is not None
+        and _paths_alias(arguments.status_output, arguments.checkpoint)
     ):
+        parser.error("status output and checkpoint must differ")
+    if not arguments.resume and arguments.checkpoint.exists():
         parser.error("checkpoint already exists; use --resume or a new destination")
-    if (
-        arguments.initial_model_checkpoint is not None
-        and arguments.initial_model_checkpoint.resolve() == arguments.checkpoint.resolve()
-    ):
-        parser.error("initial checkpoint and destination checkpoint must differ")
 
     torch.manual_seed(7)
     torch.set_num_threads(2)

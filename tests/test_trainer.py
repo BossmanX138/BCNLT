@@ -27,6 +27,61 @@ from bosscrafts_model.tokenizer import NativeTokenizerBinding
 
 
 class TrainerTests(unittest.TestCase):
+    def test_bounded_training_script_rejects_output_path_aliases(self):
+        project_root = Path(__file__).resolve().parents[1]
+        script = project_root / "scripts" / "run_bounded_training_trial.py"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / "tasks.sqlite"
+            database.write_bytes(b"preserve-source-database")
+            checkpoint = root / "checkpoint.pt"
+
+            cases = (
+                (
+                    ["--checkpoint", str(database)],
+                    "checkpoint and training database must differ",
+                ),
+                (
+                    [
+                        "--checkpoint",
+                        str(checkpoint),
+                        "--status-output",
+                        str(database),
+                    ],
+                    "status output and training database must differ",
+                ),
+                (
+                    [
+                        "--checkpoint",
+                        str(checkpoint),
+                        "--status-output",
+                        str(checkpoint),
+                    ],
+                    "status output and checkpoint must differ",
+                ),
+            )
+            for extra_arguments, expected_error in cases:
+                with self.subTest(expected_error=expected_error):
+                    completed = subprocess.run(
+                        [
+                            sys.executable,
+                            str(script),
+                            "--database",
+                            str(database),
+                            *extra_arguments,
+                            "--max-steps",
+                            "1",
+                        ],
+                        cwd=project_root,
+                        text=True,
+                        encoding="utf-8",
+                        capture_output=True,
+                        check=False,
+                    )
+                    self.assertNotEqual(completed.returncode, 0)
+                    self.assertIn(expected_error, completed.stderr)
+                    self.assertEqual(database.read_bytes(), b"preserve-source-database")
+
     def test_unspecified_cuda_index_matches_the_active_cuda_device(self):
         module = importlib.import_module("bosscrafts_model.trainer")
         self.assertTrue(
