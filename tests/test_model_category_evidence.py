@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import subprocess
 import sys
 from dataclasses import replace
@@ -17,7 +18,9 @@ from test_full_model_acceptance_categories import (
     DATABASE_ID,
     HELDOUT_MANIFEST,
     LANGUAGES,
+    _canonical,
     _category,
+    _code_receipt_payload,
     _containment_receipt_payload,
     _evaluation,
     _ifeval_receipt_payload,
@@ -29,10 +32,12 @@ from test_full_model_acceptance_categories import (
     verify_model_acceptance,
 )
 
+import bosscrafts_model.model_category_evidence as category_evidence_module
 from bosscrafts_model.bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
 from bosscrafts_model.model_category_evidence import (
     checkpoint_sha256,
     compile_model_category_evidence,
+    publish_model_category_evidence,
     validate_strict_uncertainty_receipt,
 )
 from bosscrafts_model.strict_uncertainty_acceptance import (
@@ -72,6 +77,17 @@ def _strict_receipt() -> StrictUncertaintyAcceptanceReceipt:
     )
 
 
+def test_category_evidence_publisher_enforces_its_loader_size_bound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "oversized.json"
+    monkeypatch.setattr(category_evidence_module, "MAX_MODEL_CATEGORY_EVIDENCE_BYTES", 1)
+    with pytest.raises(ValueError, match="size bound"):
+        publish_model_category_evidence(output, {"value": "too large"})
+    assert not output.exists()
+
+
 def _compile(
     category: str,
     *,
@@ -81,6 +97,7 @@ def _compile(
     containment_receipt: dict[str, object] | None = None,
     regression_receipt: dict[str, object] | None = None,
     tokenizer_receipt: dict[str, object] | None = None,
+    code_receipt: dict[str, object] | None = None,
 ):
     return compile_model_category_evidence(
         category=category,
@@ -95,6 +112,7 @@ def _compile(
         containment_receipt=containment_receipt,
         regression_receipt=regression_receipt,
         tokenizer_fidelity_receipt=tokenizer_receipt,
+        code_acceptance_receipt=code_receipt,
     )
 
 
@@ -181,8 +199,33 @@ def test_ordinary_compiler_requires_grounded_ifeval_receipt():
 
 
 def test_failed_case_outcome_is_published_as_failed_not_promoted():
-    records = _records("raw_code")
+    receipt = _code_receipt_payload("raw_code")
+    details = receipt["details"]
+    records = receipt["records"]
+    details[0]["generated_ids"] = []
+    details[0]["generated_ids_sha256"] = hashlib.sha256(
+        _canonical([])
+    ).hexdigest()
+    details[0]["protocol_complete"] = False
+    details[0]["payload_ids_sha256"] = hashlib.sha256(
+        _canonical([])
+    ).hexdigest()
+    details[0]["generated_source_sha256"] = hashlib.sha256(b"").hexdigest()
+    details[0]["sandbox"] = None
     records[0]["exact_roundtrip"] = False
+    records[0]["compile_passed"] = False
+    records[0]["silent_fallback"] = True
+    generation_hashes = {
+        str(detail["example_id"]): detail["generated_ids_sha256"]
+        for detail in details
+    }
+    receipt["generation_manifest_sha256"] = hashlib.sha256(
+        _canonical(generation_hashes)
+    ).hexdigest()
+    receipt["records_sha256"] = hashlib.sha256(_canonical(records)).hexdigest()
+    receipt["details_sha256"] = hashlib.sha256(_canonical(details)).hexdigest()
+    body = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+    receipt["receipt_sha256"] = hashlib.sha256(_canonical(body)).hexdigest()
     payload = compile_model_category_evidence(
         category="raw_code",
         records=records,
@@ -190,6 +233,7 @@ def test_failed_case_outcome_is_published_as_failed_not_promoted():
         task_database_identity_sha256=DATABASE_ID,
         checkpoint_sha256=CHECKPOINT_ID,
         checkpoint_step=86_016,
+        code_acceptance_receipt=receipt,
     )
     assert payload["passed"] is False
     assert payload["failure_codes"] == ["category_gate_failed"]
@@ -296,3 +340,4 @@ def test_checkpoint_digest_and_script_entrypoint(tmp_path: Path):
     assert "--containment-receipt" in completed.stdout
     assert "--regression-receipt" in completed.stdout
     assert "--tokenizer-fidelity-receipt" in completed.stdout
+    assert "--code-acceptance-receipt" in completed.stdout

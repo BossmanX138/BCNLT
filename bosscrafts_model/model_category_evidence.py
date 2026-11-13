@@ -9,6 +9,11 @@ from pathlib import Path
 
 from .artifact_schemas import MODEL_CATEGORY_EVIDENCE_SCHEMA
 from .bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
+from .code_acceptance import (
+    CODE_ACCEPTANCE_CATEGORIES,
+    code_acceptance_receipt_metrics,
+    validate_code_acceptance_receipt,
+)
 from .containment_acceptance import (
     containment_receipt_metrics,
     validate_containment_receipt,
@@ -42,6 +47,7 @@ from .tokenizer_fidelity_acceptance import (
 )
 
 MAX_CATEGORY_RECORDS_BYTES = 16 * 1024 * 1024
+MAX_MODEL_CATEGORY_EVIDENCE_BYTES = 512 * 1024 * 1024
 
 
 def _canonical(value: object) -> bytes:
@@ -95,6 +101,7 @@ def compile_model_category_evidence(
     containment_receipt: dict[str, object] | None = None,
     regression_receipt: dict[str, object] | None = None,
     tokenizer_fidelity_receipt: dict[str, object] | None = None,
+    code_acceptance_receipt: dict[str, object] | None = None,
 ) -> dict[str, object]:
     if category not in ACCEPTANCE_CATEGORIES:
         raise ValueError("model acceptance category is invalid")
@@ -123,6 +130,7 @@ def compile_model_category_evidence(
                 safety_content_receipt,
                 containment_receipt,
                 regression_receipt,
+                code_acceptance_receipt,
             )
         ):
             raise ValueError("category receipt is not valid for tokenizer fidelity")
@@ -149,6 +157,7 @@ def compile_model_category_evidence(
                 containment_receipt,
                 regression_receipt,
                 tokenizer_fidelity_receipt,
+                code_acceptance_receipt,
             )
         ):
             raise ValueError("category receipt is not valid for semantic fidelity")
@@ -160,6 +169,32 @@ def compile_model_category_evidence(
             "strict_uncertainty_receipt_sha256": receipt.receipt_sha256,
         }
         supporting_evidence = {"strict_uncertainty_receipt": receipt.to_dict()}
+    elif category in CODE_ACCEPTANCE_CATEGORIES:
+        if any(
+            receipt is not None
+            for receipt in (
+                strict_uncertainty_receipt,
+                ifeval_batch_receipt,
+                safety_content_receipt,
+                containment_receipt,
+                regression_receipt,
+                tokenizer_fidelity_receipt,
+            )
+        ):
+            raise ValueError("category receipt is not valid for code acceptance")
+        if type(code_acceptance_receipt) is not dict:
+            raise ValueError(f"{category} requires a code acceptance receipt")
+        receipt_payload = validate_code_acceptance_receipt(
+            code_acceptance_receipt,
+            expected_category=category,
+            expected_checkpoint_sha256=checkpoint_sha256,
+            expected_checkpoint_step=checkpoint_step,
+            expected_example_ids=suite.category_example_ids[category],
+            expected_records=records,
+            expected_task_database_identity_sha256=evidence_database_identity,
+        )
+        declared_metrics = code_acceptance_receipt_metrics(receipt_payload)
+        supporting_evidence = {"code_acceptance_receipt": receipt_payload}
     elif category == "ordinary_instruction":
         if any(
             receipt is not None
@@ -169,6 +204,7 @@ def compile_model_category_evidence(
                 containment_receipt,
                 regression_receipt,
                 tokenizer_fidelity_receipt,
+                code_acceptance_receipt,
             )
         ):
             raise ValueError("category receipt is not valid for ordinary instruction")
@@ -190,6 +226,7 @@ def compile_model_category_evidence(
                 ifeval_batch_receipt,
                 regression_receipt,
                 tokenizer_fidelity_receipt,
+                code_acceptance_receipt,
             )
         ):
             raise ValueError("category receipt is not valid for safety")
@@ -249,6 +286,7 @@ def compile_model_category_evidence(
                 safety_content_receipt,
                 containment_receipt,
                 tokenizer_fidelity_receipt,
+                code_acceptance_receipt,
             )
         ):
             raise ValueError("category receipt is not valid for regression")
@@ -272,6 +310,7 @@ def compile_model_category_evidence(
             containment_receipt,
             regression_receipt,
             tokenizer_fidelity_receipt,
+            code_acceptance_receipt,
         )
     ):
         raise ValueError("category receipt is not valid for this category")
@@ -320,9 +359,11 @@ def publish_model_category_evidence(
         indent=2,
         sort_keys=True,
         allow_nan=False,
-    ) + "\n"
+    ).encode("utf-8") + b"\n"
+    if len(rendered) > MAX_MODEL_CATEGORY_EVIDENCE_BYTES:
+        raise ValueError("model category evidence exceeds its size bound")
     publish_new_files(
-        ((destination, rendered.encode("utf-8")),),
+        ((destination, rendered),),
         artifact_label="model category evidence",
     )
     return destination

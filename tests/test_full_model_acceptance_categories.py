@@ -6,7 +6,9 @@ import json
 import math
 import unittest
 from dataclasses import replace
+from functools import lru_cache
 
+from test_code_acceptance import _execution as _code_execution
 from test_containment_acceptance import _FakeSandbox
 from test_regression_acceptance import _record as _regression_record
 
@@ -19,6 +21,10 @@ from bosscrafts_model.artifact_schemas import (
 from bosscrafts_model.bcnlt_source_pipeline import (
     CURRENT_RUNTIME_SPEC_SHA256,
     PARSER_RUNTIME_IDENTITY_SHA256,
+)
+from bosscrafts_model.code_acceptance import (
+    CodeAcceptanceBatchResult,
+    build_code_acceptance_receipt,
 )
 from bosscrafts_model.containment_acceptance import (
     build_containment_receipt,
@@ -320,6 +326,8 @@ def _metrics(category: str) -> dict[str, object]:
     containment = _containment_receipt_payload()
     regression = _regression_receipt_payload()
     tokenizer_fidelity = _tokenizer_fidelity_receipt_payload()
+    raw_code_receipt = _code_receipt_payload("raw_code")
+    execution_receipt = _code_receipt_payload("execution_correctness")
     return {
         "tokenizer_fidelity": {
             "exact_roundtrip_rate": 1.0,
@@ -342,6 +350,7 @@ def _metrics(category: str) -> dict[str, object]:
             "compile_pass_rate": 1.0,
             "silent_fallback_count": 0,
             "language_passes": language_passes,
+            "code_acceptance_receipt_sha256": raw_code_receipt["receipt_sha256"],
         },
         "ordinary_instruction": {
             "strict_prompt_accuracy": 1.0,
@@ -355,6 +364,7 @@ def _metrics(category: str) -> dict[str, object]:
             "compile_pass_rate": 1.0,
             "sandbox_escape_count": 0,
             "language_passes": language_passes,
+            "code_acceptance_receipt_sha256": execution_receipt["receipt_sha256"],
         },
         "safety": {
             "prompt_moderation_accuracy": 1.0,
@@ -598,6 +608,84 @@ def _tokenizer_fidelity_receipt_payload() -> dict[str, object]:
     )
 
 
+@lru_cache(maxsize=2)
+def _cached_code_receipt_payload(category: str) -> dict[str, object]:
+    if category not in {"raw_code", "execution_correctness"}:
+        raise ValueError("test code receipt category is invalid")
+    source = "print(1)\n"
+    payload_ids = BINDING.encode_payload(source)
+    structural = BINDING.structural_token_ids
+    generated_ids = [
+        structural["<|bcnlt:stream:begin|>"],
+        structural["<|bcnlt:mode:raw_code|>"],
+        *payload_ids,
+        structural["<|bcnlt:stream:end|>"],
+        structural["<|bcnlt:task:end|>"],
+    ]
+    records = tuple(_records(category))
+    details: list[dict[str, object]] = []
+    for record in records:
+        example_id = str(record["example_id"])
+        language = str(record["language"])
+        stdin_text = "1\n" if category == "execution_correctness" else ""
+        expected_stdout = (
+            "2\n" if category == "execution_correctness" else None
+        )
+        sandbox = _code_execution(
+            language=language,
+            source=source,
+            stdin_text=stdin_text,
+            stdout=(
+                b"2\n" if category == "execution_correctness" else b""
+            ),
+        ).to_dict()
+        details.append(
+            {
+                "example_id": example_id,
+                "task_example_id": hashlib.sha256(
+                    f"code-task:{example_id}".encode()
+                ).hexdigest(),
+                "language": language,
+                "task_input_ids_sha256": hashlib.sha256(
+                    f"code-input:{example_id}".encode()
+                ).hexdigest(),
+                "generated_ids": generated_ids,
+                "generated_ids_sha256": hashlib.sha256(
+                    _canonical(generated_ids)
+                ).hexdigest(),
+                "protocol_complete": True,
+                "payload_ids_sha256": hashlib.sha256(
+                    _canonical(payload_ids)
+                ).hexdigest(),
+                "generated_source_sha256": hashlib.sha256(
+                    source.encode()
+                ).hexdigest(),
+                "stdin": stdin_text,
+                "expected_stdout": expected_stdout,
+                "sandbox": sandbox,
+            }
+        )
+    result = CodeAcceptanceBatchResult(
+        category=category,
+        case_bundle_manifest_sha256="5" * 64,
+        case_inventory_sha256="6" * 64,
+        task_database_identity_sha256=DATABASE_ID,
+        binding_sha256=BINDING.binding_sha256,
+        tokenizer_sha256=TOKENIZER_ID,
+        records=records,
+        details=tuple(details),
+    )
+    return build_code_acceptance_receipt(
+        result,
+        checkpoint_sha256=CHECKPOINT_ID,
+        checkpoint_step=86_016,
+    )
+
+
+def _code_receipt_payload(category: str) -> dict[str, object]:
+    return copy.deepcopy(_cached_code_receipt_payload(category))
+
+
 def _category(category: str) -> dict[str, object]:
     if category == "tokenizer_fidelity":
         supporting_evidence = {
@@ -606,6 +694,10 @@ def _category(category: str) -> dict[str, object]:
     elif category == "semantic_fidelity":
         supporting_evidence = {
             "strict_uncertainty_receipt": _strict_receipt_payload()
+        }
+    elif category in {"raw_code", "execution_correctness"}:
+        supporting_evidence = {
+            "code_acceptance_receipt": _code_receipt_payload(category)
         }
     elif category == "ordinary_instruction":
         supporting_evidence = {"ifeval_batch_receipt": _ifeval_receipt_payload()}
@@ -837,7 +929,10 @@ class FullModelAcceptanceCategoryTests(unittest.TestCase):
         missing_category["artifact_sha256"] = hashlib.sha256(
             _canonical(body)
         ).hexdigest()
-        with self.assertRaisesRegex(ValueError, "records are incomplete"):
+        with self.assertRaisesRegex(
+            ValueError,
+            "records are incomplete|receipt expected records mismatch",
+        ):
             self._verify(tuple(missing))
 
         reordered = [_category(category) for category in CATEGORIES]
@@ -856,7 +951,10 @@ class FullModelAcceptanceCategoryTests(unittest.TestCase):
         reordered_category["artifact_sha256"] = hashlib.sha256(
             _canonical(body)
         ).hexdigest()
-        with self.assertRaisesRegex(ValueError, "inventory mismatch"):
+        with self.assertRaisesRegex(
+            ValueError,
+            "inventory mismatch|receipt expected records mismatch",
+        ):
             self._verify(tuple(reordered))
 
         non_boolean = [_category(category) for category in CATEGORIES]
@@ -872,7 +970,10 @@ class FullModelAcceptanceCategoryTests(unittest.TestCase):
         non_boolean_category["artifact_sha256"] = hashlib.sha256(
             _canonical(body)
         ).hexdigest()
-        with self.assertRaisesRegex(ValueError, "must be boolean"):
+        with self.assertRaisesRegex(
+            ValueError,
+            "must be boolean|receipt expected records mismatch",
+        ):
             self._verify(tuple(non_boolean))
 
         language_failure = [_category(category) for category in CATEGORIES]

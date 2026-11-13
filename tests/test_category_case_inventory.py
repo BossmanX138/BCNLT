@@ -12,6 +12,7 @@ from bosscrafts_model.category_case_inventory import (
     CATEGORY_CASE_SCHEMA,
     build_category_case_inventory,
     load_category_case_bundle,
+    load_category_case_records,
     publish_category_case_bundle,
     publish_category_case_inventory,
 )
@@ -430,6 +431,14 @@ def test_publishes_and_reloads_complete_immutable_category_case_bundle(
     assert loaded.manifest_sha256 == published.manifest_sha256
     assert loaded.inventory.inventory_sha256 == published.inventory.inventory_sha256
     assert set(loaded.case_files) == set(ACCEPTANCE_CATEGORIES)
+    execution_records = load_category_case_records(
+        loaded,
+        "execution_correctness",
+    )
+    assert len(execution_records) == MINIMUM_CATEGORY_EXAMPLES[
+        "execution_correctness"
+    ]
+    assert all("expected_stdout" in record["case"] for record in execution_records)
 
     original_manifest = (bundle_root / "manifest.json").read_bytes()
     with pytest.raises(ValueError, match="already exists"):

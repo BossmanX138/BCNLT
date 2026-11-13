@@ -707,3 +707,30 @@ def load_category_case_bundle(output_root: str | Path) -> CategoryCaseBundle:
         inventory=inventory,
         case_files=resolved_case_files,
     )
+
+
+def load_category_case_records(
+    bundle: CategoryCaseBundle,
+    category: str,
+) -> tuple[dict[str, object], ...]:
+    """Reload a bundle and return one category's verified case records."""
+    if type(bundle) is not CategoryCaseBundle:
+        raise TypeError("bundle must be a CategoryCaseBundle")
+    if category not in ACCEPTANCE_CATEGORIES:
+        raise ValueError("category is invalid")
+    reloaded = load_category_case_bundle(bundle.bundle_root)
+    if (
+        reloaded.manifest_sha256 != bundle.manifest_sha256
+        or reloaded.inventory.inventory_sha256
+        != bundle.inventory.inventory_sha256
+    ):
+        raise ValueError("category case bundle changed during use")
+    records = _parse_case_records(
+        _read_case_content(reloaded.case_files[category], category),
+        category,
+    )
+    if tuple(str(record["example_id"]) for record in records) != (
+        reloaded.inventory.category_example_ids[category]
+    ):
+        raise ValueError("category case record inventory mismatch")
+    return tuple(records)

@@ -19,6 +19,9 @@ from bosscrafts_model.model_acceptance import (
     STRUCTURED_TASKS,
     verify_model_acceptance,
 )
+from bosscrafts_model.model_category_evidence import (
+    MAX_MODEL_CATEGORY_EVIDENCE_BYTES,
+)
 from bosscrafts_model.resumable_task_packing import (
     ResumableTaskDataset,
     audit_task_database,
@@ -37,11 +40,26 @@ def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]
     return payload
 
 
-def _read_payload(path: Path) -> dict[str, object]:
+def _read_payload(
+    path: Path,
+    *,
+    maximum_bytes: int = MAX_ACCEPTANCE_EVIDENCE_BYTES,
+) -> dict[str, object]:
+    if type(maximum_bytes) is not int or maximum_bytes < 1:
+        raise ValueError("acceptance evidence size limit is invalid")
     try:
-        content = path.resolve().read_bytes()
-        if len(content) > MAX_ACCEPTANCE_EVIDENCE_BYTES:
+        source = path.resolve()
+        before = source.stat()
+        if not 0 < before.st_size <= maximum_bytes:
             raise ValueError(f"acceptance evidence exceeds size limit: {path}")
+        content = source.read_bytes()
+        after = source.stat()
+        if (
+            len(content) != before.st_size
+            or after.st_size != before.st_size
+            or after.st_mtime_ns != before.st_mtime_ns
+        ):
+            raise ValueError(f"acceptance evidence changed while reading: {path}")
         payload = json.loads(
             content.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys
         )
@@ -175,7 +193,10 @@ def main() -> int:
         ),
         inferences,
         tuple(
-            _read_payload(getattr(arguments, f"{category}_evidence"))
+            _read_payload(
+                getattr(arguments, f"{category}_evidence"),
+                maximum_bytes=MAX_MODEL_CATEGORY_EVIDENCE_BYTES,
+            )
             for category in ACCEPTANCE_CATEGORIES
         ),
         binding=binding,

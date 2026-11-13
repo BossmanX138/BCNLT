@@ -215,6 +215,27 @@ def _rebind_database(payload: dict[str, object], database_identity: str) -> None
                 metrics["tokenizer_fidelity_receipt_sha256"] = (
                     tokenizer_receipt["receipt_sha256"]
                 )
+        code_receipt = supporting.get("code_acceptance_receipt")
+        if type(code_receipt) is dict:
+            code_receipt["task_database_identity_sha256"] = database_identity
+            receipt_body = {
+                key: value
+                for key, value in code_receipt.items()
+                if key != "receipt_sha256"
+            }
+            code_receipt["receipt_sha256"] = hashlib.sha256(
+                json.dumps(
+                    receipt_body,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest()
+            metrics = payload.get("metrics")
+            if type(metrics) is dict:
+                metrics["code_acceptance_receipt_sha256"] = code_receipt[
+                    "receipt_sha256"
+                ]
     if "artifact_sha256" in payload:
         body = {key: value for key, value in payload.items() if key != "artifact_sha256"}
         payload["artifact_sha256"] = hashlib.sha256(
@@ -727,10 +748,10 @@ class ModelAcceptanceTests(unittest.TestCase):
 
             oversized = root / "oversized.json"
             with oversized.open("wb") as handle:
-                handle.seek(16 * 1024 * 1024)
+                handle.seek(16)
                 handle.write(b"{}")
             with self.assertRaisesRegex(ValueError, "size limit"):
-                _read_payload(oversized)
+                _read_payload(oversized, maximum_bytes=16)
 
     def test_acceptance_script_writes_hash_bound_manifest(self):
         project_root = Path(__file__).resolve().parents[1]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 
 import pytest
@@ -17,6 +18,7 @@ from bosscrafts_model.scientific_sandbox import (
     PROTOCOL,
     SandboxAttestation,
     SandboxExecutionResult,
+    validate_sandbox_execution_payload,
 )
 
 
@@ -112,6 +114,49 @@ class _Sandbox:
     def execute(self, *, language: str, source: str, stdin_text: str):
         assert (language, stdin_text) == ("python", "")
         return _execution(source)
+
+
+def test_common_sandbox_payload_validator_rejects_identity_and_policy_tamper(
+) -> None:
+    source = "print('ok')\n"
+    payload = _execution(source).to_dict()
+    stdout, stderr = validate_sandbox_execution_payload(
+        payload,
+        language="python",
+        source=source,
+        stdin_text="",
+    )
+    assert (stdout, stderr) == (b"", b"")
+
+    forged_request = copy.deepcopy(payload)
+    forged_request["request_sha256"] = "d" * 64
+    with pytest.raises(ValueError, match="identity"):
+        validate_sandbox_execution_payload(
+            forged_request,
+            language="python",
+            source=source,
+            stdin_text="",
+        )
+
+    forged_policy = copy.deepcopy(payload)
+    forged_policy["attestation"]["network_mode"] = "bridge"
+    with pytest.raises(ValueError, match="isolation policy"):
+        validate_sandbox_execution_payload(
+            forged_policy,
+            language="python",
+            source=source,
+            stdin_text="",
+        )
+
+    forged_status = copy.deepcopy(payload)
+    forged_status["status"] = "runtime_failed"
+    with pytest.raises(ValueError, match="status"):
+        validate_sandbox_execution_payload(
+            forged_status,
+            language="python",
+            source=source,
+            stdin_text="",
+        )
 
 
 def test_result_is_bound_to_source_sample_and_sandbox_policy() -> None:

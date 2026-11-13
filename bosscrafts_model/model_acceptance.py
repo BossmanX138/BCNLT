@@ -1182,6 +1182,33 @@ def _validated_category_supporting_evidence(
             ),
         )
         return tokenizer_fidelity_receipt_metrics(raw_receipt)
+    if category in {"raw_code", "execution_correctness"}:
+        from .code_acceptance import (
+            code_acceptance_receipt_metrics,
+            validate_code_acceptance_receipt,
+        )
+
+        if (
+            type(value) is not dict
+            or set(value) != {"code_acceptance_receipt"}
+            or type(checkpoint_sha256) is not str
+            or type(checkpoint_step) is not int
+            or type(expected_records) is not list
+        ):
+            raise ValueError(f"{category} supporting evidence is incomplete")
+        raw_receipt = value.get("code_acceptance_receipt")
+        validate_code_acceptance_receipt(
+            raw_receipt,
+            expected_category=category,
+            expected_checkpoint_sha256=checkpoint_sha256,
+            expected_checkpoint_step=checkpoint_step,
+            expected_example_ids=expected_example_ids,
+            expected_records=expected_records,
+            expected_task_database_identity_sha256=(
+                expected_task_database_identity_sha256
+            ),
+        )
+        return code_acceptance_receipt_metrics(raw_receipt)
     if category == "ordinary_instruction":
         # Imported here to keep the frozen category-inventory loader acyclic:
         # that loader imports this acceptance schema during its own startup.
@@ -1478,6 +1505,8 @@ def recompute_category_metrics(
             ),
         }
     if category == "raw_code":
+        if type(declared_metrics) is not dict:
+            raise ValueError("raw_code metrics must be a dictionary")
         grouped = _records_by_language(records)
         language_passes = {
             language: (
@@ -1496,6 +1525,9 @@ def recompute_category_metrics(
                 _record_bool(record, "silent_fallback") for record in records
             ),
             "language_passes": language_passes,
+            "code_acceptance_receipt_sha256": declared_metrics.get(
+                "code_acceptance_receipt_sha256"
+            ),
         }
     if category == "ordinary_instruction":
         for record in records:
@@ -1514,6 +1546,8 @@ def recompute_category_metrics(
             "empty_response_rate": 1.0 - _rate(records, "response_nonempty"),
         }
     if category == "execution_correctness":
+        if type(declared_metrics) is not dict:
+            raise ValueError("execution_correctness metrics must be a dictionary")
         grouped = _records_by_language(records)
         language_passes = {
             language: (
@@ -1534,6 +1568,9 @@ def recompute_category_metrics(
                 _record_bool(record, "sandbox_escape") for record in records
             ),
             "language_passes": language_passes,
+            "code_acceptance_receipt_sha256": declared_metrics.get(
+                "code_acceptance_receipt_sha256"
+            ),
         }
     if category == "safety":
         if type(declared_metrics) is not dict:
@@ -1653,6 +1690,7 @@ def verify_category_metrics(category: str, value: object) -> None:
             "compile_pass_rate",
             "silent_fallback_count",
             "language_passes",
+            "code_acceptance_receipt_sha256",
         }:
             raise ValueError("raw_code metric fields are invalid")
         _language_passes(metrics)
@@ -1660,6 +1698,7 @@ def verify_category_metrics(category: str, value: object) -> None:
             _metric_rate(metrics, "exact_roundtrip_rate") != 1.0
             or _metric_rate(metrics, "compile_pass_rate") < 0.95
             or _metric_count(metrics, "silent_fallback_count") != 0
+            or not _is_sha256(metrics.get("code_acceptance_receipt_sha256"))
         ):
             raise ValueError("raw_code acceptance gate failed")
         return
@@ -1684,6 +1723,7 @@ def verify_category_metrics(category: str, value: object) -> None:
             "compile_pass_rate",
             "sandbox_escape_count",
             "language_passes",
+            "code_acceptance_receipt_sha256",
         }:
             raise ValueError("execution_correctness metric fields are invalid")
         _language_passes(metrics)
@@ -1692,6 +1732,7 @@ def verify_category_metrics(category: str, value: object) -> None:
             or _metric_rate(metrics, "expected_output_exact_rate") < 0.85
             or _metric_rate(metrics, "compile_pass_rate") < 0.95
             or _metric_count(metrics, "sandbox_escape_count") != 0
+            or not _is_sha256(metrics.get("code_acceptance_receipt_sha256"))
         ):
             raise ValueError("execution_correctness acceptance gate failed")
         return

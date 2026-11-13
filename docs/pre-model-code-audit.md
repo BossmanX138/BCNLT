@@ -211,8 +211,26 @@ actionable defect after the repairs and gates below.
     every execution case to preserve bounded UTF-8 stdin and exact expected
     stdout inside the hashed case payload. Missing, extra or oversized oracle
     fields fail before inventory publication. The complete regression passes
-    with the stricter contract; the execution runner and its checkpoint-bound
-    receipt remain the next implementation step.
+    with the stricter contract. The production code-acceptance runner now loads
+    only a completed full-model checkpoint whose training, validation, test,
+    held-out-suite, tokenizer and model fingerprints match exactly; generates
+    every referenced `semantic_to_code` response with deterministic greedy
+    decoding; and sends only decoded, protocol-complete source through the
+    attested no-network Docker sandbox. Its no-clobber receipt preserves the
+    generated IDs, task hashes, frozen stdin/output oracles, full sandbox
+    response and isolation attestation, then independently rederives every
+    category boolean. Category Evidence Schema V10 requires this receipt for
+    both raw-code and execution-correctness evidence, and final acceptance
+    revalidates it. Forged result booleans, response payloads and sandbox-policy
+    substitutions fail even when an attacker recomputes the outer JSON hashes.
+24. The code receipt was explicitly allowed to grow to 256 MiB, but the final
+    acceptance command still rejected every category-evidence artifact over 16
+    MiB. A legitimate full raw-code receipt could therefore pass its own
+    verifier yet be impossible to promote after being embedded in Category
+    Evidence V10. Category evidence now has a separately bounded 512 MiB
+    contract enforced by both its publisher and the final reader; all other
+    acceptance inputs retain the original 16 MiB limit. Both readers now check
+    file size before allocation and reject a file that changes while it is read.
 
 ## Boundaries
 
@@ -236,16 +254,19 @@ actionable defect after the repairs and gates below.
 The latest repair batch has no regression in the executed source and integration
 gates, but the exhaustive review remains active and CodeRabbit review remains
 pending authentication. The ordinary-instruction runner is executable and
-audited. The exact current tree passes 609 tests and 195 subtests, along with
-Ruff and strict mypy across 76 source files. The regression receipt path is now
+audited. The exact current tree passes 616 tests and 195 subtests, along with
+Ruff and strict mypy across 80 source files. The regression receipt path is now
 implemented and mandatory, but its fixed worker must still be exercised from a
 clean committed tree. Tokenizer fidelity is also executable and receipt-bound,
 but awaits the final frozen category-case bundle for its production run. The
 safety content runner, runtime sealer and separate containment
 runner are implemented and mandatory at both category compilation and final
 acceptance; the live containment probes pass, while the 8.64 GB pinned safety
-judge has not yet been installed or executed. Other remaining category runners
-also require completion. Training and meaningful model insertion stay held; a
+judge has not yet been installed or executed. Raw-code and execution-correctness
+generation and execution are now receipt-bound, but their production runs still
+require the final frozen category-case bundle and a completed current-lineage
+checkpoint. Other remaining category runners also require completion. Training
+and meaningful model insertion stay held; a
 read-only diagnostic Mk10 smoke would be permissible but would not be promotion
 evidence. That smoke has now executed against the preserved incomplete V8
 checkpoint: the current runtime loaded its verified real weights on the RTX
@@ -258,4 +279,4 @@ matches and 0/12 exact clean-core matches, and failed promotion-quality
 protocol rates. Its evidence and non-promotion decision are recorded in
 `docs/v12-recovery-diagnostic-20261113.md`. Neither diagnostic is evidence that
 a model has been trained, promoted, or improved. The exact current tree passes
-609 tests and 195 subtests.
+616 tests and 195 subtests.

@@ -11,6 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from bosscrafts_model.code_acceptance import MAX_CODE_ACCEPTANCE_RECEIPT_BYTES
 from bosscrafts_model.model_acceptance import ACCEPTANCE_CATEGORIES
 from bosscrafts_model.model_category_evidence import (
     MAX_CATEGORY_RECORDS_BYTES,
@@ -31,20 +32,41 @@ def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]
     return result
 
 
-def _read_bounded(path: Path, label: str) -> bytes:
+def _read_bounded(
+    path: Path,
+    label: str,
+    *,
+    maximum_bytes: int = MAX_CATEGORY_RECORDS_BYTES,
+) -> bytes:
     try:
-        content = path.resolve().read_bytes()
+        source = path.resolve()
+        before = source.stat()
+        if not 0 < before.st_size <= maximum_bytes:
+            raise ValueError(f"{label} size is invalid: {path}")
+        content = source.read_bytes()
+        after = source.stat()
     except OSError as error:
         raise ValueError(f"{label} is unreadable: {path}") from error
-    if not content or len(content) > MAX_CATEGORY_RECORDS_BYTES:
+    if (
+        len(content) != before.st_size
+        or after.st_size != before.st_size
+        or after.st_mtime_ns != before.st_mtime_ns
+    ):
+        raise ValueError(f"{label} changed while reading: {path}")
+    if not content:
         raise ValueError(f"{label} size is invalid: {path}")
     return content
 
 
-def _read_object(path: Path, label: str) -> dict[str, object]:
+def _read_object(
+    path: Path,
+    label: str,
+    *,
+    maximum_bytes: int = MAX_CATEGORY_RECORDS_BYTES,
+) -> dict[str, object]:
     try:
         value = json.loads(
-            _read_bounded(path, label).decode("utf-8"),
+            _read_bounded(path, label, maximum_bytes=maximum_bytes).decode("utf-8"),
             object_pairs_hook=_reject_duplicate_keys,
         )
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -90,6 +112,7 @@ def main() -> int:
     parser.add_argument("--containment-receipt", type=Path)
     parser.add_argument("--regression-receipt", type=Path)
     parser.add_argument("--tokenizer-fidelity-receipt", type=Path)
+    parser.add_argument("--code-acceptance-receipt", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
     plural_databases = (
@@ -107,6 +130,15 @@ def main() -> int:
         if arguments.records is not None:
             parser.error(
                 "tokenizer_fidelity records come from the tokenizer receipt"
+            )
+    elif arguments.category in {"raw_code", "execution_correctness"}:
+        if arguments.code_acceptance_receipt is None:
+            parser.error(
+                f"{arguments.category} requires --code-acceptance-receipt"
+            )
+        if arguments.records is not None:
+            parser.error(
+                f"{arguments.category} records come from the code receipt"
             )
     elif arguments.category == "ordinary_instruction":
         if arguments.ifeval_batch_receipt is None:
@@ -182,6 +214,15 @@ def main() -> int:
         if arguments.tokenizer_fidelity_receipt is not None
         else None
     )
+    code_receipt = (
+        _read_object(
+            arguments.code_acceptance_receipt,
+            "code acceptance receipt",
+            maximum_bytes=MAX_CODE_ACCEPTANCE_RECEIPT_BYTES,
+        )
+        if arguments.code_acceptance_receipt is not None
+        else None
+    )
     if arguments.category == "tokenizer_fidelity":
         raw_records = (
             tokenizer_receipt.get("records")
@@ -192,6 +233,13 @@ def main() -> int:
             type(record) is not dict for record in raw_records
         ):
             raise ValueError("tokenizer fidelity receipt records are invalid")
+        records = raw_records
+    elif arguments.category in {"raw_code", "execution_correctness"}:
+        raw_records = code_receipt.get("records") if code_receipt is not None else None
+        if type(raw_records) is not list or any(
+            type(record) is not dict for record in raw_records
+        ):
+            raise ValueError("code acceptance receipt records are invalid")
         records = raw_records
     elif arguments.category == "ordinary_instruction":
         raw_records = (
@@ -241,6 +289,7 @@ def main() -> int:
         containment_receipt=containment_receipt,
         regression_receipt=regression_receipt,
         tokenizer_fidelity_receipt=tokenizer_receipt,
+        code_acceptance_receipt=code_receipt,
     )
     publish_model_category_evidence(arguments.output, payload)
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
