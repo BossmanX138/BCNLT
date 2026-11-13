@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import subprocess
 import sys
 import tempfile
@@ -10,8 +11,13 @@ from pathlib import Path
 
 from test_full_model_acceptance_categories import CATEGORIES, _category
 
+from bosscrafts_model.artifact_schemas import (
+    CHECKPOINT_EVALUATION_SCHEMA,
+    CHECKPOINT_INFERENCE_SCHEMA,
+)
 from bosscrafts_model.bcnlt_source_pipeline import CURRENT_RUNTIME_SPEC_SHA256
 from bosscrafts_model.model_acceptance import verify_model_acceptance
+from scripts.verify_model_acceptance import _read_payload
 
 DATABASE_ID = "a" * 64
 MODEL_ID = "b" * 64
@@ -29,23 +35,52 @@ def _evaluation(split: str) -> dict[str, object]:
         for family in FAMILIES
     }
     return {
+        "schema_version": CHECKPOINT_EVALUATION_SCHEMA,
+        "baseline_correct_target_token_count": 10,
+        "baseline_evaluation_sha256": None,
+        "baseline_exact_match_count": 0,
+        "baseline_exact_match_rate": 0.0,
+        "baseline_family_mean_loss": {family: 10.0 for family in FAMILIES},
+        "baseline_language_mean_loss": {
+            language: 10.0 for language in CURRENT_RUNTIME_SPEC_SHA256
+        },
+        "baseline_mean_loss": 10.0,
+        "baseline_perplexity": math.exp(10.0),
+        "baseline_source": "deterministic_random_initialization",
         "baseline_cell_mean_loss": {cell: 10.0 for cell in cells},
         "baseline_target_token_accuracy": 0.0001,
+        "baseline_target_token_count": 100_000,
         "cell_counts": cells,
         "cell_mean_loss": {cell: 8.5 for cell in cells},
         "cell_regressions": [],
+        "checkpoint_epoch_index": 1,
         "checkpoint_lineage_verified": True,
         "checkpoint_step": 86_016,
+        "checkpoint_target_epochs": 1,
+        "checkpoint_task_database_identity_sha256": DATABASE_ID,
         "checkpoint_training_complete": True,
+        "correct_target_token_count": 42_000,
+        "device": "cpu",
+        "dtype": "float32",
         "evaluation_complete": True,
+        "evaluated_fraction": 1.0,
+        "evaluation_task_database_identity_sha256": DATABASE_ID,
         "example_count": 5_376,
+        "exact_match_count": 0,
+        "exact_match_rate": 0.0,
         "split_example_count": 5_376,
         "family_counts": {family: 1_792 for family in FAMILIES},
+        "family_mean_loss": {family: 8.5 for family in FAMILIES},
         "family_regressions": [],
         "full_model": True,
         "language_counts": {language: 384 for language in CURRENT_RUNTIME_SPEC_SHA256},
+        "language_mean_loss": {
+            language: 8.5 for language in CURRENT_RUNTIME_SPEC_SHA256
+        },
         "language_regressions": [],
+        "mean_loss": 8.5,
         "model_fingerprint": MODEL_ID,
+        "perplexity": math.exp(8.5),
         "promotion_gate_passed": True,
         "promotion_threshold": 0.02,
         "relative_loss_improvement": 0.15,
@@ -60,14 +95,25 @@ def _evaluation(split: str) -> dict[str, object]:
 def _inference(task: str) -> dict[str, object]:
     expected_ids = list(range(1, 21))
     return {
+        "schema_version": CHECKPOINT_INFERENCE_SCHEMA,
+        "checkpoint_epoch_index": 1,
         "checkpoint_lineage_verified": True,
         "checkpoint_step": 86_016,
+        "checkpoint_target_epochs": 1,
+        "checkpoint_task_database_identity_sha256": DATABASE_ID,
         "checkpoint_training_complete": True,
+        "device": "cpu",
+        "dtype": "float32",
+        "evaluation_task_database_identity_sha256": DATABASE_ID,
         "full_model": True,
+        "full_text": "",
+        "generated_protocol_text": "",
+        "generated_text": "",
         "heldout_exact_match": True,
         "model_fingerprint": MODEL_ID,
         "new_token_count": 20,
         "new_token_ids": list(expected_ids),
+        "prompt_token_count": 1,
         "prompt_source": "heldout_database",
         "response_protocol_complete": True,
         "heldout_example_id": "d" * 64,
@@ -114,7 +160,7 @@ class ModelAcceptanceTests(unittest.TestCase):
 
         cell_regressed = _evaluation("validation")
         cell_regressed["cell_regressions"] = ["python|code_to_semantic"]
-        with self.assertRaisesRegex(ValueError, "promotion gate"):
+        with self.assertRaisesRegex(ValueError, "promotion gate|regression"):
             verify_model_acceptance(
                 (cell_regressed, _evaluation("test")),
                 tuple(_inference(task) for task in FAMILIES),
@@ -128,6 +174,78 @@ class ModelAcceptanceTests(unittest.TestCase):
             verify_model_acceptance(
                 (regressed, _evaluation("test")),
                 tuple(_inference(task) for task in FAMILIES),
+                _categories(),
+            )
+
+    def test_rejects_self_reported_improvement_that_conflicts_with_cell_losses(self):
+        fabricated = _evaluation("validation")
+        fabricated["cell_mean_loss"] = {
+            cell: 11.0 for cell in fabricated["cell_mean_loss"]
+        }
+        with self.assertRaisesRegex(ValueError, "loss|regression|consistency"):
+            verify_model_acceptance(
+                (fabricated, _evaluation("test")),
+                tuple(_inference(task) for task in FAMILIES),
+                _categories(),
+            )
+
+    def test_rejects_internally_inconsistent_evaluation_artifacts(self):
+        mutations = (
+            ("relative_loss_improvement", 0.99, "loss consistency"),
+            ("correct_target_token_count", 41_999, "accuracy consistency"),
+            ("baseline_target_token_count", 99_999, "accuracy consistency"),
+            ("mean_loss", 1_000.0, "loss consistency"),
+            (
+                "checkpoint_task_database_identity_sha256",
+                "f" * 64,
+                "database lineage",
+            ),
+            ("schema_version", "legacy", "schema"),
+        )
+        for field, value, message in mutations:
+            with self.subTest(field=field):
+                invalid = _evaluation("validation")
+                invalid[field] = value
+                with self.assertRaisesRegex(ValueError, message):
+                    verify_model_acceptance(
+                        (invalid, _evaluation("test")),
+                        tuple(_inference(task) for task in FAMILIES),
+                        _categories(),
+                    )
+
+        unexpected = _evaluation("validation")
+        unexpected["unverified_override"] = True
+        with self.assertRaisesRegex(ValueError, "fields"):
+            verify_model_acceptance(
+                (unexpected, _evaluation("test")),
+                tuple(_inference(task) for task in FAMILIES),
+                _categories(),
+            )
+
+    def test_rejects_inference_artifact_lineage_or_schema_bypass(self):
+        invalid = _inference("code_to_semantic")
+        invalid["evaluation_task_database_identity_sha256"] = "f" * 64
+        with self.assertRaisesRegex(ValueError, "database lineage"):
+            verify_model_acceptance(
+                (_evaluation("validation"), _evaluation("test")),
+                (
+                    invalid,
+                    _inference("semantic_continuation"),
+                    _inference("semantic_to_code"),
+                ),
+                _categories(),
+            )
+
+        unexpected = _inference("code_to_semantic")
+        unexpected["manual_override"] = True
+        with self.assertRaisesRegex(ValueError, "fields"):
+            verify_model_acceptance(
+                (_evaluation("validation"), _evaluation("test")),
+                (
+                    unexpected,
+                    _inference("semantic_continuation"),
+                    _inference("semantic_to_code"),
+                ),
                 _categories(),
             )
 
@@ -201,6 +319,21 @@ class ModelAcceptanceTests(unittest.TestCase):
         self.assertIn("--code-to-semantic-inference", completed.stdout)
         self.assertIn("--tokenizer-fidelity-evidence", completed.stdout)
         self.assertIn("--resources-evidence", completed.stdout)
+
+    def test_acceptance_reader_rejects_duplicate_keys_and_oversized_input(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            duplicate = root / "duplicate.json"
+            duplicate.write_text('{"split":"test","split":"validation"}', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "duplicate"):
+                _read_payload(duplicate)
+
+            oversized = root / "oversized.json"
+            with oversized.open("wb") as handle:
+                handle.seek(16 * 1024 * 1024)
+                handle.write(b"{}")
+            with self.assertRaisesRegex(ValueError, "size limit"):
+                _read_payload(oversized)
 
     def test_acceptance_script_writes_hash_bound_manifest(self):
         project_root = Path(__file__).resolve().parents[1]

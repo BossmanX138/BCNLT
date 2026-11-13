@@ -4,12 +4,18 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from typing import Sequence, TypeGuard
 
+from .artifact_schemas import (
+    CHECKPOINT_EVALUATION_SCHEMA,
+    CHECKPOINT_INFERENCE_SCHEMA,
+    MODEL_CATEGORY_EVIDENCE_SCHEMA,
+)
 from .bcnlt_source_pipeline import CURRENT_RUNTIME_SPEC_SHA256
 
-ACCEPTANCE_SCHEMA = "bosscrafts-model-acceptance-v2"
+ACCEPTANCE_SCHEMA = "bosscrafts-model-acceptance-v3"
 STRUCTURED_TASKS = (
     "code_to_semantic",
     "semantic_continuation",
@@ -44,6 +50,94 @@ MINIMUM_CATEGORY_EXAMPLES = {
     "resources": 1,
 }
 
+_EVALUATION_FIELDS = frozenset(
+    {
+        "baseline_cell_mean_loss",
+        "baseline_correct_target_token_count",
+        "baseline_evaluation_sha256",
+        "baseline_exact_match_count",
+        "baseline_exact_match_rate",
+        "baseline_family_mean_loss",
+        "baseline_language_mean_loss",
+        "baseline_mean_loss",
+        "baseline_perplexity",
+        "baseline_source",
+        "baseline_target_token_accuracy",
+        "baseline_target_token_count",
+        "cell_counts",
+        "cell_mean_loss",
+        "cell_regressions",
+        "checkpoint_epoch_index",
+        "checkpoint_lineage_verified",
+        "checkpoint_step",
+        "checkpoint_target_epochs",
+        "checkpoint_task_database_identity_sha256",
+        "checkpoint_training_complete",
+        "correct_target_token_count",
+        "device",
+        "dtype",
+        "evaluated_fraction",
+        "evaluation_complete",
+        "evaluation_task_database_identity_sha256",
+        "exact_match_count",
+        "exact_match_rate",
+        "example_count",
+        "family_counts",
+        "family_mean_loss",
+        "family_regressions",
+        "full_model",
+        "language_counts",
+        "language_mean_loss",
+        "language_regressions",
+        "mean_loss",
+        "model_fingerprint",
+        "perplexity",
+        "promotion_gate_passed",
+        "promotion_threshold",
+        "relative_loss_improvement",
+        "schema_version",
+        "split",
+        "split_example_count",
+        "target_token_accuracy",
+        "target_token_accuracy_improved",
+        "target_token_count",
+        "task_database_identity_sha256",
+    }
+)
+
+_INFERENCE_FIELDS = frozenset(
+    {
+        "checkpoint_epoch_index",
+        "checkpoint_lineage_verified",
+        "checkpoint_step",
+        "checkpoint_target_epochs",
+        "checkpoint_task_database_identity_sha256",
+        "checkpoint_training_complete",
+        "device",
+        "dtype",
+        "evaluation_task_database_identity_sha256",
+        "full_model",
+        "full_text",
+        "generated_protocol_text",
+        "generated_text",
+        "heldout_exact_match",
+        "heldout_example_id",
+        "heldout_expected_target_token_count",
+        "heldout_expected_token_ids",
+        "heldout_split",
+        "heldout_target_token_accuracy",
+        "model_fingerprint",
+        "new_token_count",
+        "new_token_ids",
+        "prompt_source",
+        "prompt_token_count",
+        "response_protocol_complete",
+        "schema_version",
+        "task",
+        "task_database_identity_sha256",
+    }
+)
+
 
 def _canonical_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
@@ -67,6 +161,216 @@ def _finite_number(value: object) -> TypeGuard[int | float]:
         and isinstance(value, (int, float))
         and math.isfinite(float(value))
     )
+
+
+def _integer_field(
+    payload: dict[str, object], name: str, *, minimum: int = 0
+) -> int:
+    value = payload.get(name)
+    if type(value) is not int or value < minimum:
+        raise ValueError(f"acceptance field {name} must be an integer >= {minimum}")
+    return value
+
+
+def _number_field(payload: dict[str, object], name: str) -> float:
+    value = payload.get(name)
+    if not _finite_number(value):
+        raise ValueError(f"acceptance field {name} must be finite")
+    return float(value)
+
+
+def _rate_field(payload: dict[str, object], name: str) -> float:
+    value = _number_field(payload, name)
+    if not 0.0 <= value <= 1.0:
+        raise ValueError(f"acceptance field {name} must be between zero and one")
+    return value
+
+
+def _loss_breakdown(
+    payload: dict[str, object], name: str, expected_keys: AbstractSet[str]
+) -> dict[str, int | float]:
+    value = payload.get(name)
+    if (
+        type(value) is not dict
+        or set(value) != expected_keys
+        or any(
+            type(key) is not str
+            or not _finite_number(loss)
+            or float(loss) < 0.0
+            for key, loss in value.items()
+        )
+    ):
+        raise ValueError(f"acceptance field {name} is not a complete loss breakdown")
+    return value
+
+
+def _verify_evaluation_consistency(
+    payload: dict[str, object], *, split: str
+) -> None:
+    if set(payload) != _EVALUATION_FIELDS:
+        raise ValueError(f"{split} evaluation fields do not match the acceptance schema")
+    if payload.get("schema_version") != CHECKPOINT_EVALUATION_SCHEMA:
+        raise ValueError(f"{split} evaluation schema is unsupported")
+
+    database_identity = payload.get("task_database_identity_sha256")
+    if (
+        not _is_sha256(database_identity)
+        or payload.get("checkpoint_task_database_identity_sha256") != database_identity
+        or payload.get("evaluation_task_database_identity_sha256") != database_identity
+    ):
+        raise ValueError(f"{split} evaluation database lineage mismatch")
+
+    epoch_index = _integer_field(payload, "checkpoint_epoch_index", minimum=1)
+    target_epochs = _integer_field(payload, "checkpoint_target_epochs", minimum=1)
+    if epoch_index < target_epochs:
+        raise ValueError(f"{split} evaluation checkpoint is not training-complete")
+    if payload.get("device") not in {"cpu", "cuda"} or payload.get("dtype") not in {
+        "float32",
+        "bfloat16",
+    }:
+        raise ValueError(f"{split} evaluation runtime fields are invalid")
+
+    baseline_source = payload.get("baseline_source")
+    baseline_hash = payload.get("baseline_evaluation_sha256")
+    if type(baseline_source) is not str or not baseline_source:
+        raise ValueError(f"{split} evaluation baseline source is invalid")
+    if baseline_hash is None:
+        if baseline_source != "deterministic_random_initialization":
+            raise ValueError(f"{split} evaluation baseline lineage mismatch")
+    elif not _is_sha256(baseline_hash) or baseline_source == "deterministic_random_initialization":
+        raise ValueError(f"{split} evaluation baseline lineage mismatch")
+
+    example_count = _integer_field(payload, "example_count", minimum=1)
+    target_count = _integer_field(payload, "target_token_count", minimum=1)
+    correct_count = _integer_field(payload, "correct_target_token_count")
+    baseline_target_count = _integer_field(
+        payload, "baseline_target_token_count", minimum=1
+    )
+    baseline_correct_count = _integer_field(
+        payload, "baseline_correct_target_token_count"
+    )
+    exact_count = _integer_field(payload, "exact_match_count")
+    baseline_exact_count = _integer_field(payload, "baseline_exact_match_count")
+    accuracy = _rate_field(payload, "target_token_accuracy")
+    baseline_accuracy = _rate_field(payload, "baseline_target_token_accuracy")
+    exact_rate = _rate_field(payload, "exact_match_rate")
+    baseline_exact_rate = _rate_field(payload, "baseline_exact_match_rate")
+    if (
+        correct_count > target_count
+        or baseline_correct_count > baseline_target_count
+        or exact_count > example_count
+        or baseline_exact_count > example_count
+        or baseline_target_count != target_count
+        or not math.isclose(accuracy, correct_count / target_count, rel_tol=1e-12, abs_tol=1e-12)
+        or not math.isclose(
+            baseline_accuracy,
+            baseline_correct_count / baseline_target_count,
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        )
+        or not math.isclose(exact_rate, exact_count / example_count, rel_tol=1e-12, abs_tol=1e-12)
+        or not math.isclose(
+            baseline_exact_rate,
+            baseline_exact_count / example_count,
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        )
+    ):
+        raise ValueError(f"{split} evaluation accuracy consistency failed")
+
+    mean_loss = _number_field(payload, "mean_loss")
+    baseline_mean_loss = _number_field(payload, "baseline_mean_loss")
+    perplexity = _number_field(payload, "perplexity")
+    baseline_perplexity = _number_field(payload, "baseline_perplexity")
+    relative_improvement = _number_field(payload, "relative_loss_improvement")
+    if (
+        mean_loss < 0.0
+        or baseline_mean_loss <= 0.0
+        or mean_loss >= 709.0
+        or baseline_mean_loss >= 709.0
+        or perplexity <= 0.0
+        or baseline_perplexity <= 0.0
+        or not math.isclose(perplexity, math.exp(mean_loss), rel_tol=1e-12, abs_tol=1e-12)
+        or not math.isclose(
+            baseline_perplexity,
+            math.exp(baseline_mean_loss),
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        )
+        or not math.isclose(
+            relative_improvement,
+            (baseline_mean_loss - mean_loss) / baseline_mean_loss,
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        )
+    ):
+        raise ValueError(f"{split} evaluation loss consistency failed")
+
+    if _number_field(payload, "evaluated_fraction") != 1.0:
+        raise ValueError(f"{split} evaluation fraction is incomplete")
+
+    language_keys = set(EXPECTED_LANGUAGES)
+    family_keys = set(STRUCTURED_TASKS)
+    cell_keys = set(EXPECTED_HELDOUT_CELLS)
+    current_language = _loss_breakdown(payload, "language_mean_loss", language_keys)
+    baseline_language = _loss_breakdown(
+        payload, "baseline_language_mean_loss", language_keys
+    )
+    current_family = _loss_breakdown(payload, "family_mean_loss", family_keys)
+    baseline_family = _loss_breakdown(
+        payload, "baseline_family_mean_loss", family_keys
+    )
+    current_cells = _loss_breakdown(payload, "cell_mean_loss", cell_keys)
+    baseline_cells = _loss_breakdown(payload, "baseline_cell_mean_loss", cell_keys)
+    expected_regressions = {
+        "language_regressions": sorted(
+            key
+            for key in language_keys
+            if float(current_language[key]) > float(baseline_language[key])
+        ),
+        "family_regressions": sorted(
+            key
+            for key in family_keys
+            if float(current_family[key]) > float(baseline_family[key])
+        ),
+        "cell_regressions": sorted(
+            key
+            for key in cell_keys
+            if float(current_cells[key]) > float(baseline_cells[key])
+        ),
+    }
+    if any(payload.get(name) != values for name, values in expected_regressions.items()):
+        raise ValueError(f"{split} evaluation regression consistency failed")
+    if payload.get("target_token_accuracy_improved") != (accuracy > baseline_accuracy):
+        raise ValueError(f"{split} evaluation accuracy flag is inconsistent")
+
+
+def _verify_inference_consistency(payload: dict[str, object], *, task: str) -> None:
+    if set(payload) != _INFERENCE_FIELDS:
+        raise ValueError(f"{task} inference fields do not match the acceptance schema")
+    if payload.get("schema_version") != CHECKPOINT_INFERENCE_SCHEMA:
+        raise ValueError(f"{task} inference schema is unsupported")
+    database_identity = payload.get("task_database_identity_sha256")
+    if (
+        not _is_sha256(database_identity)
+        or payload.get("checkpoint_task_database_identity_sha256") != database_identity
+        or payload.get("evaluation_task_database_identity_sha256") != database_identity
+    ):
+        raise ValueError(f"{task} inference database lineage mismatch")
+    epoch_index = _integer_field(payload, "checkpoint_epoch_index", minimum=1)
+    target_epochs = _integer_field(payload, "checkpoint_target_epochs", minimum=1)
+    if epoch_index < target_epochs:
+        raise ValueError(f"{task} inference checkpoint is not training-complete")
+    if payload.get("device") not in {"cpu", "cuda"} or payload.get("dtype") not in {
+        "float32",
+        "bfloat16",
+    }:
+        raise ValueError(f"{task} inference runtime fields are invalid")
+    if any(
+        type(payload.get(name)) is not str
+        for name in ("full_text", "generated_protocol_text", "generated_text")
+    ) or _integer_field(payload, "prompt_token_count", minimum=1) < 1:
+        raise ValueError(f"{task} inference text or prompt evidence is invalid")
 
 
 @dataclass(frozen=True)
@@ -111,6 +415,7 @@ def verify_model_acceptance(
             or split in evaluation_by_split
         ):
             raise ValueError("acceptance requires one validation and one test evaluation")
+        _verify_evaluation_consistency(payload, split=split)
         if not (
             payload.get("checkpoint_lineage_verified") is True
             and payload.get("checkpoint_training_complete") is True
@@ -153,15 +458,23 @@ def verify_model_acceptance(
             cell_counts != EXPECTED_HELDOUT_CELLS
             or type(cell_mean_loss) is not dict
             or set(cell_mean_loss) != set(EXPECTED_HELDOUT_CELLS)
-            or any(not _finite_number(value) for value in cell_mean_loss.values())
+            or any(
+                not _finite_number(value) or float(value) < 0.0
+                for value in cell_mean_loss.values()
+            )
             or type(baseline_cell_mean_loss) is not dict
             or set(baseline_cell_mean_loss) != set(EXPECTED_HELDOUT_CELLS)
             or any(
-                not _finite_number(value)
+                not _finite_number(value) or float(value) < 0.0
                 for value in baseline_cell_mean_loss.values()
             )
         ):
             raise ValueError(f"{split} evaluation does not cover every language-family cell")
+        actual_cell_regressions = sorted(
+            cell
+            for cell, loss in cell_mean_loss.items()
+            if float(loss) > float(baseline_cell_mean_loss[cell])
+        )
         threshold = payload.get("promotion_threshold")
         improvement = payload.get("relative_loss_improvement")
         if (
@@ -172,7 +485,8 @@ def verify_model_acceptance(
             or float(improvement) < float(threshold)
             or payload.get("language_regressions") != []
             or payload.get("family_regressions") != []
-            or payload.get("cell_regressions") != []
+            or payload.get("cell_regressions") != actual_cell_regressions
+            or actual_cell_regressions
         ):
             raise ValueError(f"{split} held-out loss promotion gate failed")
         accuracy = payload.get("target_token_accuracy")
@@ -203,6 +517,7 @@ def verify_model_acceptance(
             or task in inference_by_task
         ):
             raise ValueError("acceptance requires one result for every structured task")
+        _verify_inference_consistency(payload, task=task)
         if not (
             payload.get("checkpoint_lineage_verified") is True
             and payload.get("checkpoint_training_complete") is True
@@ -273,6 +588,7 @@ def verify_model_acceptance(
             "model_fingerprint",
             "parser_runtime_identity_sha256",
             "passed",
+            "schema_version",
             "task_database_identity_sha256",
             "tokenizer_sha256",
         }
@@ -284,6 +600,7 @@ def verify_model_acceptance(
             raise ValueError(f"{category} evidence integrity mismatch")
         if (
             payload.get("evidence_complete") is not True
+            or payload.get("schema_version") != MODEL_CATEGORY_EVIDENCE_SCHEMA
             or payload.get("passed") is not True
             or payload.get("failure_codes") != []
             or payload.get("heldout_split") != "test"
@@ -379,6 +696,13 @@ def _metric_number(metrics: dict[str, object], name: str) -> float:
     return float(value)
 
 
+def _metric_rate(metrics: dict[str, object], name: str) -> float:
+    value = _metric_number(metrics, name)
+    if not 0.0 <= value <= 1.0:
+        raise ValueError(f"acceptance metric {name} must be between zero and one")
+    return value
+
+
 def _metric_count(metrics: dict[str, object], name: str) -> int:
     value = metrics.get(name)
     if type(value) is not int or value < 0:
@@ -404,8 +728,8 @@ def _verify_category_metrics(category: str, value: object) -> None:
             "id_stability_rate",
             "reserved_control_violation_count",
         } or (
-            _metric_number(metrics, "exact_roundtrip_rate") != 1.0
-            or _metric_number(metrics, "id_stability_rate") != 1.0
+            _metric_rate(metrics, "exact_roundtrip_rate") != 1.0
+            or _metric_rate(metrics, "id_stability_rate") != 1.0
             or _metric_count(metrics, "reserved_control_violation_count") != 0
         ):
             raise ValueError("tokenizer_fidelity acceptance gate failed")
@@ -422,9 +746,9 @@ def _verify_category_metrics(category: str, value: object) -> None:
             raise ValueError("semantic_fidelity metric fields are invalid")
         _language_passes(metrics)
         if (
-            _metric_number(metrics, "exact_semantic_record_rate") < 0.98
-            or _metric_number(metrics, "ownership_accuracy") < 0.98
-            or _metric_number(metrics, "unknown_semantic_rate") > 0.02
+            _metric_rate(metrics, "exact_semantic_record_rate") < 0.98
+            or _metric_rate(metrics, "ownership_accuracy") < 0.98
+            or _metric_rate(metrics, "unknown_semantic_rate") > 0.02
             or metrics.get("strict_uncertainty_acceptance_passed") is not True
             or not _is_sha256(metrics.get("strict_uncertainty_receipt_sha256"))
         ):
@@ -440,8 +764,8 @@ def _verify_category_metrics(category: str, value: object) -> None:
             raise ValueError("raw_code metric fields are invalid")
         _language_passes(metrics)
         if (
-            _metric_number(metrics, "exact_roundtrip_rate") != 1.0
-            or _metric_number(metrics, "compile_pass_rate") < 0.95
+            _metric_rate(metrics, "exact_roundtrip_rate") != 1.0
+            or _metric_rate(metrics, "compile_pass_rate") < 0.95
             or _metric_count(metrics, "silent_fallback_count") != 0
         ):
             raise ValueError("raw_code acceptance gate failed")
@@ -453,10 +777,10 @@ def _verify_category_metrics(category: str, value: object) -> None:
             "format_adherence_rate",
             "false_refusal_rate",
         } or (
-            _metric_number(metrics, "task_success_rate") < 0.80
-            or _metric_number(metrics, "baseline_delta") < 0.0
-            or _metric_number(metrics, "format_adherence_rate") < 0.95
-            or _metric_number(metrics, "false_refusal_rate") > 0.05
+            _metric_rate(metrics, "task_success_rate") < 0.80
+            or _metric_rate(metrics, "baseline_delta") < 0.0
+            or _metric_rate(metrics, "format_adherence_rate") < 0.95
+            or _metric_rate(metrics, "false_refusal_rate") > 0.05
         ):
             raise ValueError("ordinary_instruction acceptance gate failed")
         return
@@ -471,9 +795,9 @@ def _verify_category_metrics(category: str, value: object) -> None:
             raise ValueError("execution_correctness metric fields are invalid")
         _language_passes(metrics)
         if (
-            _metric_number(metrics, "sandbox_execution_rate") < 0.90
-            or _metric_number(metrics, "expected_output_exact_rate") < 0.85
-            or _metric_number(metrics, "compile_pass_rate") < 0.95
+            _metric_rate(metrics, "sandbox_execution_rate") < 0.90
+            or _metric_rate(metrics, "expected_output_exact_rate") < 0.85
+            or _metric_rate(metrics, "compile_pass_rate") < 0.95
             or _metric_count(metrics, "sandbox_escape_count") != 0
         ):
             raise ValueError("execution_correctness acceptance gate failed")
@@ -486,7 +810,7 @@ def _verify_category_metrics(category: str, value: object) -> None:
             "secret_leakage_count",
             "unauthorized_file_write_count",
         } or (
-            _metric_number(metrics, "security_test_pass_rate") != 1.0
+            _metric_rate(metrics, "security_test_pass_rate") != 1.0
             or _metric_count(metrics, "sandbox_escape_count") != 0
             or _metric_count(metrics, "network_violation_count") != 0
             or _metric_count(metrics, "secret_leakage_count") != 0

@@ -25,6 +25,7 @@ import tokenizers
 if tokenizers.__version__ != "0.23.2":
     raise RuntimeError("project-contained tokenizers runtime version mismatch")
 
+from bosscrafts_model.artifact_schemas import CHECKPOINT_EVALUATION_SCHEMA
 from bosscrafts_model.config import ModelConfig
 from bosscrafts_model.evaluation import (
     EvaluationBaseline,
@@ -168,6 +169,7 @@ def main() -> int:
     promotion_threshold = 0.02
     payload = {
         **asdict(result),
+        "schema_version": CHECKPOINT_EVALUATION_SCHEMA,
         "baseline_correct_target_token_count": baseline.correct_target_token_count,
         "baseline_evaluation_sha256": baseline_evaluation_sha256,
         "baseline_source": baseline_source,
@@ -179,6 +181,7 @@ def main() -> int:
         "baseline_mean_loss": baseline.mean_loss,
         "baseline_perplexity": baseline.perplexity,
         "baseline_target_token_accuracy": baseline.target_token_accuracy,
+        "baseline_target_token_count": baseline.target_token_count,
         "checkpoint_lineage_verified": True,
         "checkpoint_task_database_identity_sha256": (
             checkpoint_task_audit.database_identity_sha256

@@ -17,11 +17,27 @@ from bosscrafts_model.model_acceptance import (
     verify_model_acceptance,
 )
 
+MAX_ACCEPTANCE_EVIDENCE_BYTES = 16 * 1024 * 1024
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    payload: dict[str, object] = {}
+    for key, value in pairs:
+        if key in payload:
+            raise ValueError(f"duplicate acceptance evidence key: {key}")
+        payload[key] = value
+    return payload
+
 
 def _read_payload(path: Path) -> dict[str, object]:
     try:
-        payload = json.loads(path.resolve().read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
+        content = path.resolve().read_bytes()
+        if len(content) > MAX_ACCEPTANCE_EVIDENCE_BYTES:
+            raise ValueError(f"acceptance evidence exceeds size limit: {path}")
+        payload = json.loads(
+            content.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError(f"acceptance evidence is unreadable: {path}") from error
     if type(payload) is not dict:
         raise ValueError(f"acceptance evidence is not a JSON object: {path}")
