@@ -301,6 +301,9 @@ def _load_completed_shard(
             raise ValueError(f"existing shard database lineage mismatch: {path}")
         if metadata.get("packing_complete") != "true":
             return None
+        integrity = str(connection.execute("PRAGMA integrity_check").fetchone()[0])
+        if integrity != "ok":
+            raise ValueError(f"existing shard database integrity failed: {path}")
         split_counts = dict(
             connection.execute("SELECT split,COUNT(*) FROM tasks GROUP BY split")
         )
@@ -314,16 +317,117 @@ def _load_completed_shard(
             "SELECT COUNT(*),COALESCE(SUM(token_count),0),"
             "COALESCE(SUM(token_count-loss_start_index),0) FROM tasks"
         ).fetchone()
+        provenance_rows = connection.execute(
+            """SELECT t.example_id,t.document_id,t.language,t.family,t.record_index,
+                      t.split,t.semantic_spec_sha256,
+                      t.parser_runtime_identity_sha256,t.source_sha256,
+                      p.content_sha256,p.source_parquet,p.source_parquet_sha256,
+                      p.source_row_index,p.input_sha256,p.full_output_sha256,
+                      p.final_code_sha256,p.fence_label,p.license_spdx
+               FROM tasks AS t JOIN codex_provenance AS p USING(example_id)
+               ORDER BY t.example_id"""
+        ).fetchall()
+        task_count = int(connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0])
+        provenance_count = int(
+            connection.execute("SELECT COUNT(*) FROM codex_provenance").fetchone()[0]
+        )
     finally:
         connection.close()
     if counts is None:
         raise ValueError("CodeXGLUE shard database aggregate query returned no row")
+    if task_count != provenance_count or len(provenance_rows) != task_count:
+        raise ValueError("existing shard provenance coverage mismatch")
+    expected_source_name = Path(expected["source_path"]).name
+    expected_source_sha256 = expected["source_sha256"]
+    source_rows = int(expected["source_rows"])
+    seen_content: set[str] = set()
+    seen_source_rows: set[int] = set()
+    for row in provenance_rows:
+        (
+            _example_id,
+            document_id,
+            language,
+            family,
+            record_index,
+            split,
+            semantic_spec_sha256,
+            parser_runtime_identity_sha256,
+            source_sha256,
+            content_sha256,
+            source_parquet,
+            source_parquet_sha256,
+            provenance_source_row,
+            input_sha256,
+            full_output_sha256,
+            final_code_sha256,
+            _fence_label,
+            license_spdx,
+        ) = row
+        hashes = (
+            str(document_id),
+            str(semantic_spec_sha256),
+            str(source_sha256),
+            str(content_sha256),
+            str(source_parquet_sha256),
+            str(input_sha256),
+            str(full_output_sha256),
+            str(final_code_sha256),
+        )
+        record_index = int(record_index)
+        provenance_source_row = int(provenance_source_row)
+        content_sha256 = str(content_sha256)
+        expected_content_sha256 = _sha256_text(
+            _canonical_json(
+                {
+                    "input_sha256": str(input_sha256),
+                    "final_code_sha256": str(final_code_sha256),
+                }
+            )
+        )
+        expected_document_id = _sha256_text(
+            _canonical_json(
+                {
+                    "dataset": DATASET_NAME,
+                    "revision": DATASET_REVISION,
+                    "source_parquet_sha256": expected_source_sha256,
+                    "source_row_index": record_index,
+                    "content_sha256": content_sha256,
+                }
+            )
+        )
+        if (
+            any(not _HEX64.fullmatch(value) for value in hashes)
+            or str(source_parquet) != expected_source_name
+            or str(source_parquet_sha256) != expected_source_sha256
+            or str(license_spdx) != DATASET_LICENSE
+            or str(family) != INSTRUCTION_FAMILY
+            or str(split) not in {"train", "validation", "test"}
+            or str(language) not in CURRENT_RUNTIME_SPEC_SHA256
+            or str(semantic_spec_sha256)
+            != CURRENT_RUNTIME_SPEC_SHA256[str(language)]
+            or str(parser_runtime_identity_sha256)
+            != PARSER_RUNTIME_NOT_APPLICABLE
+            or record_index != provenance_source_row
+            or not 0 <= record_index < source_rows
+            or content_sha256 != expected_content_sha256
+            or str(document_id) != expected_document_id
+            or content_sha256 in seen_content
+            or record_index in seen_source_rows
+        ):
+            raise ValueError("existing shard provenance is invalid")
+        seen_content.add(content_sha256)
+        seen_source_rows.add(record_index)
+    if any(count < 0 for count in rejection_counts.values()) or (
+        task_count + sum(int(count) for count in rejection_counts.values())
+        != source_rows
+    ):
+        raise ValueError("existing shard provenance source-row coverage mismatch")
     return ShardBuildStatus(
         database_path=str(path),
         source_path=metadata["source_path"],
         source_sha256=metadata["source_sha256"],
         source_size_bytes=int(metadata["source_size_bytes"]),
-        source_rows=int(metadata["source_rows"]),
+        source_rows=source_rows,
         admitted_rows=int(counts[0]),
         split_counts={str(k): int(v) for k, v in split_counts.items()},
         language_counts={str(k): int(v) for k, v in language_counts.items()},

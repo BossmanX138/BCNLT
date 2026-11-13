@@ -216,6 +216,49 @@ class CodeXCodeCurriculumTests(unittest.TestCase):
             self.assertEqual(stale.read_bytes(), b"unrelated-stale-state")
             self.assertEqual(list(output.glob(".tasks.sqlite.*.tmp")), [])
 
+    def test_rejects_tampered_completed_shard_provenance_on_resume(self) -> None:
+        binding = NativeTokenizerBinding.load()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dataset, humaneval = self._write_tiny_inputs(root)
+            output = root / "output"
+            build_codex_code_curriculum(
+                binding,
+                dataset_root=dataset,
+                shard_indices=(0,),
+                output_root=output,
+                humaneval_dataset=humaneval,
+                workers=1,
+                batch_size=2,
+                max_sequence=2048,
+            )
+            (output / "tasks.sqlite").unlink()
+            shard = output / "shards" / "shard_00000.sqlite"
+            connection = sqlite3.connect(shard)
+            try:
+                connection.execute(
+                    "UPDATE codex_provenance SET source_parquet_sha256=? "
+                    "WHERE example_id=(SELECT example_id FROM codex_provenance LIMIT 1)",
+                    ("f" * 64,),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            with self.assertRaisesRegex(ValueError, "provenance"):
+                build_codex_code_curriculum(
+                    binding,
+                    dataset_root=dataset,
+                    shard_indices=(0,),
+                    output_root=output,
+                    humaneval_dataset=humaneval,
+                    workers=1,
+                    batch_size=2,
+                    max_sequence=2048,
+                )
+
+            self.assertFalse((output / "tasks.sqlite").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
