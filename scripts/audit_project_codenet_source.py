@@ -44,17 +44,33 @@ def resolve_dataset_root(path: Path) -> Path:
 
 
 def _source_path(dataset_root: Path, row: dict[str, str]) -> Path:
-    extension = row["filename_ext"].strip().lstrip(".")
-    filename = row["submission_id"].strip()
+    def component(name: str, *, allow_empty: bool = False) -> str:
+        value = row[name].strip()
+        if (
+            (not value and not allow_empty)
+            or value in {".", ".."}
+            or "/" in value
+            or "\\" in value
+        ):
+            raise ValueError(f"invalid Project CodeNet {name}: {value!r}")
+        return value
+
+    extension = component("filename_ext", allow_empty=True).lstrip(".")
+    if extension in {".", ".."} or "/" in extension or "\\" in extension:
+        raise ValueError(f"invalid Project CodeNet filename_ext: {extension!r}")
+    filename = component("submission_id")
     if extension:
         filename = f"{filename}.{extension}"
-    return (
+    source = (
         dataset_root
         / "data"
-        / row["problem_id"].strip()
-        / row["language"].strip()
+        / component("problem_id")
+        / component("language")
         / filename
-    )
+    ).resolve()
+    if not source.is_relative_to((dataset_root / "data").resolve()):
+        raise ValueError("Project CodeNet source path escapes the dataset")
+    return source
 
 
 def audit_dataset(
@@ -80,13 +96,16 @@ def audit_dataset(
         raise ValueError("problem_list.csv contains no problem IDs")
 
     metadata_files = sorted(metadata_root.glob("p*.csv"))
-    metadata_files = [path for path in metadata_files if path.name != "problem_list.csv"]
+    metadata_files = [
+        path for path in metadata_files if path.name != "problem_list.csv"
+    ]
     status_counts: Counter[str] = Counter()
     language_counts: Counter[str] = Counter()
     accepted_language_counts: Counter[str] = Counter()
     accepted_problem_counts: Counter[str] = Counter()
     accepted_problem_language_pairs: set[tuple[str, str]] = set()
     missing_accepted_files: list[str] = []
+    invalid_accepted_metadata: list[str] = []
     malformed_metadata_files: list[str] = []
     metadata_problem_ids: set[str] = set()
     total_rows = 0
@@ -115,12 +134,30 @@ def audit_dataset(
                 accepted_problem_counts[problem_id] += 1
                 accepted_problem_language_pairs.add((problem_id, language))
                 try:
-                    accepted_code_bytes += max(0, int(row["code_size"]))
+                    code_size = int(row["code_size"])
+                    if code_size < 0:
+                        raise ValueError("negative code size")
                 except (TypeError, ValueError):
-                    pass
-                if verify_accepted_files:
+                    if len(invalid_accepted_metadata) < 1000:
+                        invalid_accepted_metadata.append(
+                            f"{metadata_path}:{reader.line_num}:invalid code_size "
+                            f"{row['code_size']!r}"
+                        )
+                else:
+                    accepted_code_bytes += code_size
+                try:
                     source = _source_path(root, row)
-                    if not source.is_file() and len(missing_accepted_files) < 1000:
+                except ValueError as error:
+                    if len(invalid_accepted_metadata) < 1000:
+                        invalid_accepted_metadata.append(
+                            f"{metadata_path}:{reader.line_num}:{error}"
+                        )
+                else:
+                    if (
+                        verify_accepted_files
+                        and not source.is_file()
+                        and len(missing_accepted_files) < 1000
+                    ):
                         missing_accepted_files.append(str(source))
 
     description_ids = (
@@ -144,6 +181,7 @@ def audit_dataset(
 
     integrity_passed = (
         not malformed_metadata_files
+        and not invalid_accepted_metadata
         and not missing_problem_metadata
         and not unexpected_problem_metadata
         and (not verify_accepted_files or not missing_accepted_files)
@@ -176,6 +214,7 @@ def audit_dataset(
         "accepted_language_counts": dict(accepted_language_counts.most_common()),
         "integrity_findings": {
             "malformed_metadata_files": malformed_metadata_files,
+            "invalid_accepted_metadata_first_1000": invalid_accepted_metadata,
             "missing_problem_metadata": missing_problem_metadata,
             "unexpected_problem_metadata": unexpected_problem_metadata,
             "missing_accepted_files_first_1000": missing_accepted_files,

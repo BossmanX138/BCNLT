@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import sys
@@ -164,9 +163,7 @@ def main() -> int:
             expected_model_fingerprint=config.fingerprint(),
         )
         baseline_source = str(baseline_path)
-        baseline_evaluation_sha256 = hashlib.sha256(
-            baseline_path.read_bytes()
-        ).hexdigest()
+        baseline_evaluation_sha256 = baseline.artifact_sha256
     state = load_model_checkpoint_for_inference(
         arguments.checkpoint,
         model,
