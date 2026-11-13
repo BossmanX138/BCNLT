@@ -33,6 +33,10 @@ vendor/tokenizers_runtime_0_23/tokenizers/tokenizers.pyd filter=lfs diff=lfs mer
 vendor/bcnlt_runtime_v10_learning_candidate/grammars/*.dll filter=lfs diff=lfs merge=lfs -text
 vendor/bcnlt_runtime_v10_learning_candidate/site-packages/**/*.pyd filter=lfs diff=lfs merge=lfs -text
 
+# The frozen tokenizer bundle is content-addressed byte-for-byte, including
+# its JSON manifests and checksum sidecar.
+artifacts/tokenizers/bcnlt-native-foundation-65536-v1/** -text whitespace=-trailing-space
+
 # This owned wheel is verified as an exact byte tree at import time. Treat its
 # wrappers and metadata as opaque vendor payloads so checkout never rewrites
 # upstream CRLF/LF bytes and invalidates the pinned aggregate identity.
