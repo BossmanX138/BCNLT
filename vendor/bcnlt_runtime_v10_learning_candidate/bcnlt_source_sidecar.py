@@ -27,13 +27,64 @@ MAX_REQUEST_BYTES = MAX_SOURCE_BYTES * 6 + 16 * 1024
 MAX_CANONICAL_OUTPUT_BYTES = 16 * 1024 * 1024
 MAX_CANONICAL_RECORDS = 16_384
 MAX_RESPONSE_BYTES = MAX_CANONICAL_OUTPUT_BYTES * 6 + 64 * 1024
-PROTOCOL = "bosscrafts-bcnlt-source-sidecar-v3"
-SIDECAR_SOURCE_SHA256 = hashlib.sha256(
-    Path(__file__)
-    .read_bytes()
-    .replace(b"\r\n", b"\n")
-    .replace(b"\r", b"\n")
+PROTOCOL = "bosscrafts-bcnlt-source-sidecar-v4"
+
+
+def _identity_bytes(path: Path) -> bytes:
+    payload = path.read_bytes()
+    if path.suffix.casefold() == ".py":
+        return payload.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return payload
+
+
+def _sha256_file(path: Path) -> str:
+    return hashlib.sha256(_identity_bytes(path)).hexdigest()
+
+
+def _aggregate_sha256(root: Path, pattern: str) -> str:
+    paths = sorted(
+        (path for path in root.rglob(pattern) if path.is_file()),
+        key=lambda item: item.relative_to(root).as_posix(),
+    )
+    digest = hashlib.sha256()
+    for path in paths:
+        relative = path.relative_to(root).as_posix()
+        payload = _identity_bytes(path)
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(hashlib.sha256(payload).hexdigest().encode("ascii"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+SIDECAR_SOURCE_SHA256 = _sha256_file(Path(__file__))
+_RUNTIME_COMPONENTS = {
+    "source": _aggregate_sha256(SOURCE_ROOT / "bcnlt", "*.py"),
+    "sidecar": SIDECAR_SOURCE_SHA256,
+    "tree_sitter": _sha256_file(
+        SITE_PACKAGES / "tree_sitter" / "_binding.cp313-win_amd64.pyd"
+    ),
+    "language_pack": _sha256_file(
+        SITE_PACKAGES / "tree_sitter_language_pack" / "_native.pyd"
+    ),
+    "grammars": _aggregate_sha256(GRAMMARS, "*.dll"),
+    "site_packages": _aggregate_sha256(SITE_PACKAGES, "*"),
+}
+PARSER_RUNTIME_IDENTITY_SHA256 = hashlib.sha256(
+    json.dumps(_RUNTIME_COMPONENTS, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
 ).hexdigest()
+_GRAMMAR_SHA256 = {
+    path.stem.removeprefix("tree_sitter_"): _sha256_file(path)
+    for path in GRAMMARS.glob("tree_sitter_*.dll")
+}
+
+from bcnlt.adapters import BCNLTMultilingualAdapter, LanguageCarousel  # noqa: E402
+from bcnlt.adapters.tree_sitter import TreeSitterSemanticEngine  # noqa: E402
+from bcnlt.canonical import canonical_record_bytes  # noqa: E402
+from bcnlt.semantic_record import records_from_assessments  # noqa: E402
+from bcnlt.wildcard import WildcardMemory  # noqa: E402
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -117,13 +168,14 @@ def _read_request() -> dict[str, object]:
 
 
 def _run(payload: dict[str, object]) -> dict[str, object]:
-    from bcnlt.adapters import BCNLTMultilingualAdapter, LanguageCarousel
-    from bcnlt.adapters.tree_sitter import TreeSitterSemanticEngine
-    from bcnlt.canonical import canonical_record_bytes
-    from bcnlt.semantic_record import records_from_assessments
-    from bcnlt.wildcard import WildcardMemory
-
     language = str(payload["language"])
+    grammar_path = GRAMMARS / f"tree_sitter_{language}.dll"
+    if (
+        language not in _GRAMMAR_SHA256
+        or not grammar_path.is_file()
+        or _sha256_file(grammar_path) != _GRAMMAR_SHA256[language]
+    ):
+        raise ValueError("language grammar identity changed after sidecar startup")
     source = str(payload["source"])
     path = str(payload["path"])
     dialect = payload["dialect"]
@@ -178,6 +230,7 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
     return {
         "protocol": PROTOCOL,
         "sidecar_source_sha256": SIDECAR_SOURCE_SHA256,
+        "parser_runtime_identity_sha256": PARSER_RUNTIME_IDENTITY_SHA256,
         "language": language,
         "path": path,
         "dialect": dialect,

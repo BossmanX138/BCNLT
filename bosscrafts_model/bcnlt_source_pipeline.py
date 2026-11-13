@@ -52,7 +52,7 @@ from .runtime_identity import (
 from .semantic import NativeSemanticRecordCodec
 from .tokenizer import NativeTokenizerBinding
 
-SIDECAR_PROTOCOL = "bosscrafts-bcnlt-source-sidecar-v3"
+SIDECAR_PROTOCOL = "bosscrafts-bcnlt-source-sidecar-v4"
 CURRENT_RUNTIME_SPEC_SHA256 = {
     "bash": "da1bb0468fb23c5a6eaa8af1eb0e9eeea4b9e295e7ffbc0d4aeb073c671810ca",
     "c": "f3765a6dd8687810a0d51f0ea9067af9bbee6642b98f23419168cd34d75e37f5",
@@ -77,17 +77,17 @@ _DEFAULT_PYTHON_313 = Path(sys.executable).resolve()
 _RUNTIME_MANIFEST = _RUNTIME_ROOT / "runtime-manifest.json"
 _EXPECTED_RUNTIME_IDENTITY = {
     "source": "c5623e97f3f1e1e884e1d54a316d174292fbcbf61da3ddfdbf3b432418e0450a",
-    "sidecar": "457b068eb34b92c495cb31cb37e906284f069383058fbf9e0f5920679666066e",
+    "sidecar": "08e18ae47dfeee41a0f41ead30af617b3ef49bd2027309e33e1752cfa0fd12c7",
     "tree_sitter": "d8efa5533a1c79cc404df3a0ff03d76626ad50d54b74d97e4cf6e30ab85bebe4",
     "language_pack": "18fda57fbe2f52f85cf09fd1fc5af6509bfe0a8c6d3d425cafe3d7b63f8dca6e",
     "grammars": "19fc42827e8ab3b37282c0666caa1ddd8abcd3708298fb1665c10df440c3d090",
     "site_packages": "2bd3e047b78621d289a443a50264c2413f740279f33f41176f3a46848d0c536c",
 }
 _EXPECTED_RUNTIME_MANIFEST_SHA256 = (
-    "370ed148915e45b9c7264a1006e97b54876f43ba825e160be0b2f45582dee634"
+    "4d9945ec9160d6b8b07fb55d81255d88c69cbe392637ed6bbc30cbc6d385c63c"
 )
 PARSER_RUNTIME_IDENTITY_SHA256 = (
-    "6b4eb852950ad425f804905468339e0188e0d539353186afc031c86a6adb0393"
+    "616fb71b9da7e14f16dfd66988d8d2f919208f12edc5d2b193b90e51947b3169"
 )
 PARSER_RUNTIME_NOT_APPLICABLE = "not_applicable"
 _FIELD_ORDER = (
@@ -110,6 +110,7 @@ _RESPONSE_KEYS = frozenset(
     (
         "protocol",
         "sidecar_source_sha256",
+        "parser_runtime_identity_sha256",
         "language",
         "path",
         "dialect",
@@ -884,6 +885,8 @@ class BCNLTSourcePipeline:
                 response["protocol"] != SIDECAR_PROTOCOL
                 or response["sidecar_source_sha256"]
                 != _EXPECTED_RUNTIME_IDENTITY["sidecar"]
+                or response["parser_runtime_identity_sha256"]
+                != PARSER_RUNTIME_IDENTITY_SHA256
                 or response["language"] != language
                 or response["path"] != path
                 or response["dialect"] != dialect

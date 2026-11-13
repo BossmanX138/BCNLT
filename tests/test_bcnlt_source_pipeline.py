@@ -129,18 +129,26 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
             response["sidecar_source_sha256"],
             _EXPECTED_RUNTIME_IDENTITY["sidecar"],
         )
+        self.assertEqual(
+            response["parser_runtime_identity_sha256"],
+            self.pipeline.parser_runtime_identity_sha256,
+        )
 
-        tampered = dict(response)
-        tampered["sidecar_source_sha256"] = "0" * 64
-        with patch.object(self.pipeline, "_invoke_sidecar", return_value=tampered):
-            with self.assertRaisesRegex(
-                BCNLTPreprocessingError, "sidecar provenance mismatch"
-            ):
-                self.pipeline.prepare_semantic(
-                    source,
-                    language="python",
-                    path="attested.py",
-                )
+        for field in ("sidecar_source_sha256", "parser_runtime_identity_sha256"):
+            with self.subTest(field=field):
+                tampered = dict(response)
+                tampered[field] = "0" * 64
+                with patch.object(
+                    self.pipeline, "_invoke_sidecar", return_value=tampered
+                ):
+                    with self.assertRaisesRegex(
+                        BCNLTPreprocessingError, "sidecar provenance mismatch"
+                    ):
+                        self.pipeline.prepare_semantic(
+                            source,
+                            language="python",
+                            path="attested.py",
+                        )
 
     def test_semantic_decoder_rejects_null_in_required_surface_field(self):
         prepared = self.pipeline.prepare_semantic(

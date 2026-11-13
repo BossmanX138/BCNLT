@@ -18,11 +18,11 @@ actionable defect after the repairs and gates below.
 - The contained runtime is sealed by the normalized Python-source aggregate
   `c5623e97f3f1e1e884e1d54a316d174292fbcbf61da3ddfdbf3b432418e0450a`.
 - The resulting parser runtime identity is
-  `6b4eb852950ad425f804905468339e0188e0d539353186afc031c86a6adb0393`.
+  `616fb71b9da7e14f16dfd66988d8d2f919208f12edc5d2b193b90e51947b3169`.
 - Ruff passed every changed Python file.
 - Mypy passed all 64 configured core source files and the changed orchestration
   scripts in strict mode.
-- The latest complete regression passed: 508 tests and 186 subtests, with
+- The latest complete regression passed: 508 tests and 188 subtests, with
   warnings treated as errors.
 - The earlier semantic-integrity baseline measured 74.5463% branch coverage:
   17,861 covered and 4,539 missing lines; 3,252 covered and 2,670 missing
@@ -72,9 +72,9 @@ than a hidden functional failure.
    dependency export passes `pip-audit`.
 9. The parser subprocess could be replaced after the runtime inventory check
    without attesting the executable sidecar bytes in its response. Sidecar
-   protocol V3 now reports its normalized source hash, launch paths recheck the
-   frozen hash immediately before execution, and the host rejects any response
-   that does not match the frozen runtime identity.
+   protocol V4 now reports its normalized source hash and complete parser-runtime
+   identity, launch paths recheck the frozen source immediately before execution,
+   and each parse rechecks its selected grammar before producing evidence.
 10. Malformed semantic records could escape as ordinary validation exceptions
     even when the caller explicitly requested the auditable raw-code fallback.
     Semantic handoff validation now fails through the preprocessing error

@@ -12,7 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = PROJECT_ROOT / "vendor" / "bcnlt_runtime_v10_learning_candidate"
 SIDECAR = RUNTIME / "bcnlt_source_sidecar.py"
 PYTHON_313 = Path(sys.executable).resolve()
-PROTOCOL = "bosscrafts-bcnlt-source-sidecar-v3"
+PROTOCOL = "bosscrafts-bcnlt-source-sidecar-v4"
 
 
 def _run_raw_sidecar(request: str) -> subprocess.CompletedProcess[str]:
