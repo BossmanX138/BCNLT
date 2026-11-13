@@ -54,6 +54,10 @@ class GenerationGateRecord(TypedDict):
     tokens_per_second: float
 
 
+_HUMANEVAL_RECORD_FIELDS = frozenset(HumanEvalGenerationRecord.__annotations__)
+_GENERATION_GATE_RECORD_FIELDS = frozenset(GenerationGateRecord.__annotations__)
+
+
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
     result: dict[str, object] = {}
     for key, value in pairs:
@@ -181,6 +185,8 @@ def load_humaneval_generation_records(
         return records
     for line_number, row in _iter_rows(path, "HumanEval generation"):
         label = f"HumanEval generation record {line_number}"
+        if set(row) != _HUMANEVAL_RECORD_FIELDS:
+            raise ValueError(f"{label} fields are invalid")
         if _string(row, "schema_version", label) != HUMANEVAL_GENERATION_SCHEMA:
             raise ValueError(f"{label} schema_version is invalid")
         identity = _identity(row, run_identity, label)
@@ -241,6 +247,8 @@ def load_generation_gate_records(
         return records
     for line_number, row in _iter_rows(path, "generation gate"):
         label = f"generation gate record {line_number}"
+        if set(row) != _GENERATION_GATE_RECORD_FIELDS:
+            raise ValueError(f"{label} fields are invalid")
         if _string(row, "schema_version", label) != GENERATION_GATE_SCHEMA:
             raise ValueError(f"{label} schema_version is invalid")
         identity = _identity(row, run_identity, label)

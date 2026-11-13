@@ -147,6 +147,54 @@ def _select_cases(
     return [row for family in families for row in selected[family]]
 
 
+def _verify_resumed_records(
+    binding: NativeTokenizerBinding,
+    cases: list[_GenerationCase],
+    records: Mapping[str, GenerationGateRecord],
+    *,
+    maximum_new_tokens: int,
+) -> None:
+    """Rebind persisted records to their exact held-out rows and tokenizer."""
+    selected = {str(case["example_id"]): case for case in cases}
+    if not set(records).issubset(selected):
+        raise ValueError("generation gate records contain an unselected example")
+    for example_id, record in records.items():
+        case = selected[example_id]
+        family = str(case["family"])
+        prompt_ids = list(case["prompt_ids"])
+        expected_ids = list(case["expected_ids"])
+        generated_ids = list(record["generated_ids"])
+        if record["example_id"] != example_id:
+            raise ValueError("generation gate record key is inconsistent")
+        if record["family"] != family:
+            raise ValueError("generation gate record family does not match its case")
+        if record["prompt_token_count"] != len(prompt_ids):
+            raise ValueError("generation gate prompt count does not match its case")
+        if (
+            record["expected_token_count"] != len(expected_ids)
+            or record["expected_ids"] != expected_ids
+        ):
+            raise ValueError("generation gate expected tokens do not match their case")
+        if len(generated_ids) > maximum_new_tokens:
+            raise ValueError("generation gate record exceeds the generation bound")
+        if any(token_id >= binding.vocab_size for token_id in generated_ids):
+            raise ValueError("generation gate record contains an out-of-vocabulary token")
+        if record["expected_protocol_text"] != binding.decode(expected_ids):
+            raise ValueError("generation gate expected text is inconsistent")
+        if record["generated_protocol_text"] != binding.decode(generated_ids):
+            raise ValueError("generation gate generated text is inconsistent")
+        payload_ids = response_payload_token_ids(binding, family, generated_ids)
+        if record["generated_payload_text"] != binding.decode(payload_ids):
+            raise ValueError("generation gate payload text is inconsistent")
+        protocol_complete = response_protocol_complete(
+            binding,
+            task=family,
+            generated_ids=generated_ids,
+        )
+        if record["protocol_complete"] is not protocol_complete:
+            raise ValueError("generation gate protocol result is inconsistent")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--database", type=Path, default=DEFAULT_DATABASE)
@@ -263,9 +311,12 @@ def main() -> int:
 
     records_path = output / "generation-records.jsonl"
     records = load_generation_gate_records(records_path, run_identity)
-    selected_ids = {str(row["example_id"]) for row in cases}
-    if not set(records).issubset(selected_ids):
-        raise ValueError("generation gate records contain an unselected example")
+    _verify_resumed_records(
+        binding,
+        cases,
+        records,
+        maximum_new_tokens=arguments.max_new_tokens,
+    )
 
     device = torch.device(arguments.device)
     dtype = torch.float32 if arguments.dtype == "float32" else torch.bfloat16

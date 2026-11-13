@@ -119,3 +119,39 @@ def test_generation_artifacts_reject_duplicate_json_keys(tmp_path: Path) -> None
 
     with pytest.raises(ValueError, match="invalid JSON"):
         load_generation_gate_records(path, RUN_IDENTITY)
+
+
+def test_generation_artifacts_reject_unrecognized_fields(tmp_path: Path) -> None:
+    path = tmp_path / "records.jsonl"
+    record = _generation_gate_record()
+    record["untrusted_override"] = True
+    _write_jsonl(path, record)
+
+    with pytest.raises(ValueError, match="fields are invalid"):
+        load_generation_gate_records(path, RUN_IDENTITY)
+
+
+def test_generation_gate_rebinds_resumed_records_to_selected_case() -> None:
+    from scripts.evaluate_generation_gate import _verify_resumed_records
+
+    record = _generation_gate_record()
+    record["expected_ids"] = [10, 12]
+    record["exact_match"] = False
+    record["target_token_accuracy"] = 0.5
+    case = {
+        "example_id": "example-1",
+        "family": "instruction_to_code",
+        "prompt_ids": [1, 2],
+        "expected_ids": [10, 11],
+    }
+
+    class _Binding:
+        vocab_size = 65_536
+
+    with pytest.raises(ValueError, match="expected tokens do not match"):
+        _verify_resumed_records(
+            _Binding(),  # type: ignore[arg-type]
+            [case],  # type: ignore[list-item]
+            {"example-1": record},  # type: ignore[dict-item]
+            maximum_new_tokens=256,
+        )
