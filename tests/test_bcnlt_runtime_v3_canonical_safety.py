@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 from runtime_import import select_bcnlt_runtime
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_SOURCE = (
-    PROJECT_ROOT / "vendor" / "bcnlt_runtime_v3_candidate" / "source"
+    PROJECT_ROOT / "vendor" / "bcnlt_runtime_v10_learning_candidate" / "source"
 )
+# These cases originated during the V3 audit, but they are current-runtime
+# regressions. Binding them to an ignored historical checkout made a fresh
+# clone silently test different code from the candidate under review.
 select_bcnlt_runtime(RUNTIME_SOURCE)
 
 from bcnlt.canonical import (  # noqa: E402
