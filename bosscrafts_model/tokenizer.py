@@ -164,6 +164,17 @@ DEFAULT_BUNDLE = (
     _PROJECT_ROOT / "artifacts" / "tokenizers" / "bcnlt-native-foundation-65536-v1"
 )
 _STANDARD_SPECIAL_LITERALS = ("<|unk|>", "<|bos|>", "<|eos|>", "<|pad|>")
+_BOUND_TOKENIZER_FILES = frozenset(
+    {
+        "binding.json",
+        "binding.sha256",
+        "tokenizer.json",
+        "source-manifest.json",
+        "structural-tokens.json",
+        "structural-token-ids.json",
+        "model-config-65536.json",
+    }
+)
 
 
 def validate_contiguous_vocab(vocab: dict[str, int], *, expected_size: int) -> None:
@@ -227,6 +238,9 @@ class NativeTokenizerBinding:
 
     @classmethod
     def load(cls, bundle_path: str | Path = DEFAULT_BUNDLE) -> NativeTokenizerBinding:
+        # Recheck the complete owned runtime on every trust-boundary load.  The
+        # module-level verification only proves its state at import time.
+        _verify_owned_tokenizers_runtime(_TOKENIZERS_RUNTIME_ROOT.resolve())
         runtime_file = getattr(tokenizers, "__file__", None)
         if not isinstance(runtime_file, str):
             raise ValueError("owned tokenizers runtime has no package path")
@@ -242,6 +256,14 @@ class NativeTokenizerBinding:
         ):
             raise ValueError("owned tokenizers runtime binary SHA-256 mismatch")
         root = Path(bundle_path).resolve()
+        if not root.is_dir():
+            raise ValueError("tokenizer bundle is not a directory")
+        entries = tuple(root.iterdir())
+        if (
+            {entry.name for entry in entries} != _BOUND_TOKENIZER_FILES
+            or any(not entry.is_file() or entry.is_symlink() for entry in entries)
+        ):
+            raise ValueError("tokenizer bundle inventory mismatch")
         binding_path = root / "binding.json"
         actual_binding_hash = _sha256(binding_path)
         if actual_binding_hash != EXPECTED_BINDING_SHA256:

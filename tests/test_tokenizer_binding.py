@@ -83,6 +83,29 @@ class NativeTokenizerBindingTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "tokenizers runtime mismatch"):
                 NativeTokenizerBinding.load(BUNDLE)
 
+    def test_load_revalidates_the_complete_owned_runtime(self):
+        with patch(
+            "bosscrafts_model.tokenizer._verify_owned_tokenizers_runtime",
+            side_effect=ValueError("owned runtime changed after import"),
+        ):
+            with self.assertRaisesRegex(ValueError, "changed after import"):
+                NativeTokenizerBinding.load(BUNDLE)
+
+    def test_unexpected_bundle_entries_fail_closed(self):
+        with tempfile.TemporaryDirectory(dir=PROJECT_ROOT) as directory:
+            copied = Path(directory) / "bundle"
+            shutil.copytree(BUNDLE, copied)
+            (copied / "untracked.txt").write_text("not part of the binding", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "bundle inventory mismatch"):
+                NativeTokenizerBinding.load(copied)
+
+        with tempfile.TemporaryDirectory(dir=PROJECT_ROOT) as directory:
+            copied = Path(directory) / "bundle"
+            shutil.copytree(BUNDLE, copied)
+            (copied / "untracked-directory").mkdir()
+            with self.assertRaisesRegex(ValueError, "bundle inventory mismatch"):
+                NativeTokenizerBinding.load(copied)
+
     def test_corruption_and_manifest_mismatch_fail_closed(self):
         with tempfile.TemporaryDirectory(dir=PROJECT_ROOT) as directory:
             copied = Path(directory) / "bundle"
