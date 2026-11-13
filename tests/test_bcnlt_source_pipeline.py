@@ -202,6 +202,44 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
             self.binding.structural_token_ids["<|bcnlt:mode:raw_code|>"],
         )
 
+    def test_invalid_semantic_handoff_uses_only_explicit_auditable_fallback(self):
+        source = "x = 1\n"
+        response = self.pipeline._invoke_sidecar(
+            source,
+            language="python",
+            path="malformed.py",
+            dialect=None,
+        )
+        malformed = dict(response)
+        malformed["canonical_jsonl"] = '{"broken":true}\n'
+        malformed["canonical_sha256"] = hashlib.sha256(
+            malformed["canonical_jsonl"].encode("utf-8")
+        ).hexdigest()
+        malformed["record_count"] = 1
+
+        with patch.object(self.pipeline, "_invoke_sidecar", return_value=malformed):
+            with self.assertRaisesRegex(
+                BCNLTPreprocessingError, "semantic handoff validation failed"
+            ):
+                self.pipeline.prepare_semantic(
+                    source,
+                    language="python",
+                    path="malformed.py",
+                )
+
+            prepared = self.pipeline.prepare_semantic(
+                source,
+                language="python",
+                path="malformed.py",
+                allow_raw_fallback=True,
+            )
+        self.assertEqual(prepared.mode, "raw_code")
+        self.assertTrue(prepared.used_raw_fallback)
+        self.assertEqual(
+            prepared.fallback_reason,
+            "BCNLT semantic handoff validation failed",
+        )
+
     def test_unsupported_language_fails_closed(self):
         with self.assertRaisesRegex(ValueError, "unsupported BCNLT language"):
             self.pipeline.prepare_semantic("+", language="brainfuck", path="x.bf")

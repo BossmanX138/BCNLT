@@ -22,7 +22,7 @@ actionable defect after the repairs and gates below.
 - Ruff passed every changed Python file.
 - Mypy passed all 64 configured core source files and the changed orchestration
   scripts in strict mode.
-- The latest complete regression passed: 507 tests and 186 subtests, with
+- The latest complete regression passed: 508 tests and 186 subtests, with
   warnings treated as errors.
 - The earlier semantic-integrity baseline measured 74.5463% branch coverage:
   17,861 covered and 4,539 missing lines; 3,252 covered and 2,670 missing
@@ -75,6 +75,11 @@ than a hidden functional failure.
    protocol V3 now reports its normalized source hash, launch paths recheck the
    frozen hash immediately before execution, and the host rejects any response
    that does not match the frozen runtime identity.
+10. Malformed semantic records could escape as ordinary validation exceptions
+    even when the caller explicitly requested the auditable raw-code fallback.
+    Semantic handoff validation now fails through the preprocessing error
+    contract by default and uses raw-code fallback only when explicitly enabled,
+    preserving the failure reason in the prepared input.
 
 ## Boundaries
 

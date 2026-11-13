@@ -964,6 +964,18 @@ class BCNLTSourcePipeline:
                 learned_definition_count=learned_definition_count,
                 extended_core_entry_count=extended_core_entry_count,
             )
+        except (TypeError, ValueError, UnicodeError) as error:
+            normalized = BCNLTPreprocessingError(
+                "BCNLT semantic handoff validation failed"
+            )
+            if not allow_raw_fallback:
+                raise normalized from error
+            return self.prepare_raw(
+                source,
+                language=language,
+                path=path,
+                fallback_reason=str(normalized),
+            )
         except BCNLTPreprocessingError as error:
             if not allow_raw_fallback:
                 raise
