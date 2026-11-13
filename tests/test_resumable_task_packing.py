@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from bosscrafts_model.bcnlt_source_pipeline import BCNLTSourcePipeline
 from bosscrafts_model.current_corpus import SourceCandidate
@@ -182,6 +183,47 @@ class ResumableTaskPackingTests(unittest.TestCase):
                 self.assertTrue(
                     all(0 <= token_id < self.binding.vocab_size for token_id in row["input_ids"])
                 )
+            victim = rows[0]
+            hardening = sqlite3.connect(tasks_path)
+            try:
+                hardening.execute(
+                    "UPDATE tasks SET token_count=? WHERE example_id=?",
+                    (10**9, victim["example_id"]),
+                )
+                hardening.commit()
+            finally:
+                hardening.close()
+            with patch.object(
+                module,
+                "decompress_bounded",
+                side_effect=AssertionError("oversized row reached decompression"),
+            ):
+                with self.assertRaisesRegex(ValueError, "token count"):
+                    module.audit_task_database(self.binding, tasks_path)
+            hardening = sqlite3.connect(tasks_path)
+            try:
+                hardening.execute(
+                    "UPDATE tasks SET token_count=? WHERE example_id=?",
+                    (len(victim["input_ids"]), victim["example_id"]),
+                )
+                hardening.execute(
+                    "UPDATE tasks SET split='untrusted' WHERE example_id=?",
+                    (victim["example_id"],),
+                )
+                hardening.commit()
+            finally:
+                hardening.close()
+            with self.assertRaisesRegex(ValueError, "split"):
+                dataset_type(self.binding, tasks_path)
+            hardening = sqlite3.connect(tasks_path)
+            try:
+                hardening.execute(
+                    "UPDATE tasks SET split=? WHERE example_id=?",
+                    (victim["split"], victim["example_id"]),
+                )
+                hardening.commit()
+            finally:
+                hardening.close()
             try:
                 remaining = list(
                     dataset.iter_examples(after_example_id=rows[0]["example_id"])

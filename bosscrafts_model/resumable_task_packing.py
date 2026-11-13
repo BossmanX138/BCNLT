@@ -17,6 +17,7 @@ from typing import TypedDict, cast
 
 from .bcnlt_adapter import MAX_CANONICAL_OUTPUT_BYTES
 from .bcnlt_source_pipeline import (
+    CURRENT_RUNTIME_SPEC_SHA256,
     PARSER_RUNTIME_IDENTITY_SHA256,
     PARSER_RUNTIME_NOT_APPLICABLE,
 )
@@ -37,6 +38,14 @@ TASK_DATABASE_SCHEMA = "bosscrafts-current-task-resumable-v3"
 FULL_SEMANTIC_WIRE_SCHEMA = "bosscrafts-full-semantic-wire-v3"
 CELL_WEIGHT_MULTIPLIERS_METADATA_KEY = "training_cell_weight_multipliers_v1_json"
 SALTED_SOURCE_EXAMPLE_ID_POLICY = "bosscrafts-v11-salted-source-example-id-v1"
+_TASK_FAMILIES = frozenset(
+    {
+        "instruction_to_code",
+        "code_to_semantic",
+        "semantic_continuation",
+        "semantic_to_code",
+    }
+)
 
 
 class TaskExample(TypedDict):
@@ -152,6 +161,19 @@ class ResumableTaskDataset:
                 raise ValueError("task database tokenizer lineage mismatch")
             if self.metadata.get("packing_complete") != "true":
                 raise ValueError("task database packing is incomplete")
+            raw_maximum_sequence = self.metadata.get("maximum_sequence_tokens")
+            try:
+                maximum_sequence = int(raw_maximum_sequence or "")
+            except ValueError as error:
+                raise ValueError(
+                    "task database maximum sequence metadata is invalid"
+                ) from error
+            if (
+                raw_maximum_sequence != str(maximum_sequence)
+                or not 2 <= maximum_sequence <= 1_000_000
+            ):
+                raise ValueError("task database maximum sequence metadata is invalid")
+            self._maximum_sequence_tokens = maximum_sequence
             self.identity_sha256 = hashlib.sha256(
                 _canonical_json(self.metadata).encode("utf-8")
             ).hexdigest()
@@ -165,9 +187,18 @@ class ResumableTaskDataset:
             raise ValueError("completed task database is empty")
         by_split: dict[str, list[tuple[str, str, str, int]]] = {}
         for split, language, family, count in counts:
-            by_split.setdefault(str(split), []).append(
-                (str(split), str(language), str(family), int(count))
-            )
+            if (
+                type(split) is not str
+                or split not in {"train", "validation", "test"}
+                or type(language) is not str
+                or language not in CURRENT_RUNTIME_SPEC_SHA256
+                or type(family) is not str
+                or family not in _TASK_FAMILIES
+                or type(count) is not int
+                or count < 1
+            ):
+                raise ValueError("task database split, language, or family is invalid")
+            by_split.setdefault(split, []).append((split, language, family, count))
         raw_multipliers = self.metadata.get(CELL_WEIGHT_MULTIPLIERS_METADATA_KEY)
         multipliers: dict[tuple[str, str, str], float] = {}
         if raw_multipliers is not None:
@@ -261,41 +292,54 @@ class ResumableTaskDataset:
                 query += " WHERE " + " AND ".join(conditions)
             query += " ORDER BY example_id"
             for row in connection.execute(query, tuple(parameters)):
-                family = str(row[3])
+                family = row[3]
+                split_value = row[5]
+                language = row[2]
                 expected_runtime = (
                     PARSER_RUNTIME_NOT_APPLICABLE
                     if family == "instruction_to_code"
                     else PARSER_RUNTIME_IDENTITY_SHA256
                 )
                 if (
-                    family
-                    not in {
-                        "instruction_to_code",
-                        "code_to_semantic",
-                        "semantic_continuation",
-                        "semantic_to_code",
-                    }
+                    type(family) is not str
+                    or family not in _TASK_FAMILIES
+                    or type(split_value) is not str
+                    or split_value not in {"train", "validation", "test"}
+                    or type(language) is not str
+                    or language not in CURRENT_RUNTIME_SPEC_SHA256
                     or str(row[10]) != expected_runtime
                 ):
                     raise ValueError("task row parser runtime lineage mismatch")
-                expected_input_bytes = int(row[7]) * 2
+                token_count = row[7]
+                if (
+                    type(token_count) is not int
+                    or not 2 <= token_count <= self._maximum_sequence_tokens
+                ):
+                    raise ValueError("task token count exceeds configured maximum")
+                if type(row[6]) is not bytes:
+                    raise ValueError("task token blob is invalid")
+                expected_input_bytes = token_count * 2
                 input_ids = _decode_u16(
                     decompress_bounded(
                         row[6],
                         maximum_output_bytes=expected_input_bytes,
                     )
                 )
-                if len(input_ids) != int(row[7]):
+                if len(input_ids) != token_count:
                     raise ValueError("task token count mismatch")
                 if any(token_id >= self._binding.vocab_size for token_id in input_ids):
                     raise ValueError("task token exceeds frozen vocabulary")
-                loss_start = int(row[8])
+                loss_start = row[8]
+                if type(loss_start) is not int:
+                    raise ValueError("task loss boundary is invalid")
                 if not 0 < loss_start < len(input_ids):
                     raise ValueError("task loss boundary is invalid")
-                record_index = int(row[4])
+                record_index = row[4]
+                if type(record_index) is not int:
+                    raise ValueError("task record index is invalid")
                 if record_index < 0:
                     raise ValueError("task record index is invalid")
-                cell = (str(row[5]), str(row[2]), family)
+                cell = (split_value, language, family)
                 yield {
                     "example_id": str(row[0]),
                     "document_id": str(row[1]),
