@@ -33,6 +33,8 @@ APPROVED_LICENSES = frozenset(
     )
 )
 MAX_SOURCE_BYTES = 200 * 1024
+MAX_PILOT_DOCUMENTS = 64
+MAX_PILOT_JSONL_BYTES = 128 * 1024 * 1024
 
 
 def _canonical_json(payload: object) -> str:
@@ -247,7 +249,14 @@ class CurrentCorpusAdmission:
         candidates: Iterable[SourceCandidate],
         output_root: str | Path,
     ) -> CurrentCorpusResult:
-        indexed = list(enumerate(candidates))
+        indexed: list[tuple[int, SourceCandidate]] = []
+        for index, candidate in enumerate(candidates):
+            if index >= MAX_PILOT_DOCUMENTS:
+                raise ValueError(
+                    "non-resumable pilot admission exceeds its document limit; "
+                    "use ResumableCurrentCorpusAdmission for full corpora"
+                )
+            indexed.append((index, candidate))
         ordered = [
             item
             for _, item in sorted(
@@ -322,10 +331,16 @@ class CurrentCorpusAdmission:
                 }
             )
 
-        records_text = "".join(f"{_canonical_json(record)}\n" for record in records)
-        rejections_text = "".join(
-            f"{_canonical_json(record)}\n" for record in rejections
-        )
+        record_lines = [f"{_canonical_json(record)}\n" for record in records]
+        rejection_lines = [f"{_canonical_json(record)}\n" for record in rejections]
+        encoded_bytes = sum(len(line.encode("utf-8")) for line in (*record_lines, *rejection_lines))
+        if encoded_bytes > MAX_PILOT_JSONL_BYTES:
+            raise ValueError(
+                "non-resumable pilot admission exceeds its output byte limit; "
+                "use ResumableCurrentCorpusAdmission for full corpora"
+            )
+        records_text = "".join(record_lines)
+        rejections_text = "".join(rejection_lines)
         records_sha256 = _sha256_text(records_text)
         rejections_sha256 = _sha256_text(rejections_text)
         language_ids = sorted({str(record["language"]) for record in records})

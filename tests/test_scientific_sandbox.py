@@ -3,11 +3,55 @@ from __future__ import annotations
 import subprocess
 import time
 import unittest
+from unittest import mock
 
-from bosscrafts_model.scientific_sandbox import DockerScientificSandbox
+from bosscrafts_model.scientific_sandbox import (
+    DockerScientificSandbox,
+    SandboxExecutionError,
+)
 
 
 class ScientificSandboxIntegrationTests(unittest.TestCase):
+    def test_cleanup_timeout_is_reported_as_a_sandbox_failure(self) -> None:
+        sandbox = DockerScientificSandbox.load_default()
+        with (
+            mock.patch.object(sandbox, "_create_container", return_value="container-id"),
+            mock.patch.object(
+                sandbox,
+                "_inspect_container",
+                side_effect=ValueError("fixture inspection failure"),
+            ),
+            mock.patch(
+                "bosscrafts_model.scientific_sandbox.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(["docker", "rm"], 10),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                SandboxExecutionError,
+                "sandbox container cleanup failed: docker rm timed out",
+            ):
+                sandbox.execute(language="python", source="print(1)\n", stdin_text="")
+
+    def test_cleanup_launch_failure_is_reported_as_a_sandbox_failure(self) -> None:
+        sandbox = DockerScientificSandbox.load_default()
+        with (
+            mock.patch.object(sandbox, "_create_container", return_value="container-id"),
+            mock.patch.object(
+                sandbox,
+                "_inspect_container",
+                side_effect=ValueError("fixture inspection failure"),
+            ),
+            mock.patch(
+                "bosscrafts_model.scientific_sandbox.subprocess.run",
+                side_effect=OSError("fixture docker unavailable"),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                SandboxExecutionError,
+                "sandbox container cleanup failed: docker rm could not start",
+            ):
+                sandbox.execute(language="python", source="print(1)\n", stdin_text="")
+
     def test_python_execution_is_isolated_attested_and_disposable(self) -> None:
         sandbox = DockerScientificSandbox.load_default()
         result = sandbox.execute(

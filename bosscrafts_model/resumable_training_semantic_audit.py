@@ -5,12 +5,13 @@ import hashlib
 import json
 import sqlite3
 import subprocess
-import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
 
+from .bcnlt_adapter import MAX_CANONICAL_OUTPUT_BYTES
 from .bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
+from .compression import decompress_bounded
 from .deterministic_semantic_audit import DeterministicSemanticAuditor
 from .jsonl import split_jsonl_records
 from .raw_ast_witness import RawAstWitnessClient
@@ -501,8 +502,11 @@ class ResumableTrainingSemanticAudit:
         canonical_payload_sha256 = _sha256_bytes(canonical_payload)
         semantic_payload_sha256 = _sha256_bytes(semantic_payload)
         try:
-            canonical_jsonl = zlib.decompress(canonical_payload).decode("utf-8")
-        except (TypeError, zlib.error, UnicodeDecodeError) as exc:
+            canonical_jsonl = decompress_bounded(
+                canonical_payload,
+                maximum_output_bytes=MAX_CANONICAL_OUTPUT_BYTES,
+            ).decode("utf-8")
+        except (TypeError, ValueError, UnicodeDecodeError) as exc:
             raise ValueError("canonical JSONL payload is invalid") from exc
         if _sha256_bytes(canonical_jsonl.encode("utf-8")) != admission["canonical_sha256"]:
             raise ValueError("canonical JSONL SHA-256 mismatch")

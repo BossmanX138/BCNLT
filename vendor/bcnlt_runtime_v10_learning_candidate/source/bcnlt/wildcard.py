@@ -3,10 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
+import threading
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from enum import Enum
 from pathlib import Path
+from typing import Iterator
 
 from .cache import ProjectIndex
 from .core import ContextualUnit
@@ -38,6 +42,8 @@ MAX_CONTEXT_FINGERPRINTS_PER_RECORD = 256
 MAX_DOCUMENT_IDENTITIES_PER_RECORD = 16
 MAX_CODING_OUTCOMES_PER_RECORD = 32
 MAX_SCIENTIFIC_EXPERIMENTS_PER_RECORD = 32
+
+_LEDGER_PROCESS_LOCK = threading.RLock()
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -134,7 +140,11 @@ class WildcardMemory:
         self.load_warnings: list[str] = []
         self._truncated_tail_offset: int | None = None
         if self.path is not None and self.path.exists():
-            self._load()
+            if self.read_only:
+                self._load()
+            else:
+                with self._write_transaction():
+                    self._reload_from_disk()
 
     def signature_for(self, unit: ContextualUnit) -> str:
         surface = unit.surface.strip().lower()
@@ -167,7 +177,64 @@ class WildcardMemory:
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
+    @contextmanager
+    def _write_transaction(self) -> Iterator[None]:
+        with _LEDGER_PROCESS_LOCK:
+            if self.path is None:
+                yield
+                return
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            lock_path = self.path.with_name(f".{self.path.name}.lock")
+            with lock_path.open("a+b") as handle:
+                handle.seek(0, os.SEEK_END)
+                if handle.tell() == 0:
+                    handle.write(b"\0")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                handle.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                    try:
+                        yield
+                    finally:
+                        handle.seek(0)
+                        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                    try:
+                        yield
+                    finally:
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    def _reload_from_disk(self) -> None:
+        if self.path is None:
+            return
+        self.records.clear()
+        self.load_warnings.clear()
+        self._truncated_tail_offset = None
+        if self.path.exists():
+            self._load()
+
     def remember(
+        self,
+        unit: ContextualUnit,
+        meaning: ProvisionalMeaning,
+        *,
+        document_identity: str | None = None,
+    ) -> WildcardMemoryRecord:
+        with self._write_transaction():
+            self._reload_from_disk()
+            return self._remember_unlocked(
+                unit,
+                meaning,
+                document_identity=document_identity,
+            )
+
+    def _remember_unlocked(
         self,
         unit: ContextualUnit,
         meaning: ProvisionalMeaning,
@@ -300,6 +367,25 @@ class WildcardMemory:
         negative_control: HypothesisProjection,
         verifier: object | None = None,
     ) -> WildcardMemoryRecord:
+        with self._write_transaction():
+            self._reload_from_disk()
+            return self._run_scientific_experiment_unlocked(
+                unit,
+                source=source,
+                fixture=fixture,
+                negative_control=negative_control,
+                verifier=verifier,
+            )
+
+    def _run_scientific_experiment_unlocked(
+        self,
+        unit: ContextualUnit,
+        *,
+        source: str,
+        fixture: CodingExperimentFixture,
+        negative_control: HypothesisProjection,
+        verifier: object | None = None,
+    ) -> WildcardMemoryRecord:
         if self.read_only:
             raise RuntimeError("Frozen wildcard memory is read-only")
         previous = self.lookup(unit)
@@ -392,6 +478,33 @@ class WildcardMemory:
         )
 
     def record_coding_outcome(
+        self,
+        unit: ContextualUnit,
+        *,
+        target_event: str,
+        target_ir_kind: str,
+        evidence: tuple[str, ...],
+        document_identity: str,
+        verification_oracle: str,
+        result_fingerprint: str,
+        correct: bool,
+        extension_name: str | None = None,
+    ) -> WildcardMemoryRecord:
+        with self._write_transaction():
+            self._reload_from_disk()
+            return self._record_coding_outcome_unlocked(
+                unit,
+                target_event=target_event,
+                target_ir_kind=target_ir_kind,
+                evidence=evidence,
+                document_identity=document_identity,
+                verification_oracle=verification_oracle,
+                result_fingerprint=result_fingerprint,
+                correct=correct,
+                extension_name=extension_name,
+            )
+
+    def _record_coding_outcome_unlocked(
         self,
         unit: ContextualUnit,
         *,
@@ -543,6 +656,8 @@ class WildcardMemory:
                 raise ValueError("Learned-memory ledger exceeds the bounded file limit")
             with self.path.open("ab") as handle:
                 handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
         self.records[record.signature] = record
 
     def _load(self) -> None:

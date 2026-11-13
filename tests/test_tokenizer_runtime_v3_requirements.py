@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
+from bosscrafts_model import tokenizer as tokenizer_module
 from bosscrafts_model.bcnlt_adapter import (
     BCNLTMultilingualOutputAdapter,
     BCNLTParserOutputProvenance,
@@ -16,8 +17,6 @@ from bosscrafts_model.inference_protocol import (
 )
 from bosscrafts_model.semantic import NativeSemanticRecordCodec, SemanticRecord
 from bosscrafts_model.tokenizer import NativeTokenizerBinding
-from bosscrafts_model import tokenizer as tokenizer_module
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_ROOT = PROJECT_ROOT / "artifacts" / "bcnlt" / "multilingual-parser-output-v1"
@@ -155,7 +154,7 @@ class TokenizerRuntimeV3RequirementsTests(unittest.TestCase):
 
     def test_semantic_preparation_binds_exact_v10_runtime_identity(self):
         pipeline = BCNLTSourcePipeline(self.binding)
-        expected = "50fddafd5e1f7e1f58bb71650f4c87f4a9bb8177c416b01ac21398c29e41dd45"
+        expected = "98d8a4f36757491e6b96e533732180fdb2bddb693756289f0a21337bb4bfa80a"
         self.assertEqual(pipeline.parser_runtime_identity_sha256, expected)
         prepared = pipeline.prepare_semantic(
             "def add(left, right):\n    return left + right\n",

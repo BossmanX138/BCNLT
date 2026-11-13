@@ -95,3 +95,50 @@ def test_coding_outcome_evidence_is_bounded() -> None:
     assert len(record.evidence) == MAX_EVIDENCE_ITEMS_PER_RECORD
     assert len(record.coding_outcomes) <= MAX_CODING_OUTCOMES_PER_RECORD
     assert len(record.coding_outcomes[0].evidence) == MAX_EVIDENCE_ITEMS_PER_RECORD
+
+
+def test_independent_writers_reload_and_merge_before_appending(tmp_path: Path) -> None:
+    ledger = tmp_path / "c.jsonl"
+    first = WildcardMemory(
+        ledger,
+        language="c",
+        semantic_spec_sha256="d" * 64,
+    )
+    second = WildcardMemory(
+        ledger,
+        language="c",
+        semantic_spec_sha256="d" * 64,
+    )
+    unit = ContextualUnit(
+        surface="external_call",
+        event="CALL",
+        scope="function.body",
+        span=(1, 0, 1, 8),
+        ast_relation="call_expression.function",
+    )
+    meaning = ProvisionalMeaning(
+        category="call",
+        hypotheses=("external call",),
+        evidence=("base evidence",),
+        confidence=0.45,
+        target_event="CALL",
+        target_ir_kind="call",
+    )
+
+    first.remember(unit, meaning, document_identity="document-a")
+    second_record = second.remember(
+        unit,
+        meaning,
+        document_identity="document-b",
+    )
+    reloaded = WildcardMemory(
+        ledger,
+        language="c",
+        semantic_spec_sha256="d" * 64,
+    )
+    final = reloaded.lookup(unit)
+
+    assert second_record.seen_count == 2
+    assert final is not None
+    assert final.seen_count == 2
+    assert final.document_identities == ("document-a", "document-b")

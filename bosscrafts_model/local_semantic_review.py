@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import ipaddress
 import json
@@ -137,10 +138,7 @@ class LocalReviewerSpec:
         ):
             raise ValueError("reviewer endpoint must be a plain HTTP loopback base URL")
         try:
-            loopback = (
-                parsed.hostname.lower() == "localhost"
-                or ipaddress.ip_address(parsed.hostname).is_loopback
-            )
+            loopback = ipaddress.ip_address(parsed.hostname).is_loopback
         except ValueError:
             loopback = False
         if not loopback:
@@ -657,11 +655,47 @@ class DualLocalSemanticReviewer:
             )
             raise ValueError(message) from exc
         if len(raw) > _MAX_RESPONSE_BYTES:
-            raise ValueError("local reviewer response exceeds the size limit")
+            message = "local reviewer response exceeds the size limit"
+            response_sha256, response_file = self._persist_invalid_response(
+                raw,
+                failure_type="response_too_large",
+            )
+            self._append_failure(
+                source_manifest=source_manifest,
+                item=item,
+                reviewer=reviewer,
+                request_sha256=_sha256_text(_canonical(payload)),
+                response_sha256=response_sha256,
+                response_file=response_file,
+                response_model=None,
+                failure_type="response_too_large",
+                message=message,
+                request_kind=request_kind,
+                prior_failure_sha256=prior_failure_sha256,
+            )
+            raise ValueError(message)
         try:
             response_payload = json.loads(raw)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError("local reviewer response is not valid JSON") from exc
+            message = "local reviewer response is not valid JSON"
+            response_sha256, response_file = self._persist_invalid_response(
+                raw,
+                failure_type="invalid_json",
+            )
+            self._append_failure(
+                source_manifest=source_manifest,
+                item=item,
+                reviewer=reviewer,
+                request_sha256=_sha256_text(_canonical(payload)),
+                response_sha256=response_sha256,
+                response_file=response_file,
+                response_model=None,
+                failure_type="invalid_json",
+                message=message,
+                request_kind=request_kind,
+                prior_failure_sha256=prior_failure_sha256,
+            )
+            raise ValueError(message) from exc
         response_bytes = f"{_canonical(response_payload)}\n".encode()
         response_sha256 = _sha256_bytes(response_bytes)
         response_relative = f"responses/{response_sha256}.json"
@@ -813,6 +847,29 @@ class DualLocalSemanticReviewer:
             handle.flush()
             os.fsync(handle.fileno())
 
+    def _persist_invalid_response(
+        self,
+        raw: bytes,
+        *,
+        failure_type: str,
+    ) -> tuple[str, str]:
+        evidence = {
+            "schema_version": "bosscrafts-local-semantic-invalid-response-v1",
+            "failure_type": failure_type,
+            "raw_response_sha256": _sha256_bytes(raw),
+            "raw_response_base64": base64.b64encode(raw).decode("ascii"),
+        }
+        response_bytes = f"{_canonical(evidence)}\n".encode()
+        response_sha256 = _sha256_bytes(response_bytes)
+        response_relative = f"responses/{response_sha256}.json"
+        response_path = self.output_root / response_relative
+        if response_path.exists():
+            if response_path.read_bytes() != response_bytes:
+                raise ValueError("existing invalid response artifact SHA-256 mismatch")
+        else:
+            _atomic_write(response_path, response_bytes)
+        return response_sha256, response_relative
+
     def _append_failure(
         self,
         *,
@@ -893,7 +950,12 @@ class DualLocalSemanticReviewer:
                 or entry.get("base_url") != reviewer.base_url
                 or entry.get("expected_model") != reviewer.model
                 or entry.get("failure_type")
-                not in {"invalid_response", "request_failed"}
+                not in {
+                    "invalid_json",
+                    "invalid_response",
+                    "request_failed",
+                    "response_too_large",
+                }
             ):
                 raise ValueError("review failure lineage mismatch")
             request_kind = entry.get("request_kind", "initial")

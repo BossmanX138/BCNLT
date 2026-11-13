@@ -1,0 +1,88 @@
+# Pre-model source audit and repair record
+
+Date: 2026-11-13
+
+Branch: `audit/v10-semantic-integrity`
+
+This record covers the isolated BossCrafts model candidate and its contained
+BCNLT v10 learning runtime. Model insertion and training remained held during
+the review. The review does not claim that tests can prove the absence of every
+possible future defect; it records that the reviewed source has no known
+actionable defect after the repairs and gates below.
+
+## Source and dependency gates
+
+- Git and Git LFS integrity were established before repair work. The branch is
+  stored remotely and reviewed through the repository rather than loose local
+  files.
+- The contained runtime is sealed by the normalized Python-source aggregate
+  `c5623e97f3f1e1e884e1d54a316d174292fbcbf61da3ddfdbf3b432418e0450a`.
+- The resulting parser runtime identity is
+  `98d8a4f36757491e6b96e533732180fdb2bddb693756289f0a21337bb4bfa80a`.
+- Ruff passed every changed Python file.
+- Mypy passed all 58 configured source files in strict mode.
+- The complete regression passed: 393 tests and 144 subtests, no failures.
+- Branch coverage measured 74.5463%: 17,861 covered and 4,539 missing lines;
+  3,252 covered and 2,670 missing branches.
+- `pip-audit` reported no known dependency vulnerabilities after upgrading the
+  pinned PyTorch and setuptools chain.
+- Bandit reported no medium- or high-severity findings. The remaining 82 low
+  findings were reviewed as intentional subprocess use without a shell,
+  non-secret protocol constants, destructor cleanup suppression, or
+  deterministic non-cryptographic sampling.
+- A comprehensive security scan inventoried 514 files and found one actionable
+  resource-exhaustion path. That defect is included in the repairs below.
+
+PyTorch emits one environment warning because optional NumPy is not installed.
+No repository source uses NumPy conversion APIs, so this is not an exercised or
+required runtime path. It remains an optional integration dependency rather
+than a hidden functional failure.
+
+## Repaired defects
+
+1. Semantic-audit records could decompress a caller-selected SQLite zlib blob
+   without an output bound. Decompression is now exact-stream and output
+   bounded, with high-ratio, truncated, trailing, and concatenated stream
+   regressions.
+2. Wildcard Memory writers could overwrite evidence observed by another
+   instance or process. Mutation now uses an in-process lock plus an operating
+   system file lock, reloads under the lock, and flushes and fsyncs the ledger.
+3. Extended Core activation and rollback could allocate duplicate activation
+   sequence numbers. The complete read-check-write transaction is now locked
+   across threads and processes.
+4. Invalid or oversized local semantic-review responses were not durably
+   recorded, allowing retries without complete failure lineage. The reviewer
+   now stores content-addressed evidence and terminal failure entries, and it
+   permits only literal loopback IP endpoints.
+5. Docker cleanup launch failures and timeouts could escape the sandbox error
+   contract. They are now converted to explicit cleanup failures.
+6. Legacy non-resumable corpus admission and task packing could buffer an
+   unbounded full run in memory. These paths are now bounded pilots and direct
+   full work to the resumable implementations. The legacy `--full` switch fails
+   closed with the correct replacement command.
+7. Parser-provenance download redirects were not independently restricted.
+   The origin, every redirect, and the final response must now remain on pinned
+   HTTPS release hosts before hash-pinned content is accepted.
+8. Locked PyTorch and setuptools versions had published advisories. The lock is
+   upgraded to PyTorch 2.13.0 and setuptools 84.2.1, and the resulting complete
+   dependency export passes `pip-audit`.
+
+## Boundaries
+
+- Common Core and tokenizer IDs remain immutable. Learned meanings remain in
+  Wildcard Memory and validated Extended Core versions.
+- Generated corpus material remains outside Git; manifests, source, tests,
+  locks, and small review artifacts belong in Git, while large model assets use
+  Git LFS.
+- Native parser binaries were verified by pinned inventory and hashes. This was
+  a source and integration audit, not a machine-code decompilation audit.
+- CodeRabbit CLI authentication is external to the repository and still
+  requires an interactive user login. That does not affect the local gates or
+  remote Git store, but an actual CodeRabbit review result must not be claimed
+  until authentication and review complete.
+
+## Promotion decision
+
+The source/runtime repair gate is clean. Model testing may resume only from the
+committed runtime identity above and must remain a separate evidence gate; this
+record is not evidence that a model has been trained, promoted, or improved.

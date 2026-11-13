@@ -6,9 +6,11 @@ import os
 import re
 import shutil
 import tempfile
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterator
 
 from .extended_core import (
     CommonCoreProjection,
@@ -33,7 +35,6 @@ from .scientific_learning import (
 from .tokenizer_manifest import TokenizerManifest
 from .wildcard import DefinitionState, WildcardMemory, WildcardMemoryRecord
 
-
 SCHEMA_VERSION = "bcnlt-extended-core-version-v1"
 LIBRARY_SCHEMA_VERSION = "bcnlt-extended-core-library-v1"
 VALIDATION_SCHEMA_VERSION = "bcnlt-extended-core-validation-v1"
@@ -41,6 +42,8 @@ ACTIVATION_SCHEMA_VERSION = "bcnlt-extended-core-activation-v1"
 VOCAB_FILENAME = "bcnlt_extended_core_manifest.json"
 LIBRARY_FILENAME = "extended_core_library.json"
 VERSION_FILENAME = "version.json"
+
+_ACTIVATION_PROCESS_LOCK = threading.RLock()
 
 
 def _canonical(payload: object) -> bytes:
@@ -461,6 +464,10 @@ class ExtendedCoreVersionStore:
         return self._load_validation(version_sha256)
 
     def activate(self, version_sha256: str) -> ActiveExtendedCorePointer:
+        with self._activation_transaction():
+            return self._activate_unlocked(version_sha256)
+
+    def _activate_unlocked(self, version_sha256: str) -> ActiveExtendedCorePointer:
         version = self.load_version(version_sha256)
         self._load_validation(version_sha256)
         current = self.active(required=False)
@@ -474,6 +481,10 @@ class ExtendedCoreVersionStore:
         )
 
     def rollback(self) -> ActiveExtendedCorePointer:
+        with self._activation_transaction():
+            return self._rollback_unlocked()
+
+    def _rollback_unlocked(self) -> ActiveExtendedCorePointer:
         current = self.active()
         version = self.load_version(current.version_sha256)
         parent_sha = version.parent_version_sha256
@@ -486,6 +497,35 @@ class ExtendedCoreVersionStore:
             previous=current.version_sha256,
             action="rollback",
         )
+
+    @contextmanager
+    def _activation_transaction(self) -> Iterator[None]:
+        with _ACTIVATION_PROCESS_LOCK:
+            lock_path = self.root / ".activation.lock"
+            with lock_path.open("a+b") as handle:
+                handle.seek(0, os.SEEK_END)
+                if handle.tell() == 0:
+                    handle.write(b"\0")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                handle.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                    try:
+                        yield
+                    finally:
+                        handle.seek(0)
+                        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                    try:
+                        yield
+                    finally:
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     def active(self, *, required: bool = True) -> ActiveExtendedCorePointer | None:
         path = self.root / "active.json"

@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest import mock
 
 from bosscrafts_model.bcnlt_source_pipeline import (
     CURRENT_RUNTIME_SPEC_SHA256,
@@ -178,6 +179,18 @@ class CurrentCorpusAdmissionTests(unittest.TestCase):
                 (Path(output_dir) / "rejected.jsonl").read_text(encoding="utf-8")
             )
             self.assertEqual(rejection["reason_code"], "invalid_source_unicode")
+
+    def test_nonresumable_admission_fails_closed_above_pilot_limit(self):
+        candidates = (
+            _candidate("doc-a", "python", "a = 1\n", "a.py"),
+            _candidate("doc-b", "python", "b = 2\n", "b.py"),
+        )
+        with (
+            tempfile.TemporaryDirectory() as output_dir,
+            mock.patch("bosscrafts_model.current_corpus.MAX_PILOT_DOCUMENTS", 1),
+        ):
+            with self.assertRaisesRegex(ValueError, "ResumableCurrentCorpusAdmission"):
+                CurrentCorpusAdmission(self.pipeline).materialize(candidates, output_dir)
 
     def test_sqlite_catalog_is_read_only_and_selects_each_language_deterministically(self):
         with tempfile.TemporaryDirectory() as directory:

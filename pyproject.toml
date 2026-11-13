@@ -5,7 +5,7 @@ description = "Isolated, evidence-gated BossCrafts model and BCNLT runtime candi
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "pyarrow==23.0.1",
-    "torch==2.11.0",
+    "torch==2.13.0",
 ]
 
 [dependency-groups]

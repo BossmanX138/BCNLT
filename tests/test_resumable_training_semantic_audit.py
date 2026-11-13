@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
 import sqlite3
 import subprocess
 import sys
 import zlib
+from pathlib import Path
 
 import pytest
 
+import bosscrafts_model.resumable_training_semantic_audit as audit_module
 from bosscrafts_model.bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
 from bosscrafts_model.resumable_training_semantic_audit import (
     ResumableTrainingSemanticAudit,
@@ -360,6 +361,58 @@ def test_fails_closed_on_tampered_canonical_payload(tmp_path: Path):
     finally:
         connection.close()
     with pytest.raises(ValueError, match="canonical JSONL SHA-256 mismatch"):
+        _audit(tmp_path, admission, catalog, catalog_sha, freeze_sha).process()
+
+
+@pytest.mark.parametrize(
+    "payload_mutator",
+    (
+        lambda payload: payload[:-1],
+        lambda payload: payload + b"trailing-data",
+        lambda payload: payload + payload,
+    ),
+    ids=("truncated", "trailing-data", "concatenated"),
+)
+def test_fails_closed_on_non_exact_canonical_zlib_stream(
+    tmp_path: Path,
+    payload_mutator,
+):
+    admission, catalog, catalog_sha, freeze_sha = _fixture(tmp_path)
+    connection = sqlite3.connect(admission)
+    try:
+        payload = connection.execute(
+            "SELECT canonical_jsonl_zlib FROM documents WHERE document_id='admitted-doc'"
+        ).fetchone()[0]
+        connection.execute(
+            "UPDATE documents SET canonical_jsonl_zlib=? WHERE document_id='admitted-doc'",
+            (payload_mutator(payload),),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    with pytest.raises(ValueError, match="canonical JSONL payload is invalid"):
+        _audit(tmp_path, admission, catalog, catalog_sha, freeze_sha).process()
+
+
+def test_fails_closed_before_high_ratio_canonical_payload_exceeds_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    admission, catalog, catalog_sha, freeze_sha = _fixture(tmp_path)
+    oversized = b"x" * 65
+    monkeypatch.setattr(audit_module, "MAX_CANONICAL_OUTPUT_BYTES", 64)
+    connection = sqlite3.connect(admission)
+    try:
+        connection.execute(
+            """UPDATE documents
+               SET canonical_sha256=?, canonical_jsonl_zlib=?
+               WHERE document_id='admitted-doc'""",
+            (_sha256(oversized), zlib.compress(oversized, 9)),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    with pytest.raises(ValueError, match="canonical JSONL payload is invalid"):
         _audit(tmp_path, admission, catalog, catalog_sha, freeze_sha).process()
 
 

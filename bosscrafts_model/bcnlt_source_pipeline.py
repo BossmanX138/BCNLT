@@ -75,14 +75,14 @@ _SIDECAR = _RUNTIME_ROOT / "bcnlt_source_sidecar.py"
 _DEFAULT_PYTHON_313 = Path(sys.executable).resolve()
 _RUNTIME_MANIFEST = _RUNTIME_ROOT / "runtime-manifest.json"
 _EXPECTED_RUNTIME_IDENTITY = {
-    "source": "bd6c89a6d5a295cf95c0af545743ad9792eef67fd2d8aa641519e16b82228aa9",
+    "source": "c5623e97f3f1e1e884e1d54a316d174292fbcbf61da3ddfdbf3b432418e0450a",
     "sidecar": "c86f40828c0303adad2cbf05eb25b5c358ff88ffc1bb9ebcbd39d9de75b158cc",
     "tree_sitter": "d8efa5533a1c79cc404df3a0ff03d76626ad50d54b74d97e4cf6e30ab85bebe4",
     "language_pack": "18fda57fbe2f52f85cf09fd1fc5af6509bfe0a8c6d3d425cafe3d7b63f8dca6e",
     "grammars": "19fc42827e8ab3b37282c0666caa1ddd8abcd3708298fb1665c10df440c3d090",
 }
 PARSER_RUNTIME_IDENTITY_SHA256 = (
-    "50fddafd5e1f7e1f58bb71650f4c87f4a9bb8177c416b01ac21398c29e41dd45"
+    "98d8a4f36757491e6b96e533732180fdb2bddb693756289f0a21337bb4bfa80a"
 )
 PARSER_RUNTIME_NOT_APPLICABLE = "not_applicable"
 _FIELD_ORDER = (

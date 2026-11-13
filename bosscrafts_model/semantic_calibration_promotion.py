@@ -1,24 +1,23 @@
 """Promote reviewed semantic labels through contained and strict calibration gates."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import importlib
 import importlib.util
 import json
 import os
-from pathlib import Path
 import sys
 import tempfile
+from dataclasses import dataclass
+from pathlib import Path
 from types import ModuleType
 from typing import Protocol
 
+from .runtime_identity import aggregate_sha256
 from .strict_uncertainty_acceptance import (
     StrictUncertaintyPolicy,
     verify_strict_uncertainty_acceptance,
 )
-from .runtime_identity import aggregate_sha256
-
 
 _DATASET_SCHEMA = "bosscrafts-semantic-calibration-dataset-v1"
 _OBSERVATION_SCHEMA = "bosscrafts-semantic-uncertainty-observation-v1"
@@ -33,10 +32,10 @@ _CONTAINED_PACKAGE_ROOT = (
 )
 _CONTAINED_PACKAGE_NAME = "_bosscrafts_bcnlt_v10_calibration_runtime"
 _EXPECTED_SOURCE_SHA256 = (
-    "bd6c89a6d5a295cf95c0af545743ad9792eef67fd2d8aa641519e16b82228aa9"
+    "c5623e97f3f1e1e884e1d54a316d174292fbcbf61da3ddfdbf3b432418e0450a"
 )
 _EXPECTED_SOURCE_FILE_COUNT = 79
-_EXPECTED_SOURCE_BYTES = 691654
+_EXPECTED_SOURCE_BYTES = 698056
 
 
 def _contained_source_identity() -> tuple[str, int, int]:
