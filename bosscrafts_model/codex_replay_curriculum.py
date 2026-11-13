@@ -4,7 +4,9 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import sqlite3
+import tempfile
 from dataclasses import asdict
 from pathlib import Path
 from typing import TypedDict
@@ -237,9 +239,14 @@ def build_codex_replay_curriculum(
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = output_path.with_name(f".{output_path.name}.tmp")
-    if temporary.exists():
-        temporary.unlink()
+    temporary_handle = tempfile.NamedTemporaryFile(
+        dir=output_path.parent,
+        prefix=f".{output_path.name}.",
+        suffix=".tmp",
+        delete=False,
+    )
+    temporary = Path(temporary_handle.name)
+    temporary_handle.close()
     output = sqlite3.connect(temporary)
     try:
         output.create_function("mixed_example_id", 2, salted_source_example_id, deterministic=True)
@@ -431,12 +438,31 @@ def build_codex_replay_curriculum(
             for window in full_windows
         ):
             raise ValueError("mixed curriculum is not sufficiently interleaved in full training windows")
+        final_codex_audit = audit_task_database(binding, codex_path)
+        final_replay_audit = audit_task_database(binding, replay_path)
+        if (
+            final_codex_audit.database_identity_sha256
+            != codex_audit.database_identity_sha256
+            or final_replay_audit.database_identity_sha256
+            != replay_audit.database_identity_sha256
+        ):
+            raise ValueError("mixed curriculum source database changed during build")
+        with temporary.open("r+b") as stream:
+            os.fsync(stream.fileno())
+        if output_path.exists():
+            raise ValueError("mixed curriculum output database already exists")
+        try:
+            os.link(temporary, output_path)
+        except FileExistsError as error:
+            raise ValueError(
+                "mixed curriculum output database already exists"
+            ) from error
     except BaseException:
         if temporary.exists():
             temporary.unlink()
         raise
 
-    temporary.replace(output_path)
+    temporary.unlink()
     report = asdict(result)
     report.update(
         {

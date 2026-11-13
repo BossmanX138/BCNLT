@@ -7,6 +7,7 @@ import unittest
 import zlib
 from collections import Counter
 from pathlib import Path
+from unittest import mock
 
 from bosscrafts_model.bcnlt_source_pipeline import (
     PARSER_RUNTIME_IDENTITY_SHA256,
@@ -16,6 +17,7 @@ from bosscrafts_model.codex_replay_curriculum import build_codex_replay_curricul
 from bosscrafts_model.resumable_task_packing import (
     TASK_DATABASE_SCHEMA,
     ResumableTaskDataset,
+    TaskDatabaseAuditResult,
     _canonical_json,
     _encode_u16,
     audit_task_database,
@@ -142,6 +144,26 @@ def _create_source(
 
 
 class CodeXReplayCurriculumTests(unittest.TestCase):
+    @staticmethod
+    def _minimal_sources(
+        binding: NativeTokenizerBinding, root: Path
+    ) -> tuple[Path, Path]:
+        codex = root / "codex.sqlite"
+        replay = root / "replay.sqlite"
+        _create_source(
+            binding,
+            codex,
+            [("train", "python", "instruction_to_code", 4)] * 8,
+            codex=True,
+        )
+        _create_source(
+            binding,
+            replay,
+            [("train", "python", "semantic_to_code", 4)] * 8,
+            codex=False,
+        )
+        return codex, replay
+
     def test_builds_weighted_provenance_preserving_curriculum(self) -> None:
         binding = NativeTokenizerBinding.load()
         with tempfile.TemporaryDirectory() as temporary:
@@ -264,6 +286,93 @@ class CodeXReplayCurriculumTests(unittest.TestCase):
                     minimum_replay_order_fraction=0.0,
                     maximum_replay_order_fraction=1.0,
                 )
+
+    def test_preserves_stale_temp_and_never_clobbers_racing_destination(self) -> None:
+        binding = NativeTokenizerBinding.load()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            codex, replay = self._minimal_sources(binding, root)
+            output = root / "mixed.sqlite"
+            stale = root / ".mixed.sqlite.tmp"
+            stale.write_bytes(b"unrelated-stale-state")
+
+            real_audit = audit_task_database
+
+            def audit_then_create_destination(
+                audit_binding: NativeTokenizerBinding, database: str | Path
+            ) -> TaskDatabaseAuditResult:
+                result = real_audit(audit_binding, database)
+                database_path = Path(database).resolve()
+                if database_path not in {codex.resolve(), replay.resolve()}:
+                    output.write_bytes(b"racing-owner")
+                return result
+
+            with mock.patch(
+                "bosscrafts_model.codex_replay_curriculum.audit_task_database",
+                side_effect=audit_then_create_destination,
+            ):
+                with self.assertRaisesRegex(ValueError, "already exists"):
+                    build_codex_replay_curriculum(
+                        binding,
+                        codex_database=codex,
+                        replay_database=replay,
+                        destination=output,
+                        replay_per_train_cell=8,
+                        minimum_replay_order_fraction=0.0,
+                        maximum_replay_order_fraction=1.0,
+                    )
+
+            self.assertEqual(output.read_bytes(), b"racing-owner")
+            self.assertEqual(stale.read_bytes(), b"unrelated-stale-state")
+            self.assertEqual(list(root.glob(".mixed.sqlite.*.tmp")), [])
+
+    def test_rejects_source_database_changed_during_build(self) -> None:
+        binding = NativeTokenizerBinding.load()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            codex, replay = self._minimal_sources(binding, root)
+            output = root / "mixed.sqlite"
+            real_audit = audit_task_database
+            source_changed = False
+
+            def audit_then_change_source(
+                audit_binding: NativeTokenizerBinding, database: str | Path
+            ) -> TaskDatabaseAuditResult:
+                nonlocal source_changed
+                result = real_audit(audit_binding, database)
+                database_path = Path(database).resolve()
+                if (
+                    database_path not in {codex.resolve(), replay.resolve()}
+                    and not source_changed
+                ):
+                    connection = sqlite3.connect(codex)
+                    try:
+                        connection.execute(
+                            "UPDATE metadata SET value=? WHERE key=?",
+                            ("f" * 64, "curriculum_policy_sha256"),
+                        )
+                        connection.commit()
+                    finally:
+                        connection.close()
+                    source_changed = True
+                return result
+
+            with mock.patch(
+                "bosscrafts_model.codex_replay_curriculum.audit_task_database",
+                side_effect=audit_then_change_source,
+            ):
+                with self.assertRaisesRegex(ValueError, "changed during build"):
+                    build_codex_replay_curriculum(
+                        binding,
+                        codex_database=codex,
+                        replay_database=replay,
+                        destination=output,
+                        replay_per_train_cell=8,
+                        minimum_replay_order_fraction=0.0,
+                        maximum_replay_order_fraction=1.0,
+                    )
+
+            self.assertFalse(output.exists())
 
 
 if __name__ == "__main__":
