@@ -7,6 +7,29 @@ import tempfile
 from pathlib import Path
 
 
+def replace_mutable_file(path: Path, content: bytes) -> None:
+    """Atomically replace mutable progress state using a private synced file."""
+    destination = path.resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, destination)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
+
+
 def publish_new_files(
     files: tuple[tuple[Path, bytes], ...],
     *,

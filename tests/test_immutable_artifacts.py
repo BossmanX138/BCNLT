@@ -8,6 +8,20 @@ import pytest
 from bosscrafts_model import immutable_artifacts
 
 
+def test_mutable_replacement_preserves_unrelated_predictable_temp(
+    tmp_path: Path,
+) -> None:
+    destination = tmp_path / "progress.json"
+    predictable = tmp_path / ".progress.json.tmp"
+    predictable.write_bytes(b"unrelated sentinel")
+
+    immutable_artifacts.replace_mutable_file(destination, b'{"complete":false}\n')
+
+    assert destination.read_bytes() == b'{"complete":false}\n'
+    assert predictable.read_bytes() == b"unrelated sentinel"
+    assert list(tmp_path.glob(".progress.json.*.tmp")) == []
+
+
 def test_immutable_publication_never_clobbers_existing_file(tmp_path: Path) -> None:
     destination = tmp_path / "evidence.json"
     destination.write_bytes(b"preserved")

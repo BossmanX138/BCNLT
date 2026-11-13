@@ -40,6 +40,7 @@ from bosscrafts_model.generation_artifacts import (
     load_humaneval_generation_records,
     validate_humaneval_generation_records,
 )
+from bosscrafts_model.immutable_artifacts import publish_new_files, replace_mutable_file
 from bosscrafts_model.inference_protocol import (
     build_inference_prompt,
     response_payload_token_ids,
@@ -102,14 +103,14 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _atomic_json(path: Path, payload: Mapping[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(path)
+def _render_json(payload: Mapping[str, object]) -> bytes:
+    return (
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+
+
+def _replace_progress(path: Path, payload: Mapping[str, object]) -> None:
+    replace_mutable_file(path, _render_json(payload))
 
 
 def _append_jsonl(path: Path, payload: Mapping[str, object]) -> None:
@@ -147,23 +148,19 @@ def _read_dataset(path: Path) -> list[_HumanEvalTask]:
     return tasks
 
 
-def _write_samples(
-    path: Path,
+def _render_samples(
     records: list[HumanEvalGenerationRecord],
     field: Literal["raw_completion", "clean_completion"],
-) -> None:
-    temporary = path.with_name(f".{path.name}.tmp")
-    with temporary.open("w", encoding="utf-8", newline="\n") as handle:
-        for record in records:
-            handle.write(
-                json.dumps(
-                    {"task_id": record["task_id"], "completion": record[field]},
-                    ensure_ascii=False,
-                    sort_keys=True,
-                )
-                + "\n"
-            )
-    temporary.replace(path)
+) -> bytes:
+    return "".join(
+        json.dumps(
+            {"task_id": record["task_id"], "completion": record[field]},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        + "\n"
+        for record in records
+    ).encode("utf-8")
 
 
 def main() -> int:
@@ -239,7 +236,10 @@ def main() -> int:
         if existing_manifest != run_spec:
             raise ValueError("output directory already belongs to another benchmark run")
     else:
-        _atomic_json(manifest_path, run_spec)
+        publish_new_files(
+            ((manifest_path, _render_json(run_spec)),),
+            artifact_label="HumanEval generation manifest",
+        )
 
     records_path = output / "generation-records.jsonl"
     records = load_humaneval_generation_records(records_path, run_identity)
@@ -337,7 +337,7 @@ def main() -> int:
         )
         _append_jsonl(records_path, record)
         records[task_id] = record
-        _atomic_json(
+        _replace_progress(
             output / "progress.json",
             {
                 **run_spec,
@@ -368,8 +368,6 @@ def main() -> int:
         )
 
     ordered = [records[str(task["task_id"])] for task in tasks]
-    _write_samples(output / "samples-raw.jsonl", ordered, "raw_completion")
-    _write_samples(output / "samples.jsonl", ordered, "clean_completion")
     summary = {
         **run_spec,
         "checkpoint_epoch_index": state.epoch_index,
@@ -384,7 +382,20 @@ def main() -> int:
             / sum(float(item["generation_seconds"]) for item in ordered)
         ),
     }
-    _atomic_json(output / "summary.json", summary)
+    publish_new_files(
+        (
+            (
+                output / "samples-raw.jsonl",
+                _render_samples(ordered, "raw_completion"),
+            ),
+            (
+                output / "samples.jsonl",
+                _render_samples(ordered, "clean_completion"),
+            ),
+            (output / "summary.json", _render_json(summary)),
+        ),
+        artifact_label="HumanEval generation",
+    )
     print(json.dumps(summary, sort_keys=True))
     return 0
 

@@ -390,6 +390,18 @@ class ModelAcceptanceTests(unittest.TestCase):
             self.assertTrue(payload["acceptance_passed"])
             self.assertRegex(payload["acceptance_manifest_sha256"], r"^[0-9a-f]{64}$")
             self.assertEqual(payload, json.loads(completed.stdout))
+            original = output.read_bytes()
+            repeated = subprocess.run(
+                completed.args,
+                cwd=project_root,
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(repeated.returncode, 0)
+            self.assertIn("output file already exists", repeated.stderr)
+            self.assertEqual(output.read_bytes(), original)
 
 
 if __name__ == "__main__":

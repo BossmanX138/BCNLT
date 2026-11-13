@@ -34,6 +34,7 @@ from bosscrafts_model.generation_artifacts import (
     GenerationGateRecord,
     load_generation_gate_records,
 )
+from bosscrafts_model.immutable_artifacts import publish_new_files, replace_mutable_file
 from bosscrafts_model.inference_protocol import (
     INFERENCE_TASKS,
     response_payload_token_ids,
@@ -84,14 +85,14 @@ class _GenerationSummary(TypedDict):
     total_generation_seconds: float
 
 
-def _atomic_json(path: Path, payload: Mapping[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(path)
+def _render_json(payload: Mapping[str, object]) -> bytes:
+    return (
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+
+
+def _replace_progress(path: Path, payload: Mapping[str, object]) -> None:
+    replace_mutable_file(path, _render_json(payload))
 
 
 def _append_jsonl(path: Path, payload: Mapping[str, object]) -> None:
@@ -307,7 +308,10 @@ def main() -> int:
         if json.loads(manifest_path.read_text(encoding="utf-8")) != run_spec:
             raise ValueError("generation gate output belongs to another run")
     else:
-        _atomic_json(manifest_path, run_spec)
+        publish_new_files(
+            ((manifest_path, _render_json(run_spec)),),
+            artifact_label="generation gate manifest",
+        )
 
     records_path = output / "generation-records.jsonl"
     records = load_generation_gate_records(records_path, run_identity)
@@ -387,7 +391,7 @@ def main() -> int:
         )
         _append_jsonl(records_path, record)
         records[example_id] = record
-        _atomic_json(
+        _replace_progress(
             output / "progress.json",
             {
                 **run_spec,
@@ -457,7 +461,10 @@ def main() -> int:
             and overall["exact_match_rate"] == 1.0
         ),
     }
-    _atomic_json(output / "report.json", report)
+    publish_new_files(
+        ((output / "report.json", _render_json(report)),),
+        artifact_label="generation gate report",
+    )
     print(json.dumps(report, sort_keys=True))
     return 0
 

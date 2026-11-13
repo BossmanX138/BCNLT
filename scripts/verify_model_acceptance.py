@@ -12,6 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from bosscrafts_model.immutable_artifacts import publish_new_files
 from bosscrafts_model.model_acceptance import (
     ACCEPTANCE_CATEGORIES,
     verify_model_acceptance,
@@ -86,10 +87,10 @@ def main() -> int:
     ).hexdigest()
     rendered = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     destination = arguments.output.resolve()
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f".{destination.name}.tmp")
-    temporary.write_text(rendered, encoding="utf-8")
-    temporary.replace(destination)
+    publish_new_files(
+        ((destination, rendered.encode("utf-8")),),
+        artifact_label="model acceptance",
+    )
     print(rendered, end="")
     return 0
 

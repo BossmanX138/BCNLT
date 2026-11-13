@@ -16,6 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from bosscrafts_model import humaneval_sandbox
 from bosscrafts_model.generation_artifacts import (
     HUMANEVAL_GENERATION_SCHEMA,
     HumanEvalGenerationRecord,
@@ -25,7 +26,7 @@ from bosscrafts_model.generation_artifacts import (
 from bosscrafts_model.immutable_artifacts import publish_new_files
 from bosscrafts_model.tokenizer import NativeTokenizerBinding, bound_native_65k_config
 
-SCHEMA = "bosscrafts-openai-humaneval-report-v2"
+SCHEMA = "bosscrafts-openai-humaneval-report-v3"
 TASK_COUNT = 164
 OPENAI_HUMANEVAL_SHA256 = (
     "b796127e635a67f93fb35c04f4cb03cf06f38c8072ee7cee8833d7bee06979ef"
@@ -71,6 +72,7 @@ _SUMMARY_FIELDS = _MANIFEST_FIELDS | {
 class _HumanEvalTask(TypedDict):
     task_id: str
     prompt: str
+    test: str
     entry_point: str
 
 
@@ -140,10 +142,12 @@ def _read_tasks(path: Path) -> list[_HumanEvalTask]:
             row = json.loads(line)
             task_id = row.get("task_id") if type(row) is dict else None
             prompt = row.get("prompt") if type(row) is dict else None
+            tests = row.get("test") if type(row) is dict else None
             entry_point = row.get("entry_point") if type(row) is dict else None
             if (
                 type(task_id) is not str
                 or type(prompt) is not str
+                or type(tests) is not str
                 or type(entry_point) is not str
             ):
                 raise ValueError("official HumanEval dataset row is invalid")
@@ -151,6 +155,7 @@ def _read_tasks(path: Path) -> list[_HumanEvalTask]:
                 _HumanEvalTask(
                     task_id=task_id,
                     prompt=prompt,
+                    test=tests,
                     entry_point=entry_point,
                 )
             )
@@ -222,6 +227,7 @@ def main() -> int:
     if results_candidates[1].exists():
         raise ValueError("gzip HumanEval results are not supported by this report builder")
     results_path = results_candidates[0]
+    receipt_path = evaluation / "receipt.json"
     required = (
         manifest_path,
         summary_path,
@@ -229,14 +235,16 @@ def main() -> int:
         samples_path,
         metrics_path,
         results_path,
+        receipt_path,
     )
     if any(not path.is_file() for path in required):
         raise ValueError("HumanEval evidence set is incomplete")
 
     manifest = _read_json(manifest_path)
     summary = _read_json(summary_path)
+    receipt = _read_json(receipt_path)
     tasks = _read_tasks(dataset_path)
-    results = _read_jsonl(results_path)
+    results = humaneval_sandbox.load_results(results_path)
     expected_ids = [f"HumanEval/{index}" for index in range(TASK_COUNT)]
     run_identity = manifest.get("run_identity_sha256")
     if (
@@ -344,6 +352,20 @@ def main() -> int:
         raise ValueError("HumanEval summary metrics are inconsistent")
     samples = _read_jsonl(samples_path)
     _validate_sample_results(expected_ids, records, samples, results)
+    for index, (task, sample, result) in enumerate(
+        zip(tasks, samples, results, strict=True)
+    ):
+        humaneval_sandbox.validate_result(result, task, sample, task_index=index)
+    evaluator_path = PROJECT_ROOT / "scripts" / "evaluate_humaneval_sandboxed.py"
+    humaneval_sandbox.validate_receipt(
+        receipt,
+        results,
+        dataset_sha256=_sha256(dataset_path),
+        samples_sha256=_sha256(samples_path),
+        results_bytes=results_path.read_bytes(),
+        metrics_bytes=metrics_path.read_bytes(),
+        evaluator_source_sha256=_sha256(evaluator_path),
+    )
 
     metrics_text = metrics_path.read_text(encoding="utf-8")
     matches = _PASS_AT_1.findall(metrics_text)
@@ -421,6 +443,16 @@ def main() -> int:
         "syntax_valid_rate": syntax_valid_rate,
         "protocol_complete_count": protocol_complete,
         "protocol_complete_rate": protocol_complete_rate,
+        "sandbox_image_manifest_sha256": receipt.get(
+            "sandbox_image_manifest_sha256"
+        ),
+        "sandbox_image_ids": receipt.get("sandbox_image_ids"),
+        "sandbox_evaluator_source_sha256": receipt.get(
+            "evaluator_source_sha256"
+        ),
+        "sandbox_result_attestation_sha256": receipt.get(
+            "result_attestation_sha256"
+        ),
         "failure_breakdown": {
             name: failures[name]
             for name in (
@@ -440,6 +472,7 @@ def main() -> int:
             "samples": _sha256(samples_path),
             "metrics": _sha256(metrics_path),
             "results": _sha256(results_path),
+            "sandbox_receipt": _sha256(receipt_path),
         },
     }
     report["report_manifest_sha256"] = hashlib.sha256(
