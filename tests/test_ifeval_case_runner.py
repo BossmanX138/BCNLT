@@ -8,6 +8,9 @@ import sys
 from pathlib import Path
 
 import pytest
+from test_full_model_acceptance_categories import (
+    _model_response_generation_receipt,
+)
 
 import bosscrafts_model.ifeval_case_runner as runner
 from bosscrafts_model.category_case_inventory import CATEGORY_CASE_SCHEMA
@@ -249,8 +252,6 @@ def test_batch_receipt_is_derived_self_hashed_and_published_no_clobber(
     tmp_path: Path,
 ) -> None:
     ids = tuple(sorted(str(_case(index)["example_id"]) for index in range(2)))
-    candidate = {example_id: f"candidate {index}" for index, example_id in enumerate(ids)}
-    baseline = {example_id: "" for example_id in ids}
     details = tuple(
         {
             "example_id": example_id,
@@ -282,17 +283,20 @@ def test_batch_receipt_is_derived_self_hashed_and_published_no_clobber(
 
     receipt = build_ifeval_batch_receipt(
         result,
-        candidate,
-        baseline,
-        checkpoint_sha256="d" * 64,
-        checkpoint_step=17,
-        baseline_source="fixture-baseline",
-        baseline_evaluation_sha256="e" * 64,
+        _model_response_generation_receipt(
+            "ordinary_instruction", ids, "candidate"
+        ),
+        _model_response_generation_receipt(
+            "ordinary_instruction",
+            ids,
+            "",
+            source_type="deterministic_random_initialization",
+        ),
     )
     validated = validate_ifeval_batch_receipt(
         receipt,
-        expected_checkpoint_sha256="d" * 64,
-        expected_checkpoint_step=17,
+        expected_checkpoint_sha256="e" * 64,
+        expected_checkpoint_step=86_016,
         expected_example_ids=ids,
         expected_records=records,
     )
@@ -322,7 +326,7 @@ def test_batch_receipt_is_derived_self_hashed_and_published_no_clobber(
         validate_ifeval_batch_receipt(forged)
 
 
-def test_ifeval_acceptance_script_exposes_grounded_inputs() -> None:
+def test_ifeval_acceptance_script_generates_responses_from_checkpoint() -> None:
     project_root = Path(__file__).resolve().parents[1]
     completed = subprocess.run(
         [
@@ -338,6 +342,8 @@ def test_ifeval_acceptance_script_exposes_grounded_inputs() -> None:
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert "--candidate-responses" in completed.stdout
-    assert "--baseline-evaluation" in completed.stdout
-    assert "--checkpoint-step" in completed.stdout
+    assert "--case-bundle" in completed.stdout
+    assert "--checkpoint-database" in completed.stdout
+    assert "--heldout-manifest" in completed.stdout
+    assert "--candidate-responses" not in completed.stdout
+    assert "--baseline-responses" not in completed.stdout

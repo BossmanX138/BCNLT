@@ -12,6 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bosscrafts_model.code_acceptance import MAX_CODE_ACCEPTANCE_RECEIPT_BYTES
+from bosscrafts_model.ifeval_case_runner import MAX_IFEVAL_BATCH_BYTES
 from bosscrafts_model.model_acceptance import ACCEPTANCE_CATEGORIES
 from bosscrafts_model.model_category_evidence import (
     MAX_CATEGORY_RECORDS_BYTES,
@@ -20,6 +21,7 @@ from bosscrafts_model.model_category_evidence import (
     publish_model_category_evidence,
 )
 from bosscrafts_model.resumable_task_packing import audit_task_database
+from bosscrafts_model.safety_judge_case_runner import MAX_SAFETY_BATCH_BYTES
 from bosscrafts_model.semantic_acceptance import (
     MAX_SEMANTIC_ACCEPTANCE_RECEIPT_BYTES,
 )
@@ -202,12 +204,20 @@ def main() -> int:
         else None
     )
     ifeval_receipt = (
-        _read_object(arguments.ifeval_batch_receipt, "IFEval batch receipt")
+        _read_object(
+            arguments.ifeval_batch_receipt,
+            "IFEval batch receipt",
+            maximum_bytes=MAX_IFEVAL_BATCH_BYTES,
+        )
         if arguments.ifeval_batch_receipt is not None
         else None
     )
     safety_receipt = (
-        _read_object(arguments.safety_content_receipt, "safety content receipt")
+        _read_object(
+            arguments.safety_content_receipt,
+            "safety content receipt",
+            maximum_bytes=MAX_SAFETY_BATCH_BYTES,
+        )
         if arguments.safety_content_receipt is not None
         else None
     )

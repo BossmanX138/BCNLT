@@ -48,6 +48,11 @@ from bosscrafts_model.model_acceptance import (
 from bosscrafts_model.model_acceptance import (
     verify_model_acceptance as _verify_model_acceptance,
 )
+from bosscrafts_model.model_response_generation import (
+    DETERMINISTIC_BASELINE_SEED,
+    ModelResponseGenerationResult,
+    build_model_response_generation_receipt,
+)
 from bosscrafts_model.regression_acceptance import (
     RegressionResult,
     build_regression_receipt,
@@ -494,7 +499,9 @@ def _safety_content_receipt_payload() -> dict[str, object]:
         }
         for example_id in example_ids
     )
-    responses = {example_id: "safe candidate" for example_id in example_ids}
+    generation_receipt = _model_response_generation_receipt(
+        "safety", example_ids, "safe candidate"
+    )
     return build_safety_content_receipt(
         SafetyJudgeBatchResult(
             runtime_manifest_sha256=(
@@ -504,9 +511,7 @@ def _safety_content_receipt_payload() -> dict[str, object]:
             records=tuple(records),
             details=details,
         ),
-        responses,
-        checkpoint_sha256=CHECKPOINT_ID,
-        checkpoint_step=86_016,
+        generation_receipt,
     )
 
 
@@ -540,12 +545,79 @@ def _ifeval_receipt_payload() -> dict[str, object]:
             records=tuple(records),
             details=details,
         ),
-        {example_id: "candidate" for example_id in example_ids},
-        {example_id: "" for example_id in example_ids},
-        checkpoint_sha256=CHECKPOINT_ID,
-        checkpoint_step=86_016,
-        baseline_source="deterministic_random_initialization",
-        baseline_evaluation_sha256=None,
+        _model_response_generation_receipt(
+            "ordinary_instruction", example_ids, "candidate"
+        ),
+        _model_response_generation_receipt(
+            "ordinary_instruction",
+            example_ids,
+            "",
+            source_type="deterministic_random_initialization",
+        ),
+    )
+
+
+def _model_response_generation_receipt(
+    category: str,
+    example_ids: tuple[str, ...],
+    response: str,
+    *,
+    source_type: str = "checkpoint",
+) -> dict[str, object]:
+    control = BINDING.structural_token_ids
+    payload_ids = BINDING.encode_payload(response)
+    generated_ids = [
+        control["<|bcnlt:stream:begin|>"],
+        control["<|bcnlt:mode:raw_code|>"],
+        *payload_ids,
+        control["<|bcnlt:stream:end|>"],
+        control["<|bcnlt:task:end|>"],
+    ]
+    details = tuple(
+        {
+            "example_id": example_id,
+            "prompt_sha256": hashlib.sha256(
+                f"prompt:{example_id}".encode()
+            ).hexdigest(),
+            "prompt_token_count": 4,
+            "prompt_ids_sha256": hashlib.sha256(
+                _canonical([1, 2, 3, 4, example_id])
+            ).hexdigest(),
+            "generated_ids": generated_ids,
+            "generated_ids_sha256": hashlib.sha256(
+                _canonical(generated_ids)
+            ).hexdigest(),
+            "protocol_complete": True,
+            "payload_ids_sha256": hashlib.sha256(
+                _canonical(payload_ids)
+            ).hexdigest(),
+            "response": response,
+            "response_sha256": hashlib.sha256(response.encode()).hexdigest(),
+        }
+        for example_id in example_ids
+    )
+    result = ModelResponseGenerationResult(
+        category=category,
+        case_bundle_manifest_sha256="1" * 64,
+        case_inventory_sha256="2" * 64,
+        binding_sha256=BINDING.binding_sha256,
+        tokenizer_sha256=BINDING.tokenizer_sha256,
+        model_fingerprint=MODEL_ID,
+        device_type="cpu",
+        dtype="float32",
+        maximum_new_tokens=64,
+        details=details,
+    )
+    return build_model_response_generation_receipt(
+        result,
+        source_type=source_type,
+        checkpoint_sha256=(CHECKPOINT_ID if source_type == "checkpoint" else None),
+        checkpoint_step=(86_016 if source_type == "checkpoint" else None),
+        random_seed=(
+            None
+            if source_type == "checkpoint"
+            else DETERMINISTIC_BASELINE_SEED
+        ),
     )
 
 

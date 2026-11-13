@@ -26,10 +26,13 @@ from .ifeval_runtime import (
     verify_ifeval_runtime,
 )
 from .immutable_artifacts import publish_new_files
+from .model_response_generation import (
+    responses_from_model_response_generation_receipt,
+)
 
 IFEVAL_WORKER_INPUT_SCHEMA = "bosscrafts-ifeval-worker-input-v1"
 IFEVAL_WORKER_OUTPUT_SCHEMA = "bosscrafts-ifeval-worker-output-v1"
-IFEVAL_BATCH_RECEIPT_SCHEMA = "bosscrafts-ifeval-batch-receipt-v1"
+IFEVAL_BATCH_RECEIPT_SCHEMA = "bosscrafts-ifeval-batch-receipt-v2"
 MAX_IFEVAL_BATCH_BYTES = 64 * 1024 * 1024
 MAX_IFEVAL_RESPONSE_BYTES = 1024 * 1024
 MAX_IFEVAL_CASES = 4_096
@@ -349,6 +352,8 @@ _IFEVAL_RECEIPT_FIELDS = {
     "candidate_response_manifest_sha256",
     "baseline_response_sha256_by_example_id",
     "baseline_response_manifest_sha256",
+    "candidate_generation_receipt",
+    "baseline_generation_receipt",
     "records",
     "records_sha256",
     "details",
@@ -450,24 +455,12 @@ def _validate_receipt_results(
 
 def build_ifeval_batch_receipt(
     result: IfevalBatchResult,
-    candidate_responses: Mapping[str, str],
-    baseline_responses: Mapping[str, str],
-    *,
-    checkpoint_sha256: str,
-    checkpoint_step: int,
-    baseline_source: str,
-    baseline_evaluation_sha256: str | None,
+    candidate_generation_receipt: dict[str, object],
+    baseline_generation_receipt: dict[str, object],
 ) -> dict[str, object]:
     """Build a self-verifying receipt from one completed pinned IFEval run."""
-    if (
-        not _is_sha256(checkpoint_sha256)
-        or type(checkpoint_step) is not int
-        or checkpoint_step < 1
-        or result.runtime_manifest_sha256
-        != EXPECTED_IFEVAL_RUNTIME_MANIFEST_SHA256
-    ):
+    if result.runtime_manifest_sha256 != EXPECTED_IFEVAL_RUNTIME_MANIFEST_SHA256:
         raise ValueError("IFEval receipt lineage is invalid")
-    _validate_baseline_lineage(baseline_source, baseline_evaluation_sha256)
     example_ids = result.case_example_ids
     if (
         not 1 <= len(example_ids) <= MAX_IFEVAL_CASES
@@ -476,8 +469,26 @@ def build_ifeval_batch_receipt(
         or any(not _is_sha256(example_id) for example_id in example_ids)
     ):
         raise ValueError("IFEval receipt case inventory is invalid")
-    candidate = _validated_responses(candidate_responses, example_ids, "candidate")
-    baseline = _validated_responses(baseline_responses, example_ids, "baseline")
+    candidate = responses_from_model_response_generation_receipt(
+        candidate_generation_receipt,
+        expected_category="ordinary_instruction",
+        expected_source_type="checkpoint",
+        expected_example_ids=example_ids,
+    )
+    baseline = responses_from_model_response_generation_receipt(
+        baseline_generation_receipt,
+        expected_category="ordinary_instruction",
+        expected_source_type="deterministic_random_initialization",
+        expected_example_ids=example_ids,
+    )
+    checkpoint_sha256 = candidate_generation_receipt.get("checkpoint_sha256")
+    checkpoint_step = candidate_generation_receipt.get("checkpoint_step")
+    if not _is_sha256(checkpoint_sha256) or type(checkpoint_step) is not int:
+        raise ValueError("IFEval checkpoint generation lineage is invalid")
+    _validate_generation_pair(
+        candidate_generation_receipt,
+        baseline_generation_receipt,
+    )
     candidate_hashes = {
         example_id: hashlib.sha256(candidate[example_id].encode("utf-8")).hexdigest()
         for example_id in example_ids
@@ -499,8 +510,8 @@ def build_ifeval_batch_receipt(
         "schema_version": IFEVAL_BATCH_RECEIPT_SCHEMA,
         "checkpoint_sha256": checkpoint_sha256,
         "checkpoint_step": checkpoint_step,
-        "baseline_source": baseline_source,
-        "baseline_evaluation_sha256": baseline_evaluation_sha256,
+        "baseline_source": "deterministic_random_initialization",
+        "baseline_evaluation_sha256": None,
         "runtime_manifest_sha256": result.runtime_manifest_sha256,
         "case_example_ids": list(example_ids),
         "case_example_ids_sha256": _sha256(list(example_ids)),
@@ -509,6 +520,8 @@ def build_ifeval_batch_receipt(
         "candidate_response_manifest_sha256": _sha256(candidate_hashes),
         "baseline_response_sha256_by_example_id": baseline_hashes,
         "baseline_response_manifest_sha256": _sha256(baseline_hashes),
+        "candidate_generation_receipt": candidate_generation_receipt,
+        "baseline_generation_receipt": baseline_generation_receipt,
         "records": records,
         "records_sha256": _sha256(records),
         "details": details,
@@ -549,7 +562,42 @@ def validate_ifeval_batch_receipt(
     _validate_baseline_lineage(
         payload.get("baseline_source"), payload.get("baseline_evaluation_sha256")
     )
+    if (
+        payload.get("baseline_source") != "deterministic_random_initialization"
+        or payload.get("baseline_evaluation_sha256") is not None
+    ):
+        raise ValueError("IFEval baseline must use the fixed random initialization")
     example_ids = tuple(cast(list[str], raw_ids))
+    raw_candidate_generation = payload.get("candidate_generation_receipt")
+    raw_baseline_generation = payload.get("baseline_generation_receipt")
+    candidate = responses_from_model_response_generation_receipt(
+        raw_candidate_generation,
+        expected_category="ordinary_instruction",
+        expected_source_type="checkpoint",
+        expected_checkpoint_sha256=cast(str, payload["checkpoint_sha256"]),
+        expected_checkpoint_step=cast(int, payload["checkpoint_step"]),
+        expected_example_ids=example_ids,
+    )
+    baseline = responses_from_model_response_generation_receipt(
+        raw_baseline_generation,
+        expected_category="ordinary_instruction",
+        expected_source_type="deterministic_random_initialization",
+        expected_example_ids=example_ids,
+    )
+    if type(raw_candidate_generation) is not dict or type(raw_baseline_generation) is not dict:
+        raise ValueError("IFEval generation receipts are invalid")
+    _validate_generation_pair(raw_candidate_generation, raw_baseline_generation)
+    derived_candidate_hashes = {
+        example_id: hashlib.sha256(candidate[example_id].encode("utf-8")).hexdigest()
+        for example_id in example_ids
+    }
+    derived_baseline_hashes = {
+        example_id: hashlib.sha256(baseline[example_id].encode("utf-8")).hexdigest()
+        for example_id in example_ids
+    }
+    derived_nonempty = {
+        example_id: bool(candidate[example_id].strip()) for example_id in example_ids
+    }
     candidate_hashes = payload.get("candidate_response_sha256_by_example_id")
     baseline_hashes = payload.get("baseline_response_sha256_by_example_id")
     nonempty = payload.get("candidate_response_nonempty_by_example_id")
@@ -563,6 +611,9 @@ def validate_ifeval_batch_receipt(
         or any(not _is_sha256(value) for value in candidate_hashes.values())
         or any(not _is_sha256(value) for value in baseline_hashes.values())
         or any(type(value) is not bool for value in nonempty.values())
+        or candidate_hashes != derived_candidate_hashes
+        or baseline_hashes != derived_baseline_hashes
+        or nonempty != derived_nonempty
         or payload.get("candidate_response_manifest_sha256")
         != _sha256(candidate_hashes)
         or payload.get("baseline_response_manifest_sha256")
@@ -595,6 +646,59 @@ def validate_ifeval_batch_receipt(
     if expected_records is not None and records != list(expected_records):
         raise ValueError("IFEval receipt records mismatch")
     return payload
+
+
+def _validate_generation_pair(
+    candidate: dict[str, object],
+    baseline: dict[str, object],
+) -> None:
+    """Require both generations to use the same prompts, model shape, and runtime."""
+    shared_fields = (
+        "category",
+        "generation_algorithm",
+        "generation_task",
+        "maximum_new_tokens",
+        "model_fingerprint",
+        "binding_sha256",
+        "tokenizer_sha256",
+        "case_bundle_manifest_sha256",
+        "case_inventory_sha256",
+        "device_type",
+        "dtype",
+        "example_ids",
+    )
+    if any(candidate.get(field) != baseline.get(field) for field in shared_fields):
+        raise ValueError("IFEval generation runtime lineage mismatch")
+    candidate_details = candidate.get("details")
+    baseline_details = baseline.get("details")
+    if type(candidate_details) is not list or type(baseline_details) is not list:
+        raise ValueError("IFEval generation detail lineage is invalid")
+    candidate_prompts = [
+        (
+            detail.get("example_id"),
+            detail.get("prompt_sha256"),
+            detail.get("prompt_token_count"),
+            detail.get("prompt_ids_sha256"),
+        )
+        for detail in candidate_details
+        if type(detail) is dict
+    ]
+    baseline_prompts = [
+        (
+            detail.get("example_id"),
+            detail.get("prompt_sha256"),
+            detail.get("prompt_token_count"),
+            detail.get("prompt_ids_sha256"),
+        )
+        for detail in baseline_details
+        if type(detail) is dict
+    ]
+    if (
+        len(candidate_prompts) != len(candidate_details)
+        or len(baseline_prompts) != len(baseline_details)
+        or candidate_prompts != baseline_prompts
+    ):
+        raise ValueError("IFEval generation prompt lineage mismatch")
 
 
 def publish_ifeval_batch_receipt(

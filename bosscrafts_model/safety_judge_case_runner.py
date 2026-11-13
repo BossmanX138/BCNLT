@@ -20,6 +20,9 @@ from .category_case_inventory import (
     _valid_provenance,
 )
 from .immutable_artifacts import publish_new_files
+from .model_response_generation import (
+    responses_from_model_response_generation_receipt,
+)
 from .safety_judge_runtime import (
     EXPECTED_SAFETY_JUDGE_RUNTIME_MANIFEST_SHA256,
     SAFETY_JUDGE_RUNTIME_VERSIONS,
@@ -29,7 +32,7 @@ from .safety_judge_runtime import (
 
 SAFETY_JUDGE_WORKER_INPUT_SCHEMA = "bosscrafts-safety-judge-worker-input-v1"
 SAFETY_JUDGE_WORKER_OUTPUT_SCHEMA = "bosscrafts-safety-judge-worker-output-v1"
-SAFETY_CONTENT_RECEIPT_SCHEMA = "bosscrafts-safety-content-receipt-v1"
+SAFETY_CONTENT_RECEIPT_SCHEMA = "bosscrafts-safety-content-receipt-v2"
 MAX_SAFETY_BATCH_BYTES = 64 * 1024 * 1024
 MAX_SAFETY_RESPONSE_BYTES = 256 * 1024
 MAX_SAFETY_JUDGMENT_BYTES = 4 * 1024
@@ -386,6 +389,7 @@ _RECEIPT_FIELDS = {
     "candidate_response_sha256_by_example_id",
     "candidate_response_nonempty_by_example_id",
     "candidate_response_manifest_sha256",
+    "candidate_generation_receipt",
     "records",
     "records_sha256",
     "details",
@@ -470,19 +474,10 @@ def _validate_receipt_results(
 
 def build_safety_content_receipt(
     result: SafetyJudgeBatchResult,
-    candidate_responses: Mapping[str, str],
-    *,
-    checkpoint_sha256: str,
-    checkpoint_step: int,
+    candidate_generation_receipt: dict[str, object],
 ) -> dict[str, object]:
     """Build a self-verifying receipt from a completed pinned safety run."""
-    if (
-        not _is_sha256(checkpoint_sha256)
-        or type(checkpoint_step) is not int
-        or checkpoint_step < 1
-        or result.runtime_manifest_sha256
-        != EXPECTED_SAFETY_JUDGE_RUNTIME_MANIFEST_SHA256
-    ):
+    if result.runtime_manifest_sha256 != EXPECTED_SAFETY_JUDGE_RUNTIME_MANIFEST_SHA256:
         raise ValueError("safety content receipt lineage is invalid")
     example_ids = result.case_example_ids
     if (
@@ -492,7 +487,16 @@ def build_safety_content_receipt(
         or any(not _is_sha256(example_id) for example_id in example_ids)
     ):
         raise ValueError("safety content receipt case inventory is invalid")
-    responses = _validated_responses(candidate_responses, example_ids)
+    responses = responses_from_model_response_generation_receipt(
+        candidate_generation_receipt,
+        expected_category="safety",
+        expected_source_type="checkpoint",
+        expected_example_ids=example_ids,
+    )
+    checkpoint_sha256 = candidate_generation_receipt.get("checkpoint_sha256")
+    checkpoint_step = candidate_generation_receipt.get("checkpoint_step")
+    if not _is_sha256(checkpoint_sha256) or type(checkpoint_step) is not int:
+        raise ValueError("safety checkpoint generation lineage is invalid")
     response_hashes = {
         example_id: hashlib.sha256(responses[example_id].encode("utf-8")).hexdigest()
         for example_id in example_ids
@@ -513,6 +517,7 @@ def build_safety_content_receipt(
         "candidate_response_sha256_by_example_id": response_hashes,
         "candidate_response_nonempty_by_example_id": nonempty,
         "candidate_response_manifest_sha256": _sha256(response_hashes),
+        "candidate_generation_receipt": candidate_generation_receipt,
         "records": records,
         "records_sha256": _sha256(records),
         "details": details,
@@ -557,6 +562,21 @@ def validate_safety_content_receipt(
         raise ValueError("safety content receipt case integrity mismatch")
     hashes = payload.get("candidate_response_sha256_by_example_id")
     nonempty = payload.get("candidate_response_nonempty_by_example_id")
+    responses = responses_from_model_response_generation_receipt(
+        payload.get("candidate_generation_receipt"),
+        expected_category="safety",
+        expected_source_type="checkpoint",
+        expected_checkpoint_sha256=str(checkpoint_sha256),
+        expected_checkpoint_step=checkpoint_step,
+        expected_example_ids=example_ids,
+    )
+    derived_hashes = {
+        example_id: hashlib.sha256(responses[example_id].encode("utf-8")).hexdigest()
+        for example_id in example_ids
+    }
+    derived_nonempty = {
+        example_id: bool(responses[example_id].strip()) for example_id in example_ids
+    }
     if (
         type(hashes) is not dict
         or set(hashes) != set(example_ids)
@@ -564,6 +584,8 @@ def validate_safety_content_receipt(
         or type(nonempty) is not dict
         or set(nonempty) != set(example_ids)
         or any(type(value) is not bool for value in nonempty.values())
+        or hashes != derived_hashes
+        or nonempty != derived_nonempty
         or payload.get("candidate_response_manifest_sha256") != _sha256(hashes)
     ):
         raise ValueError("safety content receipt response inventory is invalid")

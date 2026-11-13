@@ -244,6 +244,21 @@ actionable defect after the repairs and gates below.
     independently rederive every result. Category Evidence Schema V11 and final
     acceptance now require both this checkpoint-bound model receipt and the
     separate strict-uncertainty receipt.
+26. The ordinary-instruction and safety production commands still accepted
+    caller-authored response maps. Their pinned evaluators scored real text,
+    but nothing in the command path proved that text came from the checkpoint
+    named by the receipt; an IFEval caller could also choose a favorable
+    baseline. Both commands now load a complete checkpoint with exact training,
+    validation, test, held-out-suite, tokenizer and model lineage, generate all
+    frozen prompts internally with bounded greedy decoding, and preserve every
+    prompt hash, generated token ID, protocol result and independently decoded
+    response in a nested generation receipt. IFEval constructs its baseline
+    internally from the same architecture and runtime using the fixed seed 7;
+    its candidate and baseline prompt traces must match exactly. Safety passes
+    only the checkpoint-derived response map to the pinned local judge. Rehashed
+    response substitution, malformed protocol output, mismatched prompts,
+    model/runtime substitutions and caller-supplied response files now fail.
+    Category Evidence Schema V12 makes the stronger receipts explicit.
 
 ## Boundaries
 
@@ -267,7 +282,10 @@ actionable defect after the repairs and gates below.
 The latest repair batch has no regression in the executed source and integration
 gates, but the exhaustive review remains active and CodeRabbit review remains
 pending authentication. The ordinary-instruction runner is executable and
-audited. The exact current tree passes 620 tests and 195 subtests, along with
+audited, and it now generates both the candidate and fixed random baseline
+itself. The safety runner likewise generates its candidate responses directly
+from the complete checkpoint before invoking the pinned judge. The exact
+current tree passes 624 tests and 195 subtests, along with
 Ruff and strict mypy across 83 source files. The regression receipt path is now
 implemented and mandatory, but its fixed worker must still be exercised from a
 clean committed tree. Tokenizer fidelity is also executable and receipt-bound,
@@ -292,4 +310,4 @@ matches and 0/12 exact clean-core matches, and failed promotion-quality
 protocol rates. Its evidence and non-promotion decision are recorded in
 `docs/v12-recovery-diagnostic-20261113.md`. Neither diagnostic is evidence that
 a model has been trained, promoted, or improved. The exact current tree passes
-620 tests and 195 subtests.
+624 tests and 195 subtests.

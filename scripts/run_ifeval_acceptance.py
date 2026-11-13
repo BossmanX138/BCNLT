@@ -1,137 +1,230 @@
-"""Execute the pinned IFEval batch and publish its immutable receipt."""
+"""Generate checkpoint/baseline responses and run the pinned IFEval batch."""
 
 from __future__ import annotations
 
 import argparse
-import hashlib
+import gc
 import json
 import sys
 from pathlib import Path
+
+import torch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from bosscrafts_model.category_case_inventory import (
+    load_category_case_bundle,
+    load_category_case_records,
+)
 from bosscrafts_model.ifeval_case_runner import (
-    MAX_IFEVAL_BATCH_BYTES,
     build_ifeval_batch_receipt,
     publish_ifeval_batch_receipt,
     run_ifeval_cases,
 )
-from bosscrafts_model.model_category_evidence import checkpoint_sha256
+from bosscrafts_model.model import EngineeringModel
+from bosscrafts_model.model_acceptance import verify_heldout_suite_manifest
+from bosscrafts_model.model_response_generation import (
+    DETERMINISTIC_BASELINE_SEED,
+    MAX_MODEL_RESPONSE_TOKENS,
+    build_model_response_generation_receipt,
+    generate_model_response_cases,
+    responses_from_model_response_generation_receipt,
+)
+from bosscrafts_model.resumable_task_packing import audit_task_database
+from bosscrafts_model.tokenizer import NativeTokenizerBinding, bound_native_65k_config
+from bosscrafts_model.training_checkpoint import load_model_checkpoint_for_inference
+
+MAX_HELDOUT_MANIFEST_BYTES = 16 * 1024 * 1024
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    result: dict[str, object] = {}
+    payload: dict[str, object] = {}
     for key, value in pairs:
-        if key in result:
-            raise ValueError(f"duplicate JSON key: {key}")
-        result[key] = value
-    return result
+        if key in payload:
+            raise ValueError(f"duplicate held-out manifest key: {key}")
+        payload[key] = value
+    return payload
 
 
-def _read_bounded(path: Path, label: str) -> bytes:
+def _read_heldout_manifest(path: Path) -> dict[str, object]:
     try:
-        content = path.resolve().read_bytes()
-    except OSError as error:
-        raise ValueError(f"{label} is unreadable") from error
-    if not content or len(content) > MAX_IFEVAL_BATCH_BYTES:
-        raise ValueError(f"{label} size is invalid")
-    return content
-
-
-def _read_object(path: Path, label: str) -> dict[str, object]:
-    try:
-        value = json.loads(
-            _read_bounded(path, label).decode("utf-8"),
-            object_pairs_hook=_reject_duplicate_keys,
+        source = path.resolve()
+        before = source.stat()
+        if not 0 < before.st_size <= MAX_HELDOUT_MANIFEST_BYTES:
+            raise ValueError("held-out manifest size is invalid")
+        content = source.read_bytes()
+        after = source.stat()
+        if (
+            len(content) != before.st_size
+            or after.st_size != before.st_size
+            or after.st_mtime_ns != before.st_mtime_ns
+        ):
+            raise ValueError("held-out manifest changed while reading")
+        payload = json.loads(
+            content.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys
         )
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ValueError(f"{label} is invalid JSON") from error
-    if type(value) is not dict:
-        raise ValueError(f"{label} must be a JSON object")
-    return value
-
-
-def _read_cases(path: Path) -> list[dict[str, object]]:
-    try:
-        text = _read_bounded(path, "IFEval cases").decode("utf-8")
-    except UnicodeDecodeError as error:
-        raise ValueError("IFEval cases are not UTF-8") from error
-    lines = text.splitlines()
-    if not lines or any(not line.strip() for line in lines):
-        raise ValueError("IFEval cases must be non-empty JSONL")
-    result: list[dict[str, object]] = []
-    for index, line in enumerate(lines, start=1):
-        try:
-            value = json.loads(line, object_pairs_hook=_reject_duplicate_keys)
-        except json.JSONDecodeError as error:
-            raise ValueError(f"IFEval case line {index} is invalid JSON") from error
-        if type(value) is not dict:
-            raise ValueError(f"IFEval case line {index} is not an object")
-        result.append(value)
-    return result
-
-
-def _response_map(path: Path, label: str) -> dict[str, str]:
-    value = _read_object(path, label)
-    if any(type(key) is not str or type(response) is not str for key, response in value.items()):
-        raise ValueError(f"{label} values must be strings")
-    return {str(key): str(response) for key, response in value.items()}
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    try:
-        with path.resolve().open("rb") as stream:
-            for block in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(block)
-    except OSError as error:
-        raise ValueError("baseline evaluation is unreadable") from error
-    return digest.hexdigest()
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("held-out manifest is unreadable") from error
+    if type(payload) is not dict:
+        raise ValueError("held-out manifest must be a JSON object")
+    return payload
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--runtime-root", type=Path, required=True)
-    parser.add_argument("--cases", type=Path, required=True)
-    parser.add_argument("--candidate-responses", type=Path, required=True)
-    parser.add_argument("--baseline-responses", type=Path, required=True)
+    parser.add_argument("--case-bundle", type=Path, required=True)
+    parser.add_argument("--checkpoint-database", type=Path, required=True)
+    parser.add_argument("--validation-database", type=Path, required=True)
+    parser.add_argument("--test-database", type=Path, required=True)
+    parser.add_argument("--heldout-manifest", type=Path, required=True)
     parser.add_argument("--checkpoint", type=Path, required=True)
-    parser.add_argument("--checkpoint-step", type=int, required=True)
-    parser.add_argument("--baseline-evaluation", type=Path)
+    parser.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
+    parser.add_argument(
+        "--dtype", choices=("float32", "bfloat16"), default="bfloat16"
+    )
+    parser.add_argument("--max-new-tokens", type=int, default=512)
     parser.add_argument("--timeout-seconds", type=int, default=300)
     parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
-    cases = _read_cases(arguments.cases)
-    candidate = _response_map(arguments.candidate_responses, "candidate responses")
-    baseline = _response_map(arguments.baseline_responses, "baseline responses")
+
+    if not 1 <= arguments.max_new_tokens <= MAX_MODEL_RESPONSE_TOKENS:
+        parser.error(
+            "max-new-tokens must be between 1 and "
+            f"{MAX_MODEL_RESPONSE_TOKENS}"
+        )
+    if arguments.device == "cuda" and not torch.cuda.is_available():
+        parser.error("CUDA was requested but is unavailable")
+    if (
+        arguments.device == "cuda"
+        and arguments.dtype == "bfloat16"
+        and not torch.cuda.is_bf16_supported()
+    ):
+        parser.error("CUDA bfloat16 was requested but is unsupported")
+
+    binding = NativeTokenizerBinding.load()
+    checkpoint_audit = audit_task_database(binding, arguments.checkpoint_database)
+    validation_audit = audit_task_database(binding, arguments.validation_database)
+    test_audit = audit_task_database(binding, arguments.test_database)
+    if not all(
+        audit.audit_passed
+        for audit in (checkpoint_audit, validation_audit, test_audit)
+    ):
+        raise ValueError("IFEval acceptance requires fully audited task databases")
+    evaluation_identities = {
+        "validation": validation_audit.database_identity_sha256,
+        "test": test_audit.database_identity_sha256,
+    }
+    heldout_suite = verify_heldout_suite_manifest(
+        _read_heldout_manifest(arguments.heldout_manifest),
+        task_database_identities_sha256=evaluation_identities,
+    )
+    bundle = load_category_case_bundle(arguments.case_bundle)
+    if (
+        bundle.inventory.test_task_database_identity_sha256
+        != test_audit.database_identity_sha256
+        or bundle.inventory.category_example_ids["ordinary_instruction"]
+        != heldout_suite.category_example_ids["ordinary_instruction"]
+    ):
+        raise ValueError("IFEval acceptance case bundle lineage mismatch")
+    cases = load_category_case_records(bundle, "ordinary_instruction")
+
+    config = bound_native_65k_config(binding)
+    device = torch.device(arguments.device)
+    dtype = torch.float32 if arguments.dtype == "float32" else torch.bfloat16
+
+    torch.manual_seed(DETERMINISTIC_BASELINE_SEED)
+    baseline_model = EngineeringModel(config).to(device=device, dtype=dtype).eval()
+    baseline_generation = generate_model_response_cases(
+        model=baseline_model,
+        binding=binding,
+        category="ordinary_instruction",
+        case_bundle_root=arguments.case_bundle,
+        maximum_new_tokens=arguments.max_new_tokens,
+    )
+    baseline_receipt = build_model_response_generation_receipt(
+        baseline_generation,
+        source_type="deterministic_random_initialization",
+        checkpoint_sha256=None,
+        checkpoint_step=None,
+        random_seed=DETERMINISTIC_BASELINE_SEED,
+    )
+    del baseline_model
+    gc.collect()
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+
+    candidate_model = EngineeringModel(config).to(device=device, dtype=dtype).eval()
+    state = load_model_checkpoint_for_inference(
+        arguments.checkpoint,
+        candidate_model,
+        expected_task_database_identity_sha256=(
+            checkpoint_audit.database_identity_sha256
+        ),
+        expected_binding_sha256=binding.binding_sha256,
+        expected_model_fingerprint=config.fingerprint(),
+        expected_evaluation_task_database_identities_sha256=evaluation_identities,
+        expected_heldout_suite_manifest_sha256=heldout_suite.manifest_sha256,
+    )
+    if not (
+        state.epoch_index >= state.target_epochs
+        and state.cursor_after_example_id is None
+    ):
+        raise ValueError("IFEval acceptance requires a completed checkpoint")
+    candidate_generation = generate_model_response_cases(
+        model=candidate_model,
+        binding=binding,
+        category="ordinary_instruction",
+        case_bundle_root=arguments.case_bundle,
+        maximum_new_tokens=arguments.max_new_tokens,
+    )
+    candidate_receipt = build_model_response_generation_receipt(
+        candidate_generation,
+        source_type="checkpoint",
+        checkpoint_sha256=state.checkpoint_sha256,
+        checkpoint_step=state.step,
+        random_seed=None,
+    )
+    del candidate_model
+    gc.collect()
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+
+    candidate_responses = responses_from_model_response_generation_receipt(
+        candidate_receipt
+    )
+    baseline_responses = responses_from_model_response_generation_receipt(
+        baseline_receipt
+    )
     result = run_ifeval_cases(
         arguments.runtime_root,
         cases,
-        candidate,
-        baseline,
+        candidate_responses,
+        baseline_responses,
         timeout_seconds=arguments.timeout_seconds,
     )
     receipt = build_ifeval_batch_receipt(
         result,
-        candidate,
-        baseline,
-        checkpoint_sha256=checkpoint_sha256(arguments.checkpoint),
-        checkpoint_step=arguments.checkpoint_step,
-        baseline_source=(
-            str(arguments.baseline_evaluation.resolve())
-            if arguments.baseline_evaluation is not None
-            else "deterministic_random_initialization"
-        ),
-        baseline_evaluation_sha256=(
-            _file_sha256(arguments.baseline_evaluation)
-            if arguments.baseline_evaluation is not None
-            else None
-        ),
+        candidate_receipt,
+        baseline_receipt,
     )
-    publish_ifeval_batch_receipt(arguments.output, receipt)
-    print(json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True))
+    destination = publish_ifeval_batch_receipt(arguments.output, receipt)
+    print(
+        json.dumps(
+            {
+                "category": "ordinary_instruction",
+                "checkpoint_sha256": state.checkpoint_sha256,
+                "checkpoint_step": state.step,
+                "case_count": len(result.records),
+                "receipt_sha256": receipt["receipt_sha256"],
+                "output": str(destination),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
     return 0
 
 

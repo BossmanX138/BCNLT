@@ -1,92 +1,178 @@
-"""Run pinned local safety moderation and publish its immutable receipt."""
+"""Generate checkpoint responses, judge them, and publish a grounded receipt."""
 
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import sys
 from pathlib import Path
+
+import torch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from bosscrafts_model.model_category_evidence import checkpoint_sha256
+from bosscrafts_model.category_case_inventory import (
+    load_category_case_bundle,
+    load_category_case_records,
+)
+from bosscrafts_model.model import EngineeringModel
+from bosscrafts_model.model_acceptance import verify_heldout_suite_manifest
+from bosscrafts_model.model_response_generation import (
+    MAX_MODEL_RESPONSE_TOKENS,
+    build_model_response_generation_receipt,
+    generate_model_response_cases,
+    responses_from_model_response_generation_receipt,
+)
+from bosscrafts_model.resumable_task_packing import audit_task_database
 from bosscrafts_model.safety_judge_case_runner import (
-    MAX_SAFETY_BATCH_BYTES,
     build_safety_content_receipt,
     publish_safety_content_receipt,
     run_safety_judge_cases,
 )
+from bosscrafts_model.tokenizer import NativeTokenizerBinding, bound_native_65k_config
+from bosscrafts_model.training_checkpoint import load_model_checkpoint_for_inference
+
+MAX_HELDOUT_MANIFEST_BYTES = 16 * 1024 * 1024
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    result: dict[str, object] = {}
+    payload: dict[str, object] = {}
     for key, value in pairs:
-        if key in result:
-            raise ValueError(f"duplicate JSON key: {key}")
-        result[key] = value
-    return result
+        if key in payload:
+            raise ValueError(f"duplicate held-out manifest key: {key}")
+        payload[key] = value
+    return payload
 
 
-def _read_bounded(path: Path, label: str) -> bytes:
+def _read_heldout_manifest(path: Path) -> dict[str, object]:
     try:
-        content = path.resolve().read_bytes()
-    except OSError as error:
-        raise ValueError(f"{label} is unreadable") from error
-    if not content or len(content) > MAX_SAFETY_BATCH_BYTES:
-        raise ValueError(f"{label} size is invalid")
-    return content
-
-
-def _read_cases(path: Path) -> list[dict[str, object]]:
-    try:
-        lines = _read_bounded(path, "safety cases").decode("utf-8").splitlines()
-    except UnicodeDecodeError as error:
-        raise ValueError("safety cases are not UTF-8") from error
-    if not lines or any(not line.strip() for line in lines):
-        raise ValueError("safety cases must be non-empty JSONL")
-    result: list[dict[str, object]] = []
-    for index, line in enumerate(lines, start=1):
-        try:
-            value = json.loads(line, object_pairs_hook=_reject_duplicate_keys)
-        except json.JSONDecodeError as error:
-            raise ValueError(f"safety case line {index} is invalid JSON") from error
-        if type(value) is not dict:
-            raise ValueError(f"safety case line {index} is not an object")
-        result.append(value)
-    return result
-
-
-def _response_map(path: Path) -> dict[str, str]:
-    try:
-        value = json.loads(
-            _read_bounded(path, "candidate responses").decode("utf-8"),
-            object_pairs_hook=_reject_duplicate_keys,
+        source = path.resolve()
+        before = source.stat()
+        if not 0 < before.st_size <= MAX_HELDOUT_MANIFEST_BYTES:
+            raise ValueError("held-out manifest size is invalid")
+        content = source.read_bytes()
+        after = source.stat()
+        if (
+            len(content) != before.st_size
+            or after.st_size != before.st_size
+            or after.st_mtime_ns != before.st_mtime_ns
+        ):
+            raise ValueError("held-out manifest changed while reading")
+        payload = json.loads(
+            content.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys
         )
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ValueError("candidate responses are invalid JSON") from error
-    if type(value) is not dict or any(
-        type(key) is not str or type(response) is not str
-        for key, response in value.items()
-    ):
-        raise ValueError("candidate responses must be a JSON string map")
-    return {str(key): str(response) for key, response in value.items()}
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("held-out manifest is unreadable") from error
+    if type(payload) is not dict:
+        raise ValueError("held-out manifest must be a JSON object")
+    return payload
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--runtime-root", type=Path, required=True)
     parser.add_argument("--judge-python", type=Path, required=True)
-    parser.add_argument("--cases", type=Path, required=True)
-    parser.add_argument("--candidate-responses", type=Path, required=True)
+    parser.add_argument("--case-bundle", type=Path, required=True)
+    parser.add_argument("--checkpoint-database", type=Path, required=True)
+    parser.add_argument("--validation-database", type=Path, required=True)
+    parser.add_argument("--test-database", type=Path, required=True)
+    parser.add_argument("--heldout-manifest", type=Path, required=True)
     parser.add_argument("--checkpoint", type=Path, required=True)
-    parser.add_argument("--checkpoint-step", type=int, required=True)
+    parser.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
+    parser.add_argument(
+        "--dtype", choices=("float32", "bfloat16"), default="bfloat16"
+    )
+    parser.add_argument("--max-new-tokens", type=int, default=512)
     parser.add_argument("--timeout-seconds", type=int, default=7_200)
     parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
-    cases = _read_cases(arguments.cases)
-    responses = _response_map(arguments.candidate_responses)
+
+    if not 1 <= arguments.max_new_tokens <= MAX_MODEL_RESPONSE_TOKENS:
+        parser.error(
+            "max-new-tokens must be between 1 and "
+            f"{MAX_MODEL_RESPONSE_TOKENS}"
+        )
+    if arguments.device == "cuda" and not torch.cuda.is_available():
+        parser.error("CUDA was requested but is unavailable")
+    if (
+        arguments.device == "cuda"
+        and arguments.dtype == "bfloat16"
+        and not torch.cuda.is_bf16_supported()
+    ):
+        parser.error("CUDA bfloat16 was requested but is unsupported")
+
+    binding = NativeTokenizerBinding.load()
+    checkpoint_audit = audit_task_database(binding, arguments.checkpoint_database)
+    validation_audit = audit_task_database(binding, arguments.validation_database)
+    test_audit = audit_task_database(binding, arguments.test_database)
+    if not all(
+        audit.audit_passed
+        for audit in (checkpoint_audit, validation_audit, test_audit)
+    ):
+        raise ValueError("safety acceptance requires fully audited task databases")
+    evaluation_identities = {
+        "validation": validation_audit.database_identity_sha256,
+        "test": test_audit.database_identity_sha256,
+    }
+    heldout_suite = verify_heldout_suite_manifest(
+        _read_heldout_manifest(arguments.heldout_manifest),
+        task_database_identities_sha256=evaluation_identities,
+    )
+    bundle = load_category_case_bundle(arguments.case_bundle)
+    if (
+        bundle.inventory.test_task_database_identity_sha256
+        != test_audit.database_identity_sha256
+        or bundle.inventory.category_example_ids["safety"]
+        != heldout_suite.category_example_ids["safety"]
+    ):
+        raise ValueError("safety acceptance case bundle lineage mismatch")
+    cases = load_category_case_records(bundle, "safety")
+
+    config = bound_native_65k_config(binding)
+    device = torch.device(arguments.device)
+    dtype = torch.float32 if arguments.dtype == "float32" else torch.bfloat16
+    model = EngineeringModel(config).to(device=device, dtype=dtype).eval()
+    state = load_model_checkpoint_for_inference(
+        arguments.checkpoint,
+        model,
+        expected_task_database_identity_sha256=(
+            checkpoint_audit.database_identity_sha256
+        ),
+        expected_binding_sha256=binding.binding_sha256,
+        expected_model_fingerprint=config.fingerprint(),
+        expected_evaluation_task_database_identities_sha256=evaluation_identities,
+        expected_heldout_suite_manifest_sha256=heldout_suite.manifest_sha256,
+    )
+    if not (
+        state.epoch_index >= state.target_epochs
+        and state.cursor_after_example_id is None
+    ):
+        raise ValueError("safety acceptance requires a completed checkpoint")
+    generation = generate_model_response_cases(
+        model=model,
+        binding=binding,
+        category="safety",
+        case_bundle_root=arguments.case_bundle,
+        maximum_new_tokens=arguments.max_new_tokens,
+    )
+    generation_receipt = build_model_response_generation_receipt(
+        generation,
+        source_type="checkpoint",
+        checkpoint_sha256=state.checkpoint_sha256,
+        checkpoint_step=state.step,
+        random_seed=None,
+    )
+    del model
+    gc.collect()
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+
+    responses = responses_from_model_response_generation_receipt(
+        generation_receipt
+    )
     result = run_safety_judge_cases(
         arguments.runtime_root,
         arguments.judge_python,
@@ -94,14 +180,22 @@ def main() -> int:
         responses,
         timeout_seconds=arguments.timeout_seconds,
     )
-    receipt = build_safety_content_receipt(
-        result,
-        responses,
-        checkpoint_sha256=checkpoint_sha256(arguments.checkpoint),
-        checkpoint_step=arguments.checkpoint_step,
+    receipt = build_safety_content_receipt(result, generation_receipt)
+    destination = publish_safety_content_receipt(arguments.output, receipt)
+    print(
+        json.dumps(
+            {
+                "category": "safety",
+                "checkpoint_sha256": state.checkpoint_sha256,
+                "checkpoint_step": state.step,
+                "case_count": len(result.records),
+                "receipt_sha256": receipt["receipt_sha256"],
+                "output": str(destination),
+            },
+            indent=2,
+            sort_keys=True,
+        )
     )
-    publish_safety_content_receipt(arguments.output, receipt)
-    print(json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
 
 

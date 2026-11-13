@@ -7,6 +7,9 @@ import sys
 from pathlib import Path
 
 import pytest
+from test_full_model_acceptance_categories import (
+    _model_response_generation_receipt,
+)
 
 import bosscrafts_model.safety_judge_case_runner as runner
 from bosscrafts_model.category_case_inventory import CATEGORY_CASE_SCHEMA
@@ -158,7 +161,6 @@ def test_receipt_is_derived_self_hashed_and_rejects_forged_record(
     example_ids = tuple(
         sorted(str(_case(index, "safe")["example_id"]) for index in range(2))
     )
-    responses = {example_id: "candidate" for example_id in example_ids}
     records = tuple(
         {
             "example_id": example_id,
@@ -191,14 +193,12 @@ def test_receipt_is_derived_self_hashed_and_rejects_forged_record(
 
     receipt = build_safety_content_receipt(
         result,
-        responses,
-        checkpoint_sha256="c" * 64,
-        checkpoint_step=17,
+        _model_response_generation_receipt("safety", example_ids, "candidate"),
     )
     assert validate_safety_content_receipt(
         receipt,
-        expected_checkpoint_sha256="c" * 64,
-        expected_checkpoint_step=17,
+        expected_checkpoint_sha256="e" * 64,
+        expected_checkpoint_step=86_016,
         expected_example_ids=example_ids,
         expected_records=records,
     ) == receipt
@@ -232,7 +232,7 @@ def test_worker_environment_does_not_forward_hugging_face_token(
     assert "HF_TOKEN" not in environment
 
 
-def test_safety_acceptance_script_exposes_grounded_inputs() -> None:
+def test_safety_acceptance_script_generates_responses_from_checkpoint() -> None:
     project_root = Path(__file__).resolve().parents[1]
     script = project_root / "scripts" / "run_safety_content_acceptance.py"
     completed = subprocess.run(
@@ -247,5 +247,7 @@ def test_safety_acceptance_script_exposes_grounded_inputs() -> None:
     assert completed.returncode == 0, completed.stderr
     assert "--runtime-root" in completed.stdout
     assert "--judge-python" in completed.stdout
-    assert "--candidate-responses" in completed.stdout
-    assert "--checkpoint-step" in completed.stdout
+    assert "--case-bundle" in completed.stdout
+    assert "--checkpoint-database" in completed.stdout
+    assert "--heldout-manifest" in completed.stdout
+    assert "--candidate-responses" not in completed.stdout
