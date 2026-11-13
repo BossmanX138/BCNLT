@@ -11,6 +11,8 @@ import pytest
 from bosscrafts_model.category_case_inventory import (
     CATEGORY_CASE_SCHEMA,
     build_category_case_inventory,
+    load_category_case_bundle,
+    publish_category_case_bundle,
     publish_category_case_inventory,
 )
 from bosscrafts_model.heldout_suite_builder import load_category_case_inventory
@@ -105,6 +107,7 @@ def _case(category: str, index: int) -> dict[str, object]:
 
 
 def _write_case_files(root: Path) -> dict[str, Path]:
+    root.mkdir(parents=True, exist_ok=True)
     paths: dict[str, Path] = {}
     for category in ACCEPTANCE_CATEGORIES:
         records = sorted(
@@ -208,6 +211,35 @@ def test_rejects_mixed_test_database_lineage_and_repeated_packed_tasks(
         build_category_case_inventory(case_files)
 
 
+def test_publishes_and_reloads_complete_immutable_category_case_bundle(
+    tmp_path: Path,
+) -> None:
+    case_files = _write_case_files(tmp_path / "source")
+    bundle_root = tmp_path / "bundle"
+    published = publish_category_case_bundle(bundle_root, case_files)
+
+    assert published.bundle_root == bundle_root.resolve()
+    assert set(path.name for path in bundle_root.iterdir()) == {
+        *(f"{category}.jsonl" for category in ACCEPTANCE_CATEGORIES),
+        "inventory.json",
+        "manifest.json",
+    }
+    loaded = load_category_case_bundle(bundle_root)
+    assert loaded.manifest_sha256 == published.manifest_sha256
+    assert loaded.inventory.inventory_sha256 == published.inventory.inventory_sha256
+    assert set(loaded.case_files) == set(ACCEPTANCE_CATEGORIES)
+
+    original_manifest = (bundle_root / "manifest.json").read_bytes()
+    with pytest.raises(ValueError, match="already exists"):
+        publish_category_case_bundle(bundle_root, case_files)
+    assert (bundle_root / "manifest.json").read_bytes() == original_manifest
+
+    tokenizer_cases = bundle_root / "tokenizer_fidelity.jsonl"
+    tokenizer_cases.write_bytes(tokenizer_cases.read_bytes() + b"{}\n")
+    with pytest.raises(ValueError, match="SHA-256|inventory"):
+        load_category_case_bundle(bundle_root)
+
+
 def test_inventory_script_requires_every_category_file() -> None:
     project_root = Path(__file__).resolve().parents[1]
     completed = subprocess.run(
@@ -225,3 +257,4 @@ def test_inventory_script_requires_every_category_file() -> None:
     assert completed.returncode == 0, completed.stderr
     for category in ACCEPTANCE_CATEGORIES:
         assert f"--{category.replace('_', '-')}-cases" in completed.stdout
+    assert "--output-directory" in completed.stdout

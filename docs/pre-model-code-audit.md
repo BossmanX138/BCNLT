@@ -22,11 +22,11 @@ actionable defect after the repairs and gates below.
 - Ruff passed every changed Python file.
 - Mypy passed all 68 configured core source files and the changed orchestration
   scripts in strict mode.
-- The latest complete host-portable regression passed: 548 tests and 182
+- The latest complete host-portable regression passed: 549 tests and 182
   subtests, with warnings treated as errors; 13 Docker-only tests were
   explicitly deselected from that run.
 - The complementary Docker containment regression passed all 13 Docker-only
-  tests and 13 subtests; 548 host-portable tests were explicitly deselected.
+  tests and 13 subtests; 549 host-portable tests were explicitly deselected.
 - The earlier semantic-integrity baseline measured 74.5463% branch coverage:
   17,861 covered and 4,539 missing lines; 3,252 covered and 2,670 missing
   branches. That measurement predates the later exhaustive hardening and is not
@@ -107,6 +107,12 @@ actionable defect after the repairs and gates below.
     before failing. Corpus and report now publish as one staged, synced,
     no-clobber generation and reject empty or count-mismatched inputs before
     creating either artifact.
+16. Category freezing preserved case IDs but not the case payloads required to
+    execute those evaluations later. The freeze command now publishes all eight
+    validated JSONL catalogs, Inventory V2 and a self-hashed bundle manifest as
+    one immutable generation. Reloading requires an exact file inventory,
+    verifies every byte hash and count, and rebuilds the content-addressed
+    inventory from the preserved cases before accepting the bundle.
 
 ## Boundaries
 

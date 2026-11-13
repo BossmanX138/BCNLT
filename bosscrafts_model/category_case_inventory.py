@@ -5,11 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 from .heldout_suite_builder import (
     CATEGORY_CASE_INVENTORY_SCHEMA,
     PACKED_ACCEPTANCE_CATEGORIES,
+    CategoryCaseInventory,
+    load_category_case_inventory,
 )
 from .immutable_artifacts import publish_new_files
 from .model_acceptance import (
@@ -20,13 +23,25 @@ from .model_acceptance import (
 )
 
 CATEGORY_CASE_SCHEMA = "bosscrafts-model-category-case-v1"
+CATEGORY_CASE_BUNDLE_SCHEMA = "bosscrafts-model-category-case-bundle-v1"
 MAX_CATEGORY_CASE_FILE_BYTES = 128 * 1024 * 1024
+MAX_CATEGORY_CASE_BUNDLE_MANIFEST_BYTES = 16 * 1024 * 1024
+_BUNDLE_INVENTORY_FILE = "inventory.json"
+_BUNDLE_MANIFEST_FILE = "manifest.json"
 _PACKED_CATEGORIES = {
     "tokenizer_fidelity",
     "semantic_fidelity",
     "raw_code",
     "execution_correctness",
 }
+
+
+@dataclass(frozen=True)
+class CategoryCaseBundle:
+    bundle_root: Path
+    manifest_sha256: str
+    inventory: CategoryCaseInventory
+    case_files: dict[str, Path]
 
 
 def _canonical(value: object) -> bytes:
@@ -60,13 +75,25 @@ def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]
     return payload
 
 
-def _read_case_records(path: Path, category: str) -> list[dict[str, object]]:
+def _read_case_content(path: Path, category: str) -> bytes:
     try:
         content = path.resolve().read_bytes()
         if not content or len(content) > MAX_CATEGORY_CASE_FILE_BYTES:
             raise ValueError(f"{category} category case file size is invalid")
+    except OSError as error:
+        raise ValueError(f"{category} category case file is unreadable") from error
+    return content
+
+
+def _parse_case_records(
+    content: bytes,
+    category: str,
+) -> list[dict[str, object]]:
+    if not content or len(content) > MAX_CATEGORY_CASE_FILE_BYTES:
+        raise ValueError(f"{category} category case file size is invalid")
+    try:
         text = content.decode("utf-8")
-    except (OSError, UnicodeDecodeError) as error:
+    except UnicodeDecodeError as error:
         raise ValueError(f"{category} category case file is unreadable") from error
     lines = text.splitlines()
     if not lines or any(not line for line in lines):
@@ -190,20 +217,22 @@ def _validate_case_payload(
     raise AssertionError(f"unhandled acceptance category: {category}")
 
 
-def build_category_case_inventory(
-    case_files: Mapping[str, str | Path],
+def _build_category_case_inventory_from_contents(
+    case_contents: Mapping[str, bytes],
 ) -> dict[str, object]:
-    """Validate every frozen case and return the self-hashed ID inventory."""
-    if not isinstance(case_files, Mapping) or set(case_files) != set(
+    if not isinstance(case_contents, Mapping) or set(case_contents) != set(
         ACCEPTANCE_CATEGORIES
     ):
-        raise ValueError("category case files are incomplete")
+        raise ValueError("category case contents are incomplete")
     global_ids: set[str] = set()
     packed_database_identities: set[str] = set()
     categories: dict[str, object] = {}
     packed_task_references: dict[str, object] = {}
     for category in ACCEPTANCE_CATEGORIES:
-        records = _read_case_records(Path(case_files[category]), category)
+        content = case_contents[category]
+        if type(content) is not bytes:
+            raise ValueError(f"{category} category case content is invalid")
+        records = _parse_case_records(content, category)
         if not MINIMUM_CATEGORY_EXAMPLES[category] <= len(
             records
         ) <= MAXIMUM_CATEGORY_EXAMPLES:
@@ -295,6 +324,21 @@ def build_category_case_inventory(
     return {**unsigned, "inventory_sha256": _sha256(unsigned)}
 
 
+def build_category_case_inventory(
+    case_files: Mapping[str, str | Path],
+) -> dict[str, object]:
+    """Validate every frozen case and return the self-hashed ID inventory."""
+    if not isinstance(case_files, Mapping) or set(case_files) != set(
+        ACCEPTANCE_CATEGORIES
+    ):
+        raise ValueError("category case files are incomplete")
+    contents = {
+        category: _read_case_content(Path(case_files[category]), category)
+        for category in ACCEPTANCE_CATEGORIES
+    }
+    return _build_category_case_inventory_from_contents(contents)
+
+
 def publish_category_case_inventory(
     output: str | Path,
     inventory: dict[str, object],
@@ -312,3 +356,187 @@ def publish_category_case_inventory(
         artifact_label="category case inventory",
     )
     return destination
+
+
+def _sha256_bytes(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+def _inventory_example_count(payload: dict[str, object], category: str) -> int:
+    categories = payload.get("categories")
+    entry = categories.get(category) if type(categories) is dict else None
+    example_ids = entry.get("example_ids") if type(entry) is dict else None
+    if type(example_ids) is not list:
+        raise ValueError(f"{category} category inventory count is invalid")
+    return len(example_ids)
+
+
+def publish_category_case_bundle(
+    output_root: str | Path,
+    case_files: Mapping[str, str | Path],
+) -> CategoryCaseBundle:
+    """Publish every case catalog and its inventory as one immutable generation."""
+    if not isinstance(case_files, Mapping) or set(case_files) != set(
+        ACCEPTANCE_CATEGORIES
+    ):
+        raise ValueError("category case files are incomplete")
+    contents = {
+        category: _read_case_content(Path(case_files[category]), category)
+        for category in ACCEPTANCE_CATEGORIES
+    }
+    inventory_payload = _build_category_case_inventory_from_contents(contents)
+    inventory_content = (
+        json.dumps(
+            inventory_payload,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+    case_contracts = {
+        category: {
+            "file": f"{category}.jsonl",
+            "bytes": len(contents[category]),
+            "sha256": _sha256_bytes(contents[category]),
+            "record_count": _inventory_example_count(
+                inventory_payload,
+                category,
+            ),
+        }
+        for category in ACCEPTANCE_CATEGORIES
+    }
+    unsigned_manifest: dict[str, object] = {
+        "schema_version": CATEGORY_CASE_BUNDLE_SCHEMA,
+        "inventory_file": _BUNDLE_INVENTORY_FILE,
+        "inventory_file_sha256": _sha256_bytes(inventory_content),
+        "inventory_sha256": inventory_payload["inventory_sha256"],
+        "case_files": case_contracts,
+    }
+    manifest = {
+        **unsigned_manifest,
+        "manifest_sha256": _sha256(unsigned_manifest),
+    }
+    manifest_content = (
+        json.dumps(
+            manifest,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+    root = Path(output_root).resolve()
+    publication = tuple(
+        (root / str(case_contracts[category]["file"]), contents[category])
+        for category in ACCEPTANCE_CATEGORIES
+    ) + (
+        (root / _BUNDLE_INVENTORY_FILE, inventory_content),
+        (root / _BUNDLE_MANIFEST_FILE, manifest_content),
+    )
+    publish_new_files(publication, artifact_label="category case bundle")
+    return load_category_case_bundle(root)
+
+
+def _read_bundle_json(path: Path, label: str) -> dict[str, object]:
+    try:
+        content = path.read_bytes()
+        if not content or len(content) > MAX_CATEGORY_CASE_BUNDLE_MANIFEST_BYTES:
+            raise ValueError(f"{label} size is invalid")
+        payload = json.loads(
+            content.decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_keys,
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"{label} is unreadable") from error
+    if type(payload) is not dict:
+        raise ValueError(f"{label} must be an object")
+    return payload
+
+
+def load_category_case_bundle(output_root: str | Path) -> CategoryCaseBundle:
+    """Load and independently revalidate a complete category case bundle."""
+    root = Path(output_root).resolve()
+    expected_names = {
+        *(f"{category}.jsonl" for category in ACCEPTANCE_CATEGORIES),
+        _BUNDLE_INVENTORY_FILE,
+        _BUNDLE_MANIFEST_FILE,
+    }
+    if not root.is_dir() or {path.name for path in root.iterdir()} != expected_names:
+        raise ValueError("category case bundle file inventory is invalid")
+    manifest = _read_bundle_json(
+        root / _BUNDLE_MANIFEST_FILE,
+        "category case bundle manifest",
+    )
+    if set(manifest) != {
+        "schema_version",
+        "inventory_file",
+        "inventory_file_sha256",
+        "inventory_sha256",
+        "case_files",
+        "manifest_sha256",
+    }:
+        raise ValueError("category case bundle manifest fields are invalid")
+    unsigned = {key: value for key, value in manifest.items() if key != "manifest_sha256"}
+    if (
+        manifest.get("schema_version") != CATEGORY_CASE_BUNDLE_SCHEMA
+        or manifest.get("inventory_file") != _BUNDLE_INVENTORY_FILE
+        or not _is_sha256(manifest.get("inventory_file_sha256"))
+        or not _is_sha256(manifest.get("inventory_sha256"))
+        or manifest.get("manifest_sha256") != _sha256(unsigned)
+    ):
+        raise ValueError("category case bundle manifest integrity mismatch")
+    case_contracts = manifest.get("case_files")
+    if type(case_contracts) is not dict or set(case_contracts) != set(
+        ACCEPTANCE_CATEGORIES
+    ):
+        raise ValueError("category case bundle contracts are incomplete")
+    resolved_case_files: dict[str, Path] = {}
+    for category in ACCEPTANCE_CATEGORIES:
+        contract = case_contracts.get(category)
+        expected_name = f"{category}.jsonl"
+        path = root / expected_name
+        if (
+            type(contract) is not dict
+            or set(contract) != {"file", "bytes", "sha256", "record_count"}
+            or contract.get("file") != expected_name
+            or type(contract.get("bytes")) is not int
+            or int(contract["bytes"]) < 1
+            or not _is_sha256(contract.get("sha256"))
+            or type(contract.get("record_count")) is not int
+            or not path.is_file()
+            or path.stat().st_size != contract["bytes"]
+            or _sha256_bytes(path.read_bytes()) != contract["sha256"]
+        ):
+            raise ValueError(f"{category} category case bundle SHA-256 mismatch")
+        resolved_case_files[category] = path
+    inventory_path = root / _BUNDLE_INVENTORY_FILE
+    inventory_content = inventory_path.read_bytes()
+    if _sha256_bytes(inventory_content) != manifest["inventory_file_sha256"]:
+        raise ValueError("category case bundle inventory file SHA-256 mismatch")
+    inventory_payload = _read_bundle_json(
+        inventory_path,
+        "category case bundle inventory",
+    )
+    rebuilt_inventory = build_category_case_inventory(resolved_case_files)
+    if (
+        inventory_payload != rebuilt_inventory
+        or inventory_payload.get("inventory_sha256") != manifest["inventory_sha256"]
+    ):
+        raise ValueError("category case bundle inventory mismatch")
+    for category in ACCEPTANCE_CATEGORIES:
+        contract = case_contracts[category]
+        if contract["record_count"] != _inventory_example_count(
+            rebuilt_inventory,
+            category,
+        ):
+            raise ValueError(f"{category} category case bundle count mismatch")
+    inventory = load_category_case_inventory(inventory_path)
+    return CategoryCaseBundle(
+        bundle_root=root,
+        manifest_sha256=str(manifest["manifest_sha256"]),
+        inventory=inventory,
+        case_files=resolved_case_files,
+    )

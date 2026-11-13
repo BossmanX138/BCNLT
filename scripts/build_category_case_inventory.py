@@ -12,8 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bosscrafts_model.category_case_inventory import (
-    build_category_case_inventory,
-    publish_category_case_inventory,
+    publish_category_case_bundle,
 )
 from bosscrafts_model.model_acceptance import ACCEPTANCE_CATEGORIES
 
@@ -27,17 +26,28 @@ def main() -> int:
             type=Path,
             required=True,
         )
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--output-directory", type=Path, required=True)
     arguments = parser.parse_args()
 
-    inventory = build_category_case_inventory(
+    bundle = publish_category_case_bundle(
+        arguments.output_directory,
         {
             category: getattr(arguments, f"{category}_cases")
             for category in ACCEPTANCE_CATEGORIES
-        }
+        },
     )
-    publish_category_case_inventory(arguments.output, inventory)
-    print(json.dumps(inventory, ensure_ascii=False, indent=2, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "bundle_root": str(bundle.bundle_root),
+                "manifest_sha256": bundle.manifest_sha256,
+                "inventory_sha256": bundle.inventory.inventory_sha256,
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+    )
     return 0
 
 
