@@ -61,8 +61,6 @@ def expected_v10_status_fields(
 def build_v10_chunk_command(
     *,
     status_path: Path,
-    validation_database: Path,
-    test_database: Path,
     heldout_suite_manifest: Path,
 ) -> list[str]:
     return [
@@ -74,10 +72,6 @@ def build_v10_chunk_command(
         ),
         "--status-output",
         str(status_path),
-        "--validation-database",
-        str(validation_database),
-        "--test-database",
-        str(test_database),
         "--heldout-suite-manifest",
         str(heldout_suite_manifest),
     ]
@@ -104,16 +98,12 @@ def _load_status(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--status", type=Path, default=DEFAULT_STATUS)
-    parser.add_argument("--validation-database", type=Path, required=True)
-    parser.add_argument("--test-database", type=Path, required=True)
     parser.add_argument("--heldout-suite-manifest", type=Path, required=True)
     parser.add_argument("--max-chunks", type=int, default=30)
     arguments = parser.parse_args()
     if not 1 <= arguments.max_chunks <= 30:
         parser.error("max-chunks must be between 1 and 30")
     status_path = arguments.status.resolve()
-    validation_database = arguments.validation_database.resolve()
-    test_database = arguments.test_database.resolve()
     heldout_suite_manifest = arguments.heldout_suite_manifest.resolve()
     manifest = read_v10_heldout_manifest(heldout_suite_manifest)
     (
@@ -143,8 +133,6 @@ def main() -> int:
         completed = subprocess.run(
             build_v10_chunk_command(
                 status_path=status_path,
-                validation_database=validation_database,
-                test_database=test_database,
                 heldout_suite_manifest=heldout_suite_manifest,
             ),
             cwd=PROJECT_ROOT,

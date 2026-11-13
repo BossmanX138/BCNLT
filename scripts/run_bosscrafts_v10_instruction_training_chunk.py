@@ -197,8 +197,6 @@ def build_bounded_training_command(
     status_output: Path,
     parent_database: Path,
     parent_checkpoint: Path,
-    validation_database: Path,
-    test_database: Path,
     heldout_suite_manifest: Path,
     resume: bool,
 ) -> list[str]:
@@ -207,10 +205,6 @@ def build_bounded_training_command(
         str(PROJECT_ROOT / "scripts" / "run_bounded_training_trial.py"),
         "--database",
         str(database),
-        "--validation-database",
-        str(validation_database),
-        "--test-database",
-        str(test_database),
         "--heldout-suite-manifest",
         str(heldout_suite_manifest),
         "--checkpoint",
@@ -328,8 +322,6 @@ def main() -> int:
     parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT)
     parser.add_argument("--parent-database", type=Path, default=DEFAULT_PARENT_DATABASE)
     parser.add_argument("--parent-checkpoint", type=Path, default=DEFAULT_PARENT_CHECKPOINT)
-    parser.add_argument("--validation-database", type=Path, required=True)
-    parser.add_argument("--test-database", type=Path, required=True)
     parser.add_argument("--heldout-suite-manifest", type=Path, required=True)
     parser.add_argument("--status-output", type=Path)
     parser.add_argument("--dry-run", action="store_true")
@@ -338,8 +330,6 @@ def main() -> int:
     checkpoint = arguments.checkpoint.resolve()
     parent_database = arguments.parent_database.resolve()
     parent_checkpoint = arguments.parent_checkpoint.resolve()
-    validation_database = arguments.validation_database.resolve()
-    test_database = arguments.test_database.resolve()
     heldout_suite_manifest = arguments.heldout_suite_manifest.resolve()
     status_output = (
         arguments.status_output.resolve()
@@ -366,8 +356,6 @@ def main() -> int:
         status_output=status_output,
         parent_database=parent_database,
         parent_checkpoint=parent_checkpoint,
-        validation_database=validation_database,
-        test_database=test_database,
         heldout_suite_manifest=heldout_suite_manifest,
         resume=resume,
     )
@@ -379,10 +367,6 @@ def main() -> int:
         "parent_database": str(parent_database),
         "parent_checkpoint": str(parent_checkpoint),
         "parent_checkpoint_sha256": PARENT_CHECKPOINT_SHA256,
-        "evaluation_databases": {
-            "validation": str(validation_database),
-            "test": str(test_database),
-        },
         "evaluation_database_identities_sha256": (
             evaluation_database_identities_sha256
         ),

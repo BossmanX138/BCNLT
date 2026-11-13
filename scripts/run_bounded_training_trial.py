@@ -82,6 +82,24 @@ def _read_heldout_manifest(path: Path) -> dict[str, object]:
     return payload
 
 
+def _verify_self_contained_heldout_manifest(
+    payload: dict[str, object],
+) -> tuple[dict[str, str], str]:
+    identities = payload.get("evaluation_task_database_identities_sha256")
+    if type(identities) is not dict:
+        raise ValueError("held-out suite manifest does not bind both split databases")
+    suite = verify_heldout_suite_manifest(
+        payload,
+        task_database_identities_sha256={
+            str(split): str(identity) for split, identity in identities.items()
+        },
+    )
+    return (
+        suite.evaluation_task_database_identities_sha256,
+        suite.manifest_sha256,
+    )
+
+
 def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
     """Publish a complete UTF-8 JSON document without exposing partial writes."""
     path = path.resolve()
@@ -187,14 +205,14 @@ def main() -> int:
         parser.error("validation-database and test-database must be supplied together")
     if arguments.evaluation_database is not None and plural_evaluation_supplied:
         parser.error("singular and plural evaluation databases are mutually exclusive")
-    evaluation_contract_supplied = (
+    evaluation_databases_supplied = (
         arguments.evaluation_database is not None or plural_evaluation_supplied
     )
-    if evaluation_contract_supplied != (arguments.heldout_suite_manifest is not None):
+    if evaluation_databases_supplied and arguments.heldout_suite_manifest is None:
         parser.error(
             "evaluation databases and heldout-suite-manifest must be supplied together"
         )
-    if arguments.full_model and not evaluation_contract_supplied:
+    if arguments.full_model and arguments.heldout_suite_manifest is None:
         parser.error("full-model training requires a frozen evaluation contract")
     if (arguments.initialization_checkpoint_sha256 is None) != (
         arguments.initialization_database_identity_sha256 is None
@@ -257,14 +275,19 @@ def main() -> int:
     evaluation_database_identity_sha256: str | None = None
     evaluation_database_identities_sha256: dict[str, str] | None = None
     heldout_suite_manifest_sha256: str | None = None
+    heldout_manifest = (
+        _read_heldout_manifest(arguments.heldout_suite_manifest)
+        if arguments.heldout_suite_manifest is not None
+        else None
+    )
     if arguments.evaluation_database is not None:
-        if arguments.heldout_suite_manifest is None:
+        if heldout_manifest is None:
             raise RuntimeError("validated held-out suite manifest is missing")
         evaluation_audit = audit_task_database(
             binding, arguments.evaluation_database
         )
         heldout_suite = verify_heldout_suite_manifest(
-            _read_heldout_manifest(arguments.heldout_suite_manifest),
+            heldout_manifest,
             task_database_identity_sha256=(
                 evaluation_audit.database_identity_sha256
             ),
@@ -274,14 +297,14 @@ def main() -> int:
         )
         heldout_suite_manifest_sha256 = heldout_suite.manifest_sha256
     elif arguments.validation_database is not None:
-        if arguments.test_database is None or arguments.heldout_suite_manifest is None:
+        if arguments.test_database is None or heldout_manifest is None:
             raise RuntimeError("validated plural evaluation contract is incomplete")
         evaluation_audits = {
             "validation": audit_task_database(binding, arguments.validation_database),
             "test": audit_task_database(binding, arguments.test_database),
         }
         heldout_suite = verify_heldout_suite_manifest(
-            _read_heldout_manifest(arguments.heldout_suite_manifest),
+            heldout_manifest,
             task_database_identities_sha256={
                 split: audit.database_identity_sha256
                 for split, audit in evaluation_audits.items()
@@ -291,6 +314,11 @@ def main() -> int:
             heldout_suite.evaluation_task_database_identities_sha256
         )
         heldout_suite_manifest_sha256 = heldout_suite.manifest_sha256
+    elif heldout_manifest is not None:
+        (
+            evaluation_database_identities_sha256,
+            heldout_suite_manifest_sha256,
+        ) = _verify_self_contained_heldout_manifest(heldout_manifest)
     dataset = ResumableTaskDataset(binding, arguments.database)
     train_example_count = dataset.example_count(split="train")
     if train_example_count < 1:
