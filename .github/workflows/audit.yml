@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   verify:
-    name: Windows Python 3.13 verification
+    name: Windows Python 3.13 host-portable verification
     runs-on: windows-latest
     timeout-minutes: 30
     env:
@@ -47,5 +47,5 @@ jobs:
       - name: Compile all Python sources
         run: uv run --frozen python -m compileall -q bosscrafts_model scripts tests
 
-      - name: Run the complete warning-strict regression
-        run: uv run --frozen python -m pytest -W error -q
+      - name: Run the warning-strict host-portable regression
+        run: uv run --frozen python -m pytest -W error -q -m "not requires_docker"

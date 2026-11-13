@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from runtime_import import select_bcnlt_runtime
 
@@ -54,6 +56,7 @@ class SandboxScientificLearningTests(unittest.TestCase):
             evidence_kinds=("grammar_structure",),
         )
 
+    @pytest.mark.requires_docker
     def test_passed_evidence_requires_real_execution_and_negative_control(self) -> None:
         fixture = CodingExperimentFixture(
             experiment_id="sandbox-addition-1",
@@ -159,6 +162,7 @@ class SandboxScientificLearningTests(unittest.TestCase):
                 negative_control=control,
             )
 
+    @pytest.mark.requires_docker
     def test_two_sandbox_reproductions_promote_and_reload_attested_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             ledger = Path(directory) / "wildcard.jsonl"

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -10,6 +12,10 @@ def _feature():
     if importlib.util.find_spec("bosscrafts_model.raw_ast_witness") is None:
         pytest.fail("raw AST witness client is not implemented")
     return importlib.import_module("bosscrafts_model.raw_ast_witness")
+
+
+def test_raw_ast_witness_uses_the_active_verified_interpreter():
+    assert _feature()._PYTHON_313 == Path(sys.executable).resolve()
 
 
 def test_raw_ast_witness_anchors_claimed_relation_without_semantic_extraction():

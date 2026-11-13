@@ -7,6 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from runtime_import import select_bcnlt_runtime
 
@@ -152,6 +154,7 @@ class ExtendedCoreVersionStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "sandbox-attested"):
             ExtendedCorePromotionCandidate.from_memory(memory)
 
+    @pytest.mark.requires_docker
     def test_versions_validate_activate_and_rollback_without_mutation(self) -> None:
         memory = WildcardMemory(
             language="python",
@@ -222,6 +225,7 @@ class ExtendedCoreVersionStoreTests(unittest.TestCase):
             self.assertTrue(store.version_path(second.version_sha256).is_dir())
             store.verify_all()
 
+    @pytest.mark.requires_docker
     def test_concurrent_activation_has_one_event_and_one_winner(self) -> None:
         memory = WildcardMemory(
             language="python",

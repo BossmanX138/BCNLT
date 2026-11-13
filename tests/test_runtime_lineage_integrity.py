@@ -40,6 +40,17 @@ def test_contained_runtime_lineage_accepts_current_runtime_bytes() -> None:
     )
 
 
+def test_contained_runtime_site_packages_are_immutable_shipped_files() -> None:
+    site_packages = RUNTIME_ROOT / "site-packages"
+    shipped = sorted(path for path in site_packages.rglob("*") if path.is_file())
+
+    assert len(shipped) == 12
+    assert not any(
+        path.suffix.casefold() in {".pyc", ".pyo"} or "__pycache__" in path.parts
+        for path in shipped
+    )
+
+
 def test_contained_runtime_identity_covers_executable_site_packages() -> None:
     aggregate = source_pipeline._aggregate_sha256
 

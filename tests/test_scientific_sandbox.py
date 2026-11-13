@@ -5,10 +5,14 @@ import time
 import unittest
 from unittest import mock
 
+import pytest
+
 from bosscrafts_model.scientific_sandbox import (
     DockerScientificSandbox,
     SandboxExecutionError,
 )
+
+pytestmark = pytest.mark.requires_docker
 
 
 class ScientificSandboxIntegrationTests(unittest.TestCase):

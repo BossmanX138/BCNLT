@@ -18,7 +18,7 @@ actionable defect after the repairs and gates below.
 - The contained runtime is sealed by the normalized Python-source aggregate
   `c5623e97f3f1e1e884e1d54a316d174292fbcbf61da3ddfdbf3b432418e0450a`.
 - The resulting parser runtime identity is
-  `616fb71b9da7e14f16dfd66988d8d2f919208f12edc5d2b193b90e51947b3169`.
+  `85992d7b5695166ac23717efeb1314b6f9eb3a44ae15b4392e74c85f5b10b8cb`.
 - Ruff passed every changed Python file.
 - Mypy passed all 64 configured core source files and the changed orchestration
   scripts in strict mode.

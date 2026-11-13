@@ -4,18 +4,23 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import suppress
 from pathlib import Path
 
-from .bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
+from .bcnlt_source_pipeline import (
+    PARSER_RUNTIME_IDENTITY_SHA256,
+    BCNLTSourcePipeline,
+    _sidecar_environment,
+)
 
 PROTOCOL = "bosscrafts-raw-ast-witness-v2"
 MAX_RESPONSE_BYTES = 32 * 1024 * 1024
 _SIDECAR = Path(__file__).with_name("raw_ast_witness_sidecar.py")
-_PYTHON_313 = Path(r"C:\ProgramData\anaconda3\python.exe")
+_PYTHON_313 = Path(sys.executable).resolve()
 SIDECAR_SOURCE_SHA256 = hashlib.sha256(_SIDECAR.read_bytes()).hexdigest()
 _RESPONSE_KEYS = {
     "protocol",
@@ -124,6 +129,7 @@ class RawAstWitnessClient:
             raise ValueError("expected_sidecar_sha256 must be a lowercase SHA-256")
         if hashlib.sha256(_SIDECAR.read_bytes()).hexdigest() != expected:
             raise ValueError("raw AST witness sidecar source SHA-256 mismatch")
+        BCNLTSourcePipeline.validate_contained_runtime(_PYTHON_313)
         self._timeout_seconds = float(timeout_seconds)
         self._expected_sidecar_sha256 = expected
         self._process: subprocess.Popen[bytes] | None = None
@@ -148,10 +154,19 @@ class RawAstWitnessClient:
         ):
             raise ValueError("raw AST witness sidecar source SHA-256 mismatch")
         process = subprocess.Popen(
-            [str(_PYTHON_313), "-I", str(_SIDECAR), "--serve"],
+            [
+                str(_PYTHON_313),
+                "-I",
+                "-B",
+                "-X",
+                "utf8",
+                str(_SIDECAR),
+                "--serve",
+            ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=_sidecar_environment(),
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         if process.stdin is None or process.stdout is None or process.stderr is None:

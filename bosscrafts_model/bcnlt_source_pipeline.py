@@ -81,13 +81,13 @@ _EXPECTED_RUNTIME_IDENTITY = {
     "tree_sitter": "d8efa5533a1c79cc404df3a0ff03d76626ad50d54b74d97e4cf6e30ab85bebe4",
     "language_pack": "18fda57fbe2f52f85cf09fd1fc5af6509bfe0a8c6d3d425cafe3d7b63f8dca6e",
     "grammars": "19fc42827e8ab3b37282c0666caa1ddd8abcd3708298fb1665c10df440c3d090",
-    "site_packages": "2bd3e047b78621d289a443a50264c2413f740279f33f41176f3a46848d0c536c",
+    "site_packages": "3daa4575bdd757c649febf2c8514c80ab1311641c0205463b1c89b1e928b262c",
 }
 _EXPECTED_RUNTIME_MANIFEST_SHA256 = (
-    "4d9945ec9160d6b8b07fb55d81255d88c69cbe392637ed6bbc30cbc6d385c63c"
+    "8eb8dda50d188a2ed844f7de1e10fb71ac3eeed86c8fd4e2508e40fff0d5720d"
 )
 PARSER_RUNTIME_IDENTITY_SHA256 = (
-    "616fb71b9da7e14f16dfd66988d8d2f919208f12edc5d2b193b90e51947b3169"
+    "85992d7b5695166ac23717efeb1314b6f9eb3a44ae15b4392e74c85f5b10b8cb"
 )
 PARSER_RUNTIME_NOT_APPLICABLE = "not_applicable"
 _FIELD_ORDER = (
@@ -181,6 +181,7 @@ def _sidecar_environment() -> dict[str, str]:
         "TMP": os.environ.get("TMP", str(_PROJECT_ROOT / ".tmp")),
         "PYTHONIOENCODING": "utf-8",
         "PYTHONNOUSERSITE": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
     }
 
 
@@ -218,7 +219,15 @@ class _PersistentSidecarWorker:
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
             process = subprocess.Popen(
-                [str(self._python), "-I", str(_SIDECAR), "--worker"],
+                [
+                    str(self._python),
+                    "-I",
+                    "-B",
+                    "-X",
+                    "utf8",
+                    str(_SIDECAR),
+                    "--worker",
+                ],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
@@ -546,7 +555,7 @@ class BCNLTSourcePipeline:
             NativeSemanticRecordCodec(binding),
             runtime_spec_sha256=CURRENT_RUNTIME_SPEC_SHA256,
         )
-        self._validate_runtime_files()
+        self.validate_contained_runtime(self._python)
 
     @property
     def parser_execution_integrated(self) -> bool:
@@ -618,8 +627,11 @@ class BCNLTSourcePipeline:
             self._workers.add(worker)
         return worker
 
-    def _validate_runtime_files(self) -> None:
-        if not self._python.is_file():
+    @staticmethod
+    def validate_contained_runtime(python: Path) -> None:
+        """Fail closed unless the shipped parser runtime and interpreter match."""
+
+        if not python.is_file():
             raise ValueError("pinned CPython 3.13 sidecar interpreter is unavailable")
         required = (
             _SIDECAR,
@@ -730,7 +742,7 @@ class BCNLTSourcePipeline:
             )
         version_check = subprocess.run(
             [
-                str(self._python),
+                str(python),
                 "-I",
                 "-c",
                 "import platform,struct,sys; print(f'{sys.version_info.major}.{sys.version_info.minor}|{platform.python_implementation()}|{struct.calcsize(\"P\") * 8}')",
@@ -799,7 +811,14 @@ class BCNLTSourcePipeline:
                 )
             try:
                 completed = subprocess.run(
-                    [str(self._python), "-I", str(_SIDECAR)],
+                    [
+                        str(self._python),
+                        "-I",
+                        "-B",
+                        "-X",
+                        "utf8",
+                        str(_SIDECAR),
+                    ],
                     input=request_bytes,
                     capture_output=True,
                     timeout=self._timeout_seconds,

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = PROJECT_ROOT / "vendor" / "bcnlt_runtime_v10_learning_candidate"
 SIDECAR = RUNTIME / "bcnlt_source_sidecar.py"
-PYTHON_313 = Path(r"C:\ProgramData\anaconda3\python.exe")
+PYTHON_313 = Path(sys.executable).resolve()
 PROTOCOL = "bosscrafts-bcnlt-source-sidecar-v4"
 
 
