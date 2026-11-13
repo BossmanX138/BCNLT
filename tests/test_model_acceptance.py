@@ -192,6 +192,29 @@ def _rebind_database(payload: dict[str, object], database_identity: str) -> None
     ):
         if field in payload:
             payload[field] = database_identity
+    supporting = payload.get("supporting_evidence")
+    if type(supporting) is dict:
+        tokenizer_receipt = supporting.get("tokenizer_fidelity_receipt")
+        if type(tokenizer_receipt) is dict:
+            tokenizer_receipt["task_database_identity_sha256"] = database_identity
+            receipt_body = {
+                key: value
+                for key, value in tokenizer_receipt.items()
+                if key != "receipt_sha256"
+            }
+            tokenizer_receipt["receipt_sha256"] = hashlib.sha256(
+                json.dumps(
+                    receipt_body,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest()
+            metrics = payload.get("metrics")
+            if type(metrics) is dict:
+                metrics["tokenizer_fidelity_receipt_sha256"] = (
+                    tokenizer_receipt["receipt_sha256"]
+                )
     if "artifact_sha256" in payload:
         body = {key: value for key, value in payload.items() if key != "artifact_sha256"}
         payload["artifact_sha256"] = hashlib.sha256(

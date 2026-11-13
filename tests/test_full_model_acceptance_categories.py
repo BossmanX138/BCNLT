@@ -58,6 +58,10 @@ from bosscrafts_model.tokenizer import (
     EXPECTED_TOKENIZER_SHA256,
     NativeTokenizerBinding,
 )
+from bosscrafts_model.tokenizer_fidelity_acceptance import (
+    TokenizerFidelityBatchResult,
+    build_tokenizer_fidelity_receipt,
+)
 
 DATABASE_ID = "a" * 64
 MODEL_ID = EXPECTED_MODEL_FINGERPRINT
@@ -315,11 +319,15 @@ def _metrics(category: str) -> dict[str, object]:
     safety_content = _safety_content_receipt_payload()
     containment = _containment_receipt_payload()
     regression = _regression_receipt_payload()
+    tokenizer_fidelity = _tokenizer_fidelity_receipt_payload()
     return {
         "tokenizer_fidelity": {
             "exact_roundtrip_rate": 1.0,
             "id_stability_rate": 1.0,
             "reserved_control_violation_count": 0,
+            "tokenizer_fidelity_receipt_sha256": tokenizer_fidelity[
+                "receipt_sha256"
+            ],
         },
         "semantic_fidelity": {
             "exact_semantic_record_rate": 1.0,
@@ -558,8 +566,44 @@ def _regression_receipt_payload() -> dict[str, object]:
     )
 
 
+def _tokenizer_fidelity_receipt_payload() -> dict[str, object]:
+    records = tuple(_records("tokenizer_fidelity"))
+    details = tuple(
+        {
+            **record,
+            "task_example_id": hashlib.sha256(
+                f"tokenizer-task:{record['example_id']}".encode()
+            ).hexdigest(),
+            "language": LANGUAGES[index % len(LANGUAGES)],
+            "family": "code_to_semantic",
+            "input_ids_sha256": hashlib.sha256(
+                f"tokenizer-input:{record['example_id']}".encode()
+            ).hexdigest(),
+        }
+        for index, record in enumerate(records)
+    )
+    result = TokenizerFidelityBatchResult(
+        case_bundle_manifest_sha256="3" * 64,
+        case_inventory_sha256="4" * 64,
+        task_database_identity_sha256=DATABASE_ID,
+        binding_sha256=BINDING.binding_sha256,
+        tokenizer_sha256=TOKENIZER_ID,
+        records=records,
+        details=details,
+    )
+    return build_tokenizer_fidelity_receipt(
+        result,
+        checkpoint_sha256=CHECKPOINT_ID,
+        checkpoint_step=86_016,
+    )
+
+
 def _category(category: str) -> dict[str, object]:
-    if category == "semantic_fidelity":
+    if category == "tokenizer_fidelity":
+        supporting_evidence = {
+            "tokenizer_fidelity_receipt": _tokenizer_fidelity_receipt_payload()
+        }
+    elif category == "semantic_fidelity":
         supporting_evidence = {
             "strict_uncertainty_receipt": _strict_receipt_payload()
         }
@@ -781,38 +825,51 @@ class FullModelAcceptanceCategoryTests(unittest.TestCase):
             self._verify(tuple(fabricated))
 
         missing = [_category(category) for category in CATEGORIES]
-        missing[0]["records"].pop()
+        missing_category = next(
+            item for item in missing if item["category"] == "raw_code"
+        )
+        missing_category["records"].pop()
         body = {
-            key: value for key, value in missing[0].items() if key != "artifact_sha256"
+            key: value
+            for key, value in missing_category.items()
+            if key != "artifact_sha256"
         }
-        missing[0]["artifact_sha256"] = hashlib.sha256(_canonical(body)).hexdigest()
+        missing_category["artifact_sha256"] = hashlib.sha256(
+            _canonical(body)
+        ).hexdigest()
         with self.assertRaisesRegex(ValueError, "records are incomplete"):
             self._verify(tuple(missing))
 
         reordered = [_category(category) for category in CATEGORIES]
-        reordered[0]["records"][0], reordered[0]["records"][1] = (
-            reordered[0]["records"][1],
-            reordered[0]["records"][0],
+        reordered_category = next(
+            item for item in reordered if item["category"] == "raw_code"
+        )
+        reordered_category["records"][0], reordered_category["records"][1] = (
+            reordered_category["records"][1],
+            reordered_category["records"][0],
         )
         body = {
             key: value
-            for key, value in reordered[0].items()
+            for key, value in reordered_category.items()
             if key != "artifact_sha256"
         }
-        reordered[0]["artifact_sha256"] = hashlib.sha256(
+        reordered_category["artifact_sha256"] = hashlib.sha256(
             _canonical(body)
         ).hexdigest()
         with self.assertRaisesRegex(ValueError, "inventory mismatch"):
             self._verify(tuple(reordered))
 
         non_boolean = [_category(category) for category in CATEGORIES]
-        non_boolean[0]["records"][0]["exact_roundtrip"] = 1
+        non_boolean_category = next(
+            item for item in non_boolean if item["category"] == "raw_code"
+        )
+        non_boolean_category["records"][0]["exact_roundtrip"] = 1
         body = {
             key: value
-            for key, value in non_boolean[0].items()
+            for key, value in non_boolean_category.items()
             if key != "artifact_sha256"
         }
-        non_boolean[0]["artifact_sha256"] = hashlib.sha256(
+        non_boolean_category["artifact_sha256"] = hashlib.sha256(
             _canonical(body)
         ).hexdigest()
         with self.assertRaisesRegex(ValueError, "must be boolean"):

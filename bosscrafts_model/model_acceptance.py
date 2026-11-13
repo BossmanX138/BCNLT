@@ -961,6 +961,9 @@ def verify_model_acceptance(
             checkpoint_step=payload.get("checkpoint_step"),
             expected_example_ids=heldout_suite.category_example_ids[category],
             expected_records=payload.get("records"),
+            expected_task_database_identity_sha256=(
+                evaluation_database_identities["test"]
+            ),
         )
         recomputed_metrics = recompute_category_metrics(
             category,
@@ -1149,7 +1152,36 @@ def _validated_category_supporting_evidence(
     checkpoint_step: object,
     expected_example_ids: Sequence[str],
     expected_records: object,
+    expected_task_database_identity_sha256: str,
 ) -> dict[str, object]:
+    if category == "tokenizer_fidelity":
+        from .tokenizer_fidelity_acceptance import (
+            tokenizer_fidelity_receipt_metrics,
+            validate_tokenizer_fidelity_receipt,
+        )
+
+        if (
+            type(value) is not dict
+            or set(value) != {"tokenizer_fidelity_receipt"}
+            or type(checkpoint_sha256) is not str
+            or type(checkpoint_step) is not int
+            or type(expected_records) is not list
+        ):
+            raise ValueError(
+                "tokenizer_fidelity supporting evidence is incomplete"
+            )
+        raw_receipt = value.get("tokenizer_fidelity_receipt")
+        validate_tokenizer_fidelity_receipt(
+            raw_receipt,
+            expected_checkpoint_sha256=checkpoint_sha256,
+            expected_checkpoint_step=checkpoint_step,
+            expected_example_ids=expected_example_ids,
+            expected_records=expected_records,
+            expected_task_database_identity_sha256=(
+                expected_task_database_identity_sha256
+            ),
+        )
+        return tokenizer_fidelity_receipt_metrics(raw_receipt)
     if category == "ordinary_instruction":
         # Imported here to keep the frozen category-inventory loader acyclic:
         # that loader imports this acceptance schema during its own startup.
@@ -1408,12 +1440,17 @@ def recompute_category_metrics(
 ) -> dict[str, object]:
     records = _validated_category_records(category, value, expected_ids)
     if category == "tokenizer_fidelity":
+        if type(declared_metrics) is not dict:
+            raise ValueError("tokenizer_fidelity metrics must be a dictionary")
         return {
             "exact_roundtrip_rate": _rate(records, "exact_roundtrip"),
             "id_stability_rate": _rate(records, "id_stable"),
             "reserved_control_violation_count": sum(
                 _record_bool(record, "reserved_control_violation")
                 for record in records
+            ),
+            "tokenizer_fidelity_receipt_sha256": declared_metrics.get(
+                "tokenizer_fidelity_receipt_sha256"
             ),
         }
     if category == "semantic_fidelity":
@@ -1579,10 +1616,14 @@ def verify_category_metrics(category: str, value: object) -> None:
             "exact_roundtrip_rate",
             "id_stability_rate",
             "reserved_control_violation_count",
+            "tokenizer_fidelity_receipt_sha256",
         } or (
             _metric_rate(metrics, "exact_roundtrip_rate") != 1.0
             or _metric_rate(metrics, "id_stability_rate") != 1.0
             or _metric_count(metrics, "reserved_control_violation_count") != 0
+            or not _is_sha256(
+                metrics.get("tokenizer_fidelity_receipt_sha256")
+            )
         ):
             raise ValueError("tokenizer_fidelity acceptance gate failed")
         return

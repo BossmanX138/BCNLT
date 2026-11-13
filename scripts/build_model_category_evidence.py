@@ -89,6 +89,7 @@ def main() -> int:
     parser.add_argument("--safety-content-receipt", type=Path)
     parser.add_argument("--containment-receipt", type=Path)
     parser.add_argument("--regression-receipt", type=Path)
+    parser.add_argument("--tokenizer-fidelity-receipt", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
     plural_databases = (
@@ -98,7 +99,16 @@ def main() -> int:
         parser.error("validation-database and test-database must be supplied together")
     if (arguments.task_database is None) == (not plural_databases):
         parser.error("supply either task-database or both split databases")
-    if arguments.category == "ordinary_instruction":
+    if arguments.category == "tokenizer_fidelity":
+        if arguments.tokenizer_fidelity_receipt is None:
+            parser.error(
+                "tokenizer_fidelity requires --tokenizer-fidelity-receipt"
+            )
+        if arguments.records is not None:
+            parser.error(
+                "tokenizer_fidelity records come from the tokenizer receipt"
+            )
+    elif arguments.category == "ordinary_instruction":
         if arguments.ifeval_batch_receipt is None:
             parser.error("ordinary_instruction requires --ifeval-batch-receipt")
         if arguments.records is not None:
@@ -164,7 +174,26 @@ def main() -> int:
         if arguments.regression_receipt is not None
         else None
     )
-    if arguments.category == "ordinary_instruction":
+    tokenizer_receipt = (
+        _read_object(
+            arguments.tokenizer_fidelity_receipt,
+            "tokenizer fidelity receipt",
+        )
+        if arguments.tokenizer_fidelity_receipt is not None
+        else None
+    )
+    if arguments.category == "tokenizer_fidelity":
+        raw_records = (
+            tokenizer_receipt.get("records")
+            if tokenizer_receipt is not None
+            else None
+        )
+        if type(raw_records) is not list or any(
+            type(record) is not dict for record in raw_records
+        ):
+            raise ValueError("tokenizer fidelity receipt records are invalid")
+        records = raw_records
+    elif arguments.category == "ordinary_instruction":
         raw_records = (
             ifeval_receipt.get("records") if ifeval_receipt is not None else None
         )
@@ -211,6 +240,7 @@ def main() -> int:
         safety_content_receipt=safety_receipt,
         containment_receipt=containment_receipt,
         regression_receipt=regression_receipt,
+        tokenizer_fidelity_receipt=tokenizer_receipt,
     )
     publish_model_category_evidence(arguments.output, payload)
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))

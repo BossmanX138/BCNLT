@@ -25,6 +25,7 @@ from test_full_model_acceptance_categories import (
     _records,
     _regression_receipt_payload,
     _safety_content_receipt_payload,
+    _tokenizer_fidelity_receipt_payload,
     verify_model_acceptance,
 )
 
@@ -79,6 +80,7 @@ def _compile(
     safety_receipt: dict[str, object] | None = None,
     containment_receipt: dict[str, object] | None = None,
     regression_receipt: dict[str, object] | None = None,
+    tokenizer_receipt: dict[str, object] | None = None,
 ):
     return compile_model_category_evidence(
         category=category,
@@ -92,16 +94,19 @@ def _compile(
         safety_content_receipt=safety_receipt,
         containment_receipt=containment_receipt,
         regression_receipt=regression_receipt,
+        tokenizer_fidelity_receipt=tokenizer_receipt,
     )
 
 
 def test_compiler_recomputes_records_and_produces_accepted_artifact():
-    compiled = _compile("tokenizer_fidelity")
+    receipt = _tokenizer_fidelity_receipt_payload()
+    compiled = _compile("tokenizer_fidelity", tokenizer_receipt=receipt)
     assert compiled["passed"] is True
     assert compiled["metrics"] == {
         "exact_roundtrip_rate": 1.0,
         "id_stability_rate": 1.0,
         "reserved_control_violation_count": 0,
+        "tokenizer_fidelity_receipt_sha256": receipt["receipt_sha256"],
     }
     evidence = [_category(category) for category in CATEGORIES]
     evidence[0] = compiled
@@ -131,6 +136,7 @@ def test_compiler_binds_plural_suite_categories_to_the_test_database():
         },
         checkpoint_sha256=CHECKPOINT_ID,
         checkpoint_step=86_016,
+        tokenizer_fidelity_receipt=_tokenizer_fidelity_receipt_payload(),
     )
 
     assert compiled["passed"] is True
@@ -175,10 +181,10 @@ def test_ordinary_compiler_requires_grounded_ifeval_receipt():
 
 
 def test_failed_case_outcome_is_published_as_failed_not_promoted():
-    records = _records("tokenizer_fidelity")
+    records = _records("raw_code")
     records[0]["exact_roundtrip"] = False
     payload = compile_model_category_evidence(
-        category="tokenizer_fidelity",
+        category="raw_code",
         records=records,
         heldout_manifest=HELDOUT_MANIFEST,
         task_database_identity_sha256=DATABASE_ID,
@@ -188,6 +194,23 @@ def test_failed_case_outcome_is_published_as_failed_not_promoted():
     assert payload["passed"] is False
     assert payload["failure_codes"] == ["category_gate_failed"]
     assert payload["metrics"]["exact_roundtrip_rate"] < 1.0
+
+
+def test_tokenizer_compiler_requires_grounded_receipt():
+    with pytest.raises(ValueError, match="tokenizer fidelity receipt"):
+        _compile("tokenizer_fidelity")
+
+    receipt = _tokenizer_fidelity_receipt_payload()
+    compiled = _compile("tokenizer_fidelity", tokenizer_receipt=receipt)
+    assert compiled["passed"] is True
+    assert compiled["supporting_evidence"] == {
+        "tokenizer_fidelity_receipt": receipt
+    }
+
+    forged = dict(receipt)
+    forged["checkpoint_sha256"] = "f" * 64
+    with pytest.raises(ValueError, match=r"integrity|checkpoint"):
+        _compile("tokenizer_fidelity", tokenizer_receipt=forged)
 
 
 def test_compiler_rejects_substituted_case_and_unrelated_receipt():
@@ -272,3 +295,4 @@ def test_checkpoint_digest_and_script_entrypoint(tmp_path: Path):
     assert "--safety-content-receipt" in completed.stdout
     assert "--containment-receipt" in completed.stdout
     assert "--regression-receipt" in completed.stdout
+    assert "--tokenizer-fidelity-receipt" in completed.stdout

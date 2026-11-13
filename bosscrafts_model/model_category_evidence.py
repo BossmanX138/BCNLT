@@ -36,6 +36,10 @@ from .strict_uncertainty_acceptance import (
     validate_strict_uncertainty_receipt_payload,
 )
 from .tokenizer import EXPECTED_TOKENIZER_SHA256
+from .tokenizer_fidelity_acceptance import (
+    tokenizer_fidelity_receipt_metrics,
+    validate_tokenizer_fidelity_receipt,
+)
 
 MAX_CATEGORY_RECORDS_BYTES = 16 * 1024 * 1024
 
@@ -90,6 +94,7 @@ def compile_model_category_evidence(
     safety_content_receipt: dict[str, object] | None = None,
     containment_receipt: dict[str, object] | None = None,
     regression_receipt: dict[str, object] | None = None,
+    tokenizer_fidelity_receipt: dict[str, object] | None = None,
 ) -> dict[str, object]:
     if category not in ACCEPTANCE_CATEGORIES:
         raise ValueError("model acceptance category is invalid")
@@ -109,7 +114,33 @@ def compile_model_category_evidence(
     )
     declared_metrics: dict[str, object] = {}
     supporting_evidence: dict[str, object] = {}
-    if category == "semantic_fidelity":
+    if category == "tokenizer_fidelity":
+        if any(
+            receipt is not None
+            for receipt in (
+                strict_uncertainty_receipt,
+                ifeval_batch_receipt,
+                safety_content_receipt,
+                containment_receipt,
+                regression_receipt,
+            )
+        ):
+            raise ValueError("category receipt is not valid for tokenizer fidelity")
+        if type(tokenizer_fidelity_receipt) is not dict:
+            raise ValueError(
+                "tokenizer fidelity requires a tokenizer fidelity receipt"
+            )
+        receipt_payload = validate_tokenizer_fidelity_receipt(
+            tokenizer_fidelity_receipt,
+            expected_checkpoint_sha256=checkpoint_sha256,
+            expected_checkpoint_step=checkpoint_step,
+            expected_example_ids=suite.category_example_ids[category],
+            expected_records=records,
+            expected_task_database_identity_sha256=evidence_database_identity,
+        )
+        declared_metrics = tokenizer_fidelity_receipt_metrics(receipt_payload)
+        supporting_evidence = {"tokenizer_fidelity_receipt": receipt_payload}
+    elif category == "semantic_fidelity":
         if any(
             receipt is not None
             for receipt in (
@@ -117,6 +148,7 @@ def compile_model_category_evidence(
                 safety_content_receipt,
                 containment_receipt,
                 regression_receipt,
+                tokenizer_fidelity_receipt,
             )
         ):
             raise ValueError("category receipt is not valid for semantic fidelity")
@@ -136,6 +168,7 @@ def compile_model_category_evidence(
                 safety_content_receipt,
                 containment_receipt,
                 regression_receipt,
+                tokenizer_fidelity_receipt,
             )
         ):
             raise ValueError("category receipt is not valid for ordinary instruction")
@@ -156,6 +189,7 @@ def compile_model_category_evidence(
                 strict_uncertainty_receipt,
                 ifeval_batch_receipt,
                 regression_receipt,
+                tokenizer_fidelity_receipt,
             )
         ):
             raise ValueError("category receipt is not valid for safety")
@@ -214,6 +248,7 @@ def compile_model_category_evidence(
                 ifeval_batch_receipt,
                 safety_content_receipt,
                 containment_receipt,
+                tokenizer_fidelity_receipt,
             )
         ):
             raise ValueError("category receipt is not valid for regression")
@@ -236,6 +271,7 @@ def compile_model_category_evidence(
             safety_content_receipt,
             containment_receipt,
             regression_receipt,
+            tokenizer_fidelity_receipt,
         )
     ):
         raise ValueError("category receipt is not valid for this category")

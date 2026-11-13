@@ -194,6 +194,16 @@ actionable defect after the repairs and gates below.
     coverage. The exact current tree passed 603 tests and 195 subtests; the
     receipt worker still requires a clean committed-tree execution before its
     own production receipt can be claimed.
+22. Tokenizer-fidelity evidence accepted caller-authored per-case booleans.
+    The executable runner now loads the immutable category-case bundle, audits
+    the exact test database before and after execution, retrieves every frozen
+    packed task by ID, verifies protocol-aware payload round trips and reserved
+    control isolation, and publishes a no-clobber receipt bound to the
+    checkpoint, frozen tokenizer, test database, case bundle and detailed task
+    hashes. Category Evidence Schema V9 derives all 1,024 category records from
+    that receipt, and final acceptance independently revalidates its complete
+    lineage. The runner and receipt contract are regression-tested; a real
+    production receipt still requires the final frozen category-case bundle.
 
 ## Boundaries
 
@@ -217,10 +227,12 @@ actionable defect after the repairs and gates below.
 The latest repair batch has no regression in the executed source and integration
 gates, but the exhaustive review remains active and CodeRabbit review remains
 pending authentication. The ordinary-instruction runner is executable and
-audited. The exact current tree passes 603 tests and 195 subtests, along with
-Ruff and strict mypy across 75 source files. The regression receipt path is now
+audited. The exact current tree passes 608 tests and 195 subtests, along with
+Ruff and strict mypy across 76 source files. The regression receipt path is now
 implemented and mandatory, but its fixed worker must still be exercised from a
-clean committed tree. The safety content runner, runtime sealer and separate containment
+clean committed tree. Tokenizer fidelity is also executable and receipt-bound,
+but awaits the final frozen category-case bundle for its production run. The
+safety content runner, runtime sealer and separate containment
 runner are implemented and mandatory at both category compilation and final
 acceptance; the live containment probes pass, while the 8.64 GB pinned safety
 judge has not yet been installed or executed. Other remaining category runners
