@@ -12,6 +12,8 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Protocol, TypedDict
 
+from .immutable_artifacts import publish_new_files
+
 PILOT_SCHEMA = "bosscrafts-project-codenet-pilot-v1"
 DATASET_LICENSE = "CDLA-Permissive-2.0"
 _HEX64 = re.compile(r"[0-9a-f]{64}")
@@ -305,8 +307,44 @@ def build_pilot(
     return records, report
 
 
-def write_jsonl(path: Path, records: list[dict[str, object]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="\n") as handle:
-        for record in records:
-            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+def publish_pilot_artifacts(
+    output: Path,
+    report_path: Path,
+    records: list[dict[str, object]],
+    report: PilotReport,
+) -> None:
+    """Publish the corpus and its report as one immutable generation."""
+    if not records:
+        raise ValueError("Project CodeNet pilot requires at least one record")
+    if report.get("record_count") != len(records):
+        raise ValueError("Project CodeNet pilot report count mismatch")
+    try:
+        records_content = "".join(
+            json.dumps(
+                record,
+                ensure_ascii=False,
+                sort_keys=True,
+                allow_nan=False,
+            )
+            + "\n"
+            for record in records
+        ).encode("utf-8")
+        report_content = (
+            json.dumps(
+                report,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+                allow_nan=False,
+            )
+            + "\n"
+        ).encode("utf-8")
+    except (TypeError, ValueError) as error:
+        raise ValueError("Project CodeNet pilot artifacts are not JSON safe") from error
+    publish_new_files(
+        (
+            (output.resolve(), records_content),
+            (report_path.resolve(), report_content),
+        ),
+        artifact_label="Project CodeNet pilot",
+    )

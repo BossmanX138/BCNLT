@@ -7,7 +7,10 @@ import json
 from pathlib import Path
 
 from bosscrafts_model.codex_code_curriculum import HumanEvalExclusion
-from bosscrafts_model.project_codenet_pilot import build_pilot, write_jsonl
+from bosscrafts_model.project_codenet_pilot import (
+    build_pilot,
+    publish_pilot_artifacts,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -40,14 +43,13 @@ def main() -> None:
         tooling_commit=args.tooling_commit,
         overlap_filter=exclusion,
     )
-    write_jsonl(args.output.resolve(), records)
-    args.report.parent.mkdir(parents=True, exist_ok=True)
-    args.report.write_text(
-        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    publish_pilot_artifacts(
+        args.output.resolve(),
+        args.report.resolve(),
+        records,
+        report,
     )
     print(json.dumps({"records": len(records), **report["language_counts"]}))
-    if not records:
-        raise SystemExit("pilot contains no records")
 
 
 if __name__ == "__main__":
