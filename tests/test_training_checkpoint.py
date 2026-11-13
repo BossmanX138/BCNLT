@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -167,6 +168,94 @@ class TrainingCheckpointTests(unittest.TestCase):
                             expected_target_epochs=1,
                             expected_training_plan_sha256="d" * 64,
                         )
+
+    def test_rejects_incoherent_resume_cursor_and_unexpected_fields(self):
+        module = importlib.import_module("bosscrafts_model.training_checkpoint")
+        config = ModelConfig.tiny()
+        model = EngineeringModel(config)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.pt"
+            module.save_training_checkpoint(
+                source,
+                model,
+                optimizer,
+                step=1,
+                examples_seen=1,
+                epoch_index=0,
+                target_epochs=1,
+                last_example_id="c" * 64,
+                cursor_after_example_id="c" * 64,
+                task_database_identity_sha256="a" * 64,
+                binding_sha256="b" * 64,
+                model_fingerprint=config.fingerprint(),
+                training_plan_sha256="d" * 64,
+            )
+            valid = torch.load(source, map_location="cpu", weights_only=True)
+            cases = {
+                "cursor": {"cursor_after_example_id": "e" * 64},
+                "cursor at completion": {
+                    "epoch_index": 1,
+                    "cursor_after_example_id": "c" * 64,
+                },
+                "fields": {"unverified_override": True},
+                "progress": {"step": 2, "examples_seen": 1},
+            }
+            for label, changes in cases.items():
+                with self.subTest(label=label):
+                    malformed = dict(valid)
+                    malformed.update(changes)
+                    path = root / f"{label.replace(' ', '-')}.pt"
+                    torch.save(malformed, path)
+                    with self.assertRaisesRegex(ValueError, label):
+                        module.load_training_checkpoint(
+                            path,
+                            model,
+                            optimizer,
+                            expected_task_database_identity_sha256="a" * 64,
+                            expected_binding_sha256="b" * 64,
+                            expected_model_fingerprint=config.fingerprint(),
+                            expected_target_epochs=1,
+                            expected_training_plan_sha256="d" * 64,
+                        )
+
+            with self.assertRaisesRegex(ValueError, "cursor"):
+                module.save_training_checkpoint(
+                    root / "invalid-save.pt",
+                    model,
+                    optimizer,
+                    step=1,
+                    examples_seen=1,
+                    epoch_index=0,
+                    target_epochs=1,
+                    last_example_id="c" * 64,
+                    cursor_after_example_id="e" * 64,
+                    task_database_identity_sha256="a" * 64,
+                    binding_sha256="b" * 64,
+                    model_fingerprint=config.fingerprint(),
+                    training_plan_sha256="d" * 64,
+                )
+
+    def test_corrupt_checkpoint_fails_as_unreadable_evidence(self):
+        module = importlib.import_module("bosscrafts_model.training_checkpoint")
+        config = ModelConfig.tiny()
+        model = EngineeringModel(config)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "checkpoint.pt"
+            path.write_bytes(os.urandom(128))
+            with self.assertRaisesRegex(ValueError, "unreadable"):
+                module.load_training_checkpoint(
+                    path,
+                    model,
+                    optimizer,
+                    expected_task_database_identity_sha256="a" * 64,
+                    expected_binding_sha256="b" * 64,
+                    expected_model_fingerprint=config.fingerprint(),
+                    expected_target_epochs=1,
+                    expected_training_plan_sha256="d" * 64,
+                )
 
 
 if __name__ == "__main__":

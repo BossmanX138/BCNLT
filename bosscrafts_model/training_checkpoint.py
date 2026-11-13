@@ -1,6 +1,8 @@
 """Atomic, lineage-bound checkpoints for BossCrafts model training."""
 from __future__ import annotations
 
+import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeGuard, cast
@@ -9,6 +11,25 @@ import torch
 from torch import nn
 
 CHECKPOINT_SCHEMA = "bosscrafts-training-checkpoint-v4"
+_CHECKPOINT_FIELDS = frozenset(
+    {
+        "binding_sha256",
+        "cpu_rng_state",
+        "cuda_rng_state_all",
+        "cursor_after_example_id",
+        "epoch_index",
+        "examples_seen",
+        "last_example_id",
+        "model_fingerprint",
+        "model_state_dict",
+        "optimizer_state_dict",
+        "schema_version",
+        "step",
+        "target_epochs",
+        "task_database_identity_sha256",
+        "training_plan_sha256",
+    }
+)
 
 
 def _is_sha256(value: object) -> TypeGuard[str]:
@@ -53,10 +74,10 @@ def save_training_checkpoint(
         raise TypeError("model must be a torch module")
     if not isinstance(optimizer, torch.optim.Optimizer):
         raise TypeError("optimizer must be a torch optimizer")
-    if type(step) is not int or step < 0:
-        raise ValueError("step must be a nonnegative integer")
-    if type(examples_seen) is not int or examples_seen < 0:
-        raise ValueError("examples_seen must be a nonnegative integer")
+    if type(step) is not int or step < 1:
+        raise ValueError("step must be a positive integer")
+    if type(examples_seen) is not int or examples_seen < step:
+        raise ValueError("examples_seen must be an integer at least as large as step")
     if type(target_epochs) is not int or target_epochs < 1:
         raise ValueError("target_epochs must be a positive integer")
     if type(epoch_index) is not int or not 0 <= epoch_index <= target_epochs:
@@ -72,9 +93,13 @@ def save_training_checkpoint(
             raise ValueError(f"{name} must be a lowercase SHA-256 digest")
     if cursor_after_example_id is not None and not _is_sha256(cursor_after_example_id):
         raise ValueError("cursor_after_example_id must be a lowercase SHA-256 or None")
+    if cursor_after_example_id is not None and cursor_after_example_id != last_example_id:
+        raise ValueError("checkpoint cursor must match the last trained example")
+    if epoch_index == target_epochs and cursor_after_example_id is not None:
+        raise ValueError("completed checkpoint cursor must be None")
     destination = Path(path).resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f".{destination.name}.tmp")
+    temporary: Path | None = None
     payload = {
         "schema_version": CHECKPOINT_SCHEMA,
         "step": step,
@@ -93,10 +118,19 @@ def save_training_checkpoint(
         "cuda_rng_state_all": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
     }
     try:
+        with tempfile.NamedTemporaryFile(
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
         torch.save(payload, temporary)
-        temporary.replace(destination)
+        with temporary.open("r+b") as handle:
+            os.fsync(handle.fileno())
+        os.replace(temporary, destination)
     finally:
-        if temporary.exists():
+        if temporary is not None and temporary.exists():
             temporary.unlink()
 
 
@@ -164,9 +198,6 @@ def _load_verified_payload(
     checkpoint_path = Path(path).resolve()
     if not checkpoint_path.is_file():
         raise ValueError("training checkpoint does not exist")
-    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-    if type(payload) is not dict or payload.get("schema_version") != CHECKPOINT_SCHEMA:
-        raise ValueError("training checkpoint schema mismatch")
     expected = {
         "task_database_identity_sha256": expected_task_database_identity_sha256,
         "binding_sha256": expected_binding_sha256,
@@ -174,6 +205,16 @@ def _load_verified_payload(
     }
     if any(not _is_sha256(value) for value in expected.values()):
         raise ValueError("expected training lineage contains an invalid SHA-256")
+    try:
+        payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    except Exception as error:
+        raise ValueError("training checkpoint is unreadable") from error
+    if (
+        type(payload) is not dict
+        or set(payload) != _CHECKPOINT_FIELDS
+        or payload.get("schema_version") != CHECKPOINT_SCHEMA
+    ):
+        raise ValueError("training checkpoint fields or schema mismatch")
     if any(payload.get(key) != value for key, value in expected.items()):
         raise ValueError("training checkpoint lineage mismatch")
     model_state = payload.get("model_state_dict")
@@ -211,9 +252,9 @@ def _load_verified_payload(
     training_plan_sha256 = payload.get("training_plan_sha256")
     if (
         type(step) is not int
-        or step < 0
+        or step < 1
         or type(examples_seen) is not int
-        or examples_seen < 0
+        or examples_seen < step
         or type(target_epochs) is not int
         or target_epochs < 1
         or type(epoch_index) is not int
@@ -225,7 +266,11 @@ def _load_verified_payload(
             and not _is_sha256(cursor_after_example_id)
         )
     ):
-        raise ValueError("training checkpoint cursor is invalid")
+        raise ValueError("training checkpoint progress is invalid")
+    if cursor_after_example_id is not None and cursor_after_example_id != last_example_id:
+        raise ValueError("training checkpoint cursor does not match the last example")
+    if epoch_index == target_epochs and cursor_after_example_id is not None:
+        raise ValueError("training checkpoint cursor at completion is invalid")
     state = TrainingCheckpointState(
         step=step,
         examples_seen=examples_seen,
