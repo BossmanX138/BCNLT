@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Sequence
+from typing import TYPE_CHECKING, Iterable, Sequence
 
 from .bcnlt_source_pipeline import _NativeSemanticStreamCodec
 from .tokenizer import NativeTokenizerBinding
+
+if TYPE_CHECKING:
+    from .resumable_task_packing import TaskExample
 
 INFERENCE_TASKS = (
     "raw",
@@ -25,7 +28,7 @@ class HeldoutInferenceCase:
 
 
 def select_heldout_inference_case(
-    examples: Iterable[dict[str, object]],
+    examples: Iterable[TaskExample],
     *,
     family: str,
     max_new_tokens: int,

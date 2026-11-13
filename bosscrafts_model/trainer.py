@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Callable, Iterable
+from typing import TYPE_CHECKING, Callable, Iterable
 
 import torch
 from torch import nn
 
 from .model import masked_next_token_loss
+
+if TYPE_CHECKING:
+    from .resumable_task_packing import TaskExample
 
 
 @dataclass(frozen=True)
@@ -41,7 +44,7 @@ def _device_matches(actual: torch.device, requested: torch.device) -> bool:
 def run_training_steps(
     model: nn.Module,
     optimizer: torch.optim.Optimizer,
-    examples: Iterable[dict[str, object]],
+    examples: Iterable[TaskExample],
     *,
     device: torch.device,
     max_steps: int,

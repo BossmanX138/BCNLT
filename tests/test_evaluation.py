@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import json
 import math
+import tempfile
 import unittest
+from pathlib import Path
 
 import torch
 
@@ -12,6 +15,125 @@ from bosscrafts_model.model import EngineeringModel
 
 
 class EvaluationTests(unittest.TestCase):
+    @staticmethod
+    def _baseline_payload() -> dict[str, object]:
+        return {
+            "split": "validation",
+            "evaluation_complete": True,
+            "example_count": 2,
+            "split_example_count": 2,
+            "task_database_identity_sha256": "a" * 64,
+            "model_fingerprint": "b" * 64,
+            "mean_loss": 1.0,
+            "perplexity": math.e,
+            "target_token_accuracy": 0.5,
+            "target_token_count": 6,
+            "correct_target_token_count": 3,
+            "exact_match_count": 1,
+            "exact_match_rate": 0.5,
+            "language_mean_loss": {"python": 1.0},
+            "family_mean_loss": {"code_to_semantic": 1.0},
+            "cell_mean_loss": {"python|code_to_semantic": 1.0},
+        }
+
+    def test_loads_lineage_bound_evaluation_baseline(self):
+        module = importlib.import_module("bosscrafts_model.evaluation")
+        self.assertTrue(
+            hasattr(module, "load_evaluation_baseline"),
+            "lineage-bound evaluation baseline reader is required",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "baseline.json"
+            path.write_text(json.dumps(self._baseline_payload()), encoding="utf-8")
+            baseline = module.load_evaluation_baseline(
+                path,
+                expected_split="validation",
+                expected_example_count=2,
+                expected_task_database_identity_sha256="a" * 64,
+                expected_model_fingerprint="b" * 64,
+            )
+        self.assertEqual(baseline.mean_loss, 1.0)
+        self.assertEqual(baseline.language_mean_loss, {"python": 1.0})
+
+    def test_rejects_invalid_evaluation_baseline_metrics(self):
+        module = importlib.import_module("bosscrafts_model.evaluation")
+        invalid = (
+            ("mean_loss", 0.0),
+            ("mean_loss", float("nan")),
+            ("perplexity", 0.0),
+            ("perplexity", float("inf")),
+            ("target_token_accuracy", -0.1),
+            ("target_token_accuracy", 1.1),
+            ("correct_target_token_count", True),
+            ("correct_target_token_count", -1),
+            ("exact_match_count", 3),
+            ("exact_match_rate", 1.1),
+        )
+        for key, value in invalid:
+            with self.subTest(key=key, value=value):
+                payload = self._baseline_payload()
+                payload[key] = value
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / "baseline.json"
+                    path.write_text(json.dumps(payload), encoding="utf-8")
+                    with self.assertRaisesRegex(
+                        ValueError, "baseline evaluation metrics"
+                    ):
+                        module.load_evaluation_baseline(
+                            path,
+                            expected_split="validation",
+                            expected_example_count=2,
+                            expected_task_database_identity_sha256="a" * 64,
+                            expected_model_fingerprint="b" * 64,
+                        )
+
+    def test_rejects_invalid_evaluation_baseline_breakdown(self):
+        module = importlib.import_module("bosscrafts_model.evaluation")
+        invalid = (None, {}, {"": 1.0}, {"python": float("nan")}, {"python": -1.0})
+        for value in invalid:
+            with self.subTest(value=value):
+                payload = self._baseline_payload()
+                payload["language_mean_loss"] = value
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / "baseline.json"
+                    path.write_text(json.dumps(payload), encoding="utf-8")
+                    with self.assertRaisesRegex(
+                        ValueError, "baseline evaluation breakdown"
+                    ):
+                        module.load_evaluation_baseline(
+                            path,
+                            expected_split="validation",
+                            expected_example_count=2,
+                            expected_task_database_identity_sha256="a" * 64,
+                            expected_model_fingerprint="b" * 64,
+                        )
+
+    def test_rejects_internally_inconsistent_evaluation_baseline(self):
+        module = importlib.import_module("bosscrafts_model.evaluation")
+        invalid = (
+            {"perplexity": 99.0},
+            {"target_token_count": 0},
+            {"correct_target_token_count": 4},
+            {"exact_match_rate": 0.4},
+        )
+        for changes in invalid:
+            with self.subTest(changes=changes):
+                payload = self._baseline_payload()
+                payload.update(changes)
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / "baseline.json"
+                    path.write_text(json.dumps(payload), encoding="utf-8")
+                    with self.assertRaisesRegex(
+                        ValueError, "baseline evaluation consistency"
+                    ):
+                        module.load_evaluation_baseline(
+                            path,
+                            expected_split="validation",
+                            expected_example_count=2,
+                            expected_task_database_identity_sha256="a" * 64,
+                            expected_model_fingerprint="b" * 64,
+                        )
+
     def test_unspecified_cuda_index_matches_the_active_cuda_device(self):
         module = importlib.import_module("bosscrafts_model.evaluation")
         self.assertTrue(

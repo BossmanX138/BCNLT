@@ -148,14 +148,13 @@ def main() -> int:
     new_ids = full_ids[len(prompt_ids) :]
     response_ids = response_payload_token_ids(binding, task, new_ids)
     expected_ids = list(heldout_case.expected_ids) if heldout_case is not None else None
-    heldout_correct = (
-        sum(
+    heldout_accuracy = None
+    if expected_ids is not None:
+        heldout_correct = sum(
             actual == expected
             for actual, expected in zip(new_ids, expected_ids, strict=False)
         )
-        if expected_ids is not None
-        else None
-    )
+        heldout_accuracy = heldout_correct / len(expected_ids)
     payload = {
         "checkpoint_lineage_verified": True,
         "checkpoint_task_database_identity_sha256": (
@@ -188,7 +187,7 @@ def main() -> int:
             arguments.heldout_split if heldout_case is not None else None
         ),
         "heldout_target_token_accuracy": (
-            heldout_correct / len(expected_ids) if expected_ids is not None else None
+            heldout_accuracy
         ),
         "model_fingerprint": config.fingerprint(),
         "new_token_count": len(new_ids),

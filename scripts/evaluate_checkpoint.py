@@ -7,7 +7,6 @@ import json
 import sys
 from dataclasses import asdict
 from pathlib import Path
-from types import SimpleNamespace
 
 import torch
 
@@ -27,7 +26,12 @@ if tokenizers.__version__ != "0.23.2":
     raise RuntimeError("project-contained tokenizers runtime version mismatch")
 
 from bosscrafts_model.config import ModelConfig
-from bosscrafts_model.evaluation import evaluate_model
+from bosscrafts_model.evaluation import (
+    EvaluationBaseline,
+    EvaluationResult,
+    evaluate_model,
+    load_evaluation_baseline,
+)
 from bosscrafts_model.model import EngineeringModel
 from bosscrafts_model.resumable_task_packing import (
     ResumableTaskDataset,
@@ -101,6 +105,7 @@ def main() -> int:
     dtype = torch.float32 if arguments.dtype == "float32" else torch.bfloat16
     model = EngineeringModel(config).to(device=device, dtype=dtype)
     baseline_evaluation_sha256 = None
+    baseline: EvaluationResult | EvaluationBaseline
     if arguments.baseline_evaluation is None:
         baseline = evaluate_model(
             model,
@@ -111,35 +116,14 @@ def main() -> int:
         baseline_source = "deterministic_random_initialization"
     else:
         baseline_path = arguments.baseline_evaluation.resolve()
-        try:
-            baseline_payload = json.loads(baseline_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as error:
-            raise ValueError("baseline evaluation is unreadable") from error
-        required_fields = (
-            "mean_loss",
-            "perplexity",
-            "target_token_accuracy",
-            "correct_target_token_count",
-            "exact_match_count",
-            "exact_match_rate",
-            "language_mean_loss",
-            "family_mean_loss",
-            "cell_mean_loss",
-        )
-        if (
-            type(baseline_payload) is not dict
-            or baseline_payload.get("split") != arguments.split
-            or baseline_payload.get("evaluation_complete") is not True
-            or baseline_payload.get("example_count") != split_example_count
-            or baseline_payload.get("split_example_count") != split_example_count
-            or baseline_payload.get("task_database_identity_sha256")
-            != task_audit.database_identity_sha256
-            or baseline_payload.get("model_fingerprint") != config.fingerprint()
-            or any(field not in baseline_payload for field in required_fields)
-        ):
-            raise ValueError("baseline evaluation does not match the frozen evaluation split")
-        baseline = SimpleNamespace(
-            **{field: baseline_payload[field] for field in required_fields}
+        baseline = load_evaluation_baseline(
+            baseline_path,
+            expected_split=arguments.split,
+            expected_example_count=split_example_count,
+            expected_task_database_identity_sha256=(
+                task_audit.database_identity_sha256
+            ),
+            expected_model_fingerprint=config.fingerprint(),
         )
         baseline_source = str(baseline_path)
         baseline_evaluation_sha256 = hashlib.sha256(
