@@ -7,9 +7,11 @@ import builtins
 import gzip
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import symtable
+import tempfile
 import textwrap
 import zlib
 from collections import Counter
@@ -407,6 +409,7 @@ def build_instruction_curriculum(
             raise ValueError(f"{name} does not exist")
 
     catalog_sha256 = _sha256_file(catalog_path)
+    admission_sha256 = _sha256_file(admission_path)
     exclusion = HumanEvalExclusion(humaneval_dataset)
     split_audit = audit_task_database(binding, split_path)
     split_connection = _ro_connect(split_path)
@@ -563,7 +566,7 @@ def build_instruction_curriculum(
         "curriculum_schema": INSTRUCTION_CURRICULUM_SCHEMA,
         "curriculum_policy_sha256": policy_sha256,
         "source_catalog_sha256": catalog_sha256,
-        "source_admission_sha256": _sha256_file(admission_path),
+        "source_admission_sha256": admission_sha256,
         "split_database_identity_sha256": split_audit.database_identity_sha256,
         "humaneval_exclusion_sha256": exclusion.sha256,
         "instruction_family": INSTRUCTION_FAMILY,
@@ -572,9 +575,14 @@ def build_instruction_curriculum(
     }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = output_path.with_name(f".{output_path.name}.tmp")
-    if temporary.exists():
-        temporary.unlink()
+    temporary_handle = tempfile.NamedTemporaryFile(
+        dir=output_path.parent,
+        prefix=f".{output_path.name}.",
+        suffix=".tmp",
+        delete=False,
+    )
+    temporary = Path(temporary_handle.name)
+    temporary_handle.close()
     license_counts: Counter[str] = Counter()
     try:
         connection = sqlite3.connect(temporary)
@@ -662,7 +670,29 @@ def build_instruction_curriculum(
     if audit.example_count != expected_total or audit.split_counts != quotas:
         temporary.unlink()
         raise ValueError("written instruction curriculum failed its count audit")
-    temporary.replace(output_path)
+    try:
+        final_split_audit = audit_task_database(binding, split_path)
+        if (
+            final_split_audit.database_identity_sha256
+            != split_audit.database_identity_sha256
+            or _sha256_file(catalog_path) != catalog_sha256
+            or _sha256_file(admission_path) != admission_sha256
+            or _sha256_file(exclusion.path) != exclusion.sha256
+        ):
+            raise ValueError("instruction curriculum source changed during build")
+        with temporary.open("r+b") as stream:
+            os.fsync(stream.fileno())
+        if output_path.exists():
+            raise ValueError("instruction curriculum output already exists")
+        try:
+            os.link(temporary, output_path)
+        except FileExistsError as error:
+            raise ValueError("instruction curriculum output already exists") from error
+    except BaseException:
+        if temporary.exists():
+            temporary.unlink()
+        raise
+    temporary.unlink()
     return InstructionCurriculumStatus(
         database_path=output_path,
         database_identity_sha256=audit.database_identity_sha256,

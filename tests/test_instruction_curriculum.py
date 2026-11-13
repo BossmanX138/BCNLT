@@ -22,6 +22,7 @@ from bosscrafts_model.instruction_curriculum import (
 )
 from bosscrafts_model.resumable_task_packing import (
     TASK_DATABASE_SCHEMA,
+    TaskDatabaseAuditResult,
     _canonical_json,
     _encode_u16,
     audit_task_database,
@@ -447,6 +448,99 @@ class InstructionCurriculumMaterializationTests(unittest.TestCase):
 
             self.assertFalse(output.exists())
             self.assertFalse(output.with_name(f".{output.name}.tmp").exists())
+
+    def test_preserves_stale_temp_and_never_clobbers_racing_destination(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            catalog, admission, splits, humaneval = self._write_fixture(root)
+            output = root / "instruction.sqlite"
+            stale = root / ".instruction.sqlite.tmp"
+            stale.write_bytes(b"unrelated-stale-state")
+            real_audit = audit_task_database
+
+            def audit_then_create_destination(
+                binding: NativeTokenizerBinding, database_path: str | Path
+            ) -> TaskDatabaseAuditResult:
+                result = real_audit(binding, database_path)
+                if Path(database_path).resolve() != splits.resolve():
+                    output.write_bytes(b"racing-owner")
+                return result
+
+            with (
+                patch(
+                    "bosscrafts_model.instruction_curriculum.audit_task_database",
+                    side_effect=audit_then_create_destination,
+                ),
+                self.assertRaisesRegex(ValueError, "already exists"),
+            ):
+                build_instruction_curriculum(
+                    self.binding,
+                    source_catalog=catalog,
+                    admission_database=admission,
+                    split_database=splits,
+                    humaneval_dataset=humaneval,
+                    output_database=output,
+                    quotas={"train": 1, "validation": 1, "test": 1},
+                    max_sequence=256,
+                )
+
+            self.assertEqual(output.read_bytes(), b"racing-owner")
+            self.assertEqual(stale.read_bytes(), b"unrelated-stale-state")
+            self.assertEqual(list(root.glob(".instruction.sqlite.*.tmp")), [])
+
+    def test_rejects_source_catalog_changed_during_build(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            catalog, admission, splits, humaneval = self._write_fixture(root)
+            output = root / "instruction.sqlite"
+            real_audit = audit_task_database
+            source_changed = False
+
+            def audit_then_change_catalog(
+                binding: NativeTokenizerBinding, database_path: str | Path
+            ) -> TaskDatabaseAuditResult:
+                nonlocal source_changed
+                result = real_audit(binding, database_path)
+                if (
+                    Path(database_path).resolve() != splits.resolve()
+                    and not source_changed
+                ):
+                    changed_source = self._source("changed_after_read", 99)
+                    connection = sqlite3.connect(catalog)
+                    try:
+                        connection.execute(
+                            "UPDATE documents SET content=?,content_sha256=? "
+                            "WHERE document_id='train-unique'",
+                            (
+                                changed_source,
+                                hashlib.sha256(changed_source.encode()).hexdigest(),
+                            ),
+                        )
+                        connection.commit()
+                    finally:
+                        connection.close()
+                    source_changed = True
+                return result
+
+            with (
+                patch(
+                    "bosscrafts_model.instruction_curriculum.audit_task_database",
+                    side_effect=audit_then_change_catalog,
+                ),
+                self.assertRaisesRegex(ValueError, "changed during build"),
+            ):
+                build_instruction_curriculum(
+                    self.binding,
+                    source_catalog=catalog,
+                    admission_database=admission,
+                    split_database=splits,
+                    humaneval_dataset=humaneval,
+                    output_database=output,
+                    quotas={"train": 1, "validation": 1, "test": 1},
+                    max_sequence=256,
+                )
+
+            self.assertFalse(output.exists())
 
 
 if __name__ == "__main__":
