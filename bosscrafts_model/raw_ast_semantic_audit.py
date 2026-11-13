@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import tempfile
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +10,7 @@ from typing import TypeGuard, cast
 
 from .bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
 from .current_task_packing import CurrentCorpusTaskPacker
+from .immutable_artifacts import publish_new_files
 from .raw_ast_witness import RawAstWitnessClient
 from .source_semantic_replay import SourceSemanticReplayAuditor
 from .tokenizer import NativeTokenizerBinding
@@ -51,23 +50,6 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _atomic_write(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
-
-
 @dataclass(frozen=True, slots=True)
 class RawAstSemanticAuditResult:
     output_root: Path
@@ -101,9 +83,15 @@ class RawAstSemanticAuditReport:
             Path(review_root).resolve(),
             review_ids,
         )
-        _atomic_write(output / "witnesses.jsonl", witnesses_text.encode("utf-8"))
-        _atomic_write(
-            output / "manifest.json", f"{_canonical(manifest)}\n".encode("utf-8")
+        publish_new_files(
+            (
+                (output / "witnesses.jsonl", witnesses_text.encode("utf-8")),
+                (
+                    output / "manifest.json",
+                    f"{_canonical(manifest)}\n".encode("utf-8"),
+                ),
+            ),
+            artifact_label="raw AST semantic audit",
         )
         return self._result(output, manifest)
 
