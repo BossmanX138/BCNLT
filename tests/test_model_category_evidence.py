@@ -6,6 +6,11 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from test_frozen_evaluation_contract import (
+    TEST_DATABASE_ID,
+    VALIDATION_DATABASE_ID,
+    _plural_manifest,
+)
 from test_full_model_acceptance_categories import (
     CATEGORIES,
     CHECKPOINT_ID,
@@ -97,6 +102,23 @@ def test_compiler_recomputes_records_and_produces_accepted_artifact():
         tuple(evidence),
     )
     assert result.acceptance_passed is True
+
+
+def test_compiler_binds_plural_suite_categories_to_the_test_database():
+    compiled = compile_model_category_evidence(
+        category="tokenizer_fidelity",
+        records=_records("tokenizer_fidelity"),
+        heldout_manifest=_plural_manifest(),
+        task_database_identities_sha256={
+            "validation": VALIDATION_DATABASE_ID,
+            "test": TEST_DATABASE_ID,
+        },
+        checkpoint_sha256=CHECKPOINT_ID,
+        checkpoint_step=86_016,
+    )
+
+    assert compiled["passed"] is True
+    assert compiled["task_database_identity_sha256"] == TEST_DATABASE_ID
 
 
 def test_semantic_compiler_requires_and_validates_current_runtime_receipt():

@@ -133,6 +133,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--database", type=Path, default=DEFAULT_DATABASE)
     parser.add_argument("--evaluation-database", type=Path)
+    parser.add_argument("--validation-database", type=Path)
+    parser.add_argument("--test-database", type=Path)
     parser.add_argument("--heldout-suite-manifest", type=Path)
     parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT)
     parser.add_argument("--status-output", type=Path)
@@ -177,13 +179,22 @@ def main() -> int:
         parser.error(
             "initial-model-checkpoint and initial-checkpoint-database must be supplied together"
         )
-    if (arguments.evaluation_database is None) != (
-        arguments.heldout_suite_manifest is None
-    ):
+    plural_evaluation_supplied = (
+        arguments.validation_database is not None
+        or arguments.test_database is not None
+    )
+    if (arguments.validation_database is None) != (arguments.test_database is None):
+        parser.error("validation-database and test-database must be supplied together")
+    if arguments.evaluation_database is not None and plural_evaluation_supplied:
+        parser.error("singular and plural evaluation databases are mutually exclusive")
+    evaluation_contract_supplied = (
+        arguments.evaluation_database is not None or plural_evaluation_supplied
+    )
+    if evaluation_contract_supplied != (arguments.heldout_suite_manifest is not None):
         parser.error(
-            "evaluation-database and heldout-suite-manifest must be supplied together"
+            "evaluation databases and heldout-suite-manifest must be supplied together"
         )
-    if arguments.full_model and arguments.evaluation_database is None:
+    if arguments.full_model and not evaluation_contract_supplied:
         parser.error("full-model training requires a frozen evaluation contract")
     if (arguments.initialization_checkpoint_sha256 is None) != (
         arguments.initialization_database_identity_sha256 is None
@@ -213,6 +224,10 @@ def main() -> int:
     input_paths = {"training database": arguments.database}
     if arguments.evaluation_database is not None:
         input_paths["evaluation database"] = arguments.evaluation_database
+    if arguments.validation_database is not None:
+        input_paths["validation database"] = arguments.validation_database
+    if arguments.test_database is not None:
+        input_paths["test database"] = arguments.test_database
     if arguments.heldout_suite_manifest is not None:
         input_paths["held-out suite manifest"] = arguments.heldout_suite_manifest
     if arguments.initial_model_checkpoint is not None:
@@ -240,6 +255,7 @@ def main() -> int:
     binding = NativeTokenizerBinding.load()
     task_audit = audit_task_database(binding, arguments.database)
     evaluation_database_identity_sha256: str | None = None
+    evaluation_database_identities_sha256: dict[str, str] | None = None
     heldout_suite_manifest_sha256: str | None = None
     if arguments.evaluation_database is not None:
         if arguments.heldout_suite_manifest is None:
@@ -255,6 +271,24 @@ def main() -> int:
         )
         evaluation_database_identity_sha256 = (
             heldout_suite.task_database_identity_sha256
+        )
+        heldout_suite_manifest_sha256 = heldout_suite.manifest_sha256
+    elif arguments.validation_database is not None:
+        if arguments.test_database is None or arguments.heldout_suite_manifest is None:
+            raise RuntimeError("validated plural evaluation contract is incomplete")
+        evaluation_audits = {
+            "validation": audit_task_database(binding, arguments.validation_database),
+            "test": audit_task_database(binding, arguments.test_database),
+        }
+        heldout_suite = verify_heldout_suite_manifest(
+            _read_heldout_manifest(arguments.heldout_suite_manifest),
+            task_database_identities_sha256={
+                split: audit.database_identity_sha256
+                for split, audit in evaluation_audits.items()
+            },
+        )
+        evaluation_database_identities_sha256 = (
+            heldout_suite.evaluation_task_database_identities_sha256
         )
         heldout_suite_manifest_sha256 = heldout_suite.manifest_sha256
     dataset = ResumableTaskDataset(binding, arguments.database)
@@ -339,9 +373,13 @@ def main() -> int:
             "warmup_steps": warmup_steps,
         },
         "schema_version": (
-            "bosscrafts-training-plan-v3"
-            if evaluation_database_identity_sha256 is not None
-            else "bosscrafts-training-plan-v2"
+            "bosscrafts-training-plan-v4"
+            if evaluation_database_identities_sha256 is not None
+            else (
+                "bosscrafts-training-plan-v3"
+                if evaluation_database_identity_sha256 is not None
+                else "bosscrafts-training-plan-v2"
+            )
         ),
         "seed": 7,
         "split": "train",
@@ -351,6 +389,13 @@ def main() -> int:
         training_plan["evaluation_contract"] = {
             "evaluation_task_database_identity_sha256": (
                 evaluation_database_identity_sha256
+            ),
+            "heldout_suite_manifest_sha256": heldout_suite_manifest_sha256,
+        }
+    elif evaluation_database_identities_sha256 is not None:
+        training_plan["evaluation_contract"] = {
+            "evaluation_task_database_identities_sha256": (
+                evaluation_database_identities_sha256
             ),
             "heldout_suite_manifest_sha256": heldout_suite_manifest_sha256,
         }
@@ -395,6 +440,9 @@ def main() -> int:
             expected_training_plan_sha256=training_plan_sha256,
             expected_evaluation_task_database_identity_sha256=(
                 evaluation_database_identity_sha256
+            ),
+            expected_evaluation_task_database_identities_sha256=(
+                evaluation_database_identities_sha256
             ),
             expected_heldout_suite_manifest_sha256=(
                 heldout_suite_manifest_sha256
@@ -497,6 +545,9 @@ def main() -> int:
         evaluation_task_database_identity_sha256=(
             evaluation_database_identity_sha256
         ),
+        evaluation_task_database_identities_sha256=(
+            evaluation_database_identities_sha256
+        ),
         heldout_suite_manifest_sha256=heldout_suite_manifest_sha256,
     )
     checkpoint_write_seconds = time.perf_counter() - checkpoint_started
@@ -530,9 +581,6 @@ def main() -> int:
         "optimizer_steps_remaining": max(0, planned_optimizer_steps - total_steps),
         "optimizer_step_fraction": min(1.0, total_steps / planned_optimizer_steps),
         "task_database_identity_sha256": task_audit.database_identity_sha256,
-        "evaluation_task_database_identity_sha256": (
-            evaluation_database_identity_sha256
-        ),
         "heldout_suite_manifest_sha256": heldout_suite_manifest_sha256,
         "training_seconds": training_seconds,
         "sequence_tokens_per_second": (
@@ -550,6 +598,14 @@ def main() -> int:
         "total_optimizer_steps": total_steps,
         "training_complete": epoch_index >= arguments.epochs,
     }
+    if evaluation_database_identity_sha256 is not None:
+        payload["evaluation_task_database_identity_sha256"] = (
+            evaluation_database_identity_sha256
+        )
+    if evaluation_database_identities_sha256 is not None:
+        payload["evaluation_task_database_identities_sha256"] = (
+            evaluation_database_identities_sha256
+        )
     if arguments.status_output is not None:
         _write_json_atomic(arguments.status_output, payload)
     print(json.dumps(payload, sort_keys=True))

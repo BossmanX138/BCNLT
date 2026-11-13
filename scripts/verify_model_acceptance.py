@@ -60,8 +60,7 @@ def _ground_heldout_cases(
     binding: NativeTokenizerBinding,
     database: Path,
     inferences: tuple[dict[str, object], ...],
-) -> tuple[str, dict[str, HeldoutInferenceCase]]:
-    audit = audit_task_database(binding, database)
+) -> dict[str, HeldoutInferenceCase]:
     requested: dict[str, str] = {}
     for payload in inferences:
         task = payload.get("task")
@@ -79,7 +78,7 @@ def _ground_heldout_cases(
 
     cases: dict[str, HeldoutInferenceCase] = {}
     dataset = ResumableTaskDataset(binding, database)
-    for example in dataset.iter_examples(split="test"):
+    for example in dataset.iter_examples_by_id(tuple(requested), split="test"):
         example_id = example.get("example_id")
         if type(example_id) is not str or example_id not in requested:
             continue
@@ -108,12 +107,14 @@ def _ground_heldout_cases(
         )
     if set(cases) != set(STRUCTURED_TASKS):
         raise ValueError("task database does not contain every claimed held-out case")
-    return audit.database_identity_sha256, cases
+    return cases
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--task-database", type=Path, required=True)
+    parser.add_argument("--task-database", type=Path)
+    parser.add_argument("--validation-database", type=Path)
+    parser.add_argument("--test-database", type=Path)
     parser.add_argument("--heldout-manifest", type=Path, required=True)
     parser.add_argument("--validation-evaluation", type=Path, required=True)
     parser.add_argument("--test-evaluation", type=Path, required=True)
@@ -129,6 +130,13 @@ def main() -> int:
         )
     parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
+    plural_databases = (
+        arguments.validation_database is not None or arguments.test_database is not None
+    )
+    if (arguments.validation_database is None) != (arguments.test_database is None):
+        parser.error("validation-database and test-database must be supplied together")
+    if (arguments.task_database is None) == (not plural_databases):
+        parser.error("supply either task-database or both split databases")
 
     binding = NativeTokenizerBinding.load()
     inferences = (
@@ -136,9 +144,28 @@ def main() -> int:
         _read_payload(arguments.semantic_continuation_inference),
         _read_payload(arguments.semantic_to_code_inference),
     )
-    database_identity, heldout_cases = _ground_heldout_cases(
+    database_identity: str | None = None
+    database_identities: dict[str, str] | None = None
+    if arguments.task_database is not None:
+        test_database = arguments.task_database
+        database_identity = audit_task_database(
+            binding, test_database
+        ).database_identity_sha256
+    else:
+        if arguments.validation_database is None or arguments.test_database is None:
+            raise RuntimeError("validated split databases are missing")
+        test_database = arguments.test_database
+        database_identities = {
+            "validation": audit_task_database(
+                binding, arguments.validation_database
+            ).database_identity_sha256,
+            "test": audit_task_database(
+                binding, arguments.test_database
+            ).database_identity_sha256,
+        }
+    heldout_cases = _ground_heldout_cases(
         binding,
-        arguments.task_database,
+        test_database,
         inferences,
     )
     result = verify_model_acceptance(
@@ -155,6 +182,7 @@ def main() -> int:
         heldout_manifest=_read_payload(arguments.heldout_manifest),
         heldout_cases=heldout_cases,
         task_database_identity_sha256=database_identity,
+        task_database_identities_sha256=database_identities,
     )
     payload = asdict(result)
     payload["acceptance_manifest_sha256"] = hashlib.sha256(

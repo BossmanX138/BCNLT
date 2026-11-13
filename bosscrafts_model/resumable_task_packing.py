@@ -10,7 +10,7 @@ import sys
 import zlib
 from array import array
 from collections import Counter, defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypedDict, cast
@@ -292,70 +292,129 @@ class ResumableTaskDataset:
                 query += " WHERE " + " AND ".join(conditions)
             query += " ORDER BY example_id"
             for row in connection.execute(query, tuple(parameters)):
-                family = row[3]
-                split_value = row[5]
-                language = row[2]
-                expected_runtime = (
-                    PARSER_RUNTIME_NOT_APPLICABLE
-                    if family == "instruction_to_code"
-                    else PARSER_RUNTIME_IDENTITY_SHA256
-                )
-                if (
-                    type(family) is not str
-                    or family not in _TASK_FAMILIES
-                    or type(split_value) is not str
-                    or split_value not in {"train", "validation", "test"}
-                    or type(language) is not str
-                    or language not in CURRENT_RUNTIME_SPEC_SHA256
-                    or str(row[10]) != expected_runtime
-                ):
-                    raise ValueError("task row parser runtime lineage mismatch")
-                token_count = row[7]
-                if (
-                    type(token_count) is not int
-                    or not 2 <= token_count <= self._maximum_sequence_tokens
-                ):
-                    raise ValueError("task token count exceeds configured maximum")
-                if type(row[6]) is not bytes:
-                    raise ValueError("task token blob is invalid")
-                expected_input_bytes = token_count * 2
-                input_ids = _decode_u16(
-                    decompress_bounded(
-                        row[6],
-                        maximum_output_bytes=expected_input_bytes,
-                    )
-                )
-                if len(input_ids) != token_count:
-                    raise ValueError("task token count mismatch")
-                if any(token_id >= self._binding.vocab_size for token_id in input_ids):
-                    raise ValueError("task token exceeds frozen vocabulary")
-                loss_start = row[8]
-                if type(loss_start) is not int:
-                    raise ValueError("task loss boundary is invalid")
-                if not 0 < loss_start < len(input_ids):
-                    raise ValueError("task loss boundary is invalid")
-                record_index = row[4]
-                if type(record_index) is not int:
-                    raise ValueError("task record index is invalid")
-                if record_index < 0:
-                    raise ValueError("task record index is invalid")
-                cell = (split_value, language, family)
-                yield {
-                    "example_id": str(row[0]),
-                    "document_id": str(row[1]),
-                    "language": cell[1],
-                    "family": cell[2],
-                    "record_index": record_index,
-                    "split": cell[0],
-                    "input_ids": input_ids,
-                    "loss_start_index": loss_start,
-                    "sampling_weight": self._weights[cell],
-                    "semantic_spec_sha256": str(row[9]),
-                    "parser_runtime_identity_sha256": str(row[10]),
-                    "source_sha256": str(row[11]),
-                }
+                yield self._decode_task_row(row)
         finally:
             connection.close()
+
+    def iter_examples_by_id(
+        self,
+        example_ids: Sequence[str],
+        *,
+        split: str,
+    ) -> Iterator[TaskExample]:
+        """Read an exact, bounded frozen subset without scanning the task table."""
+        if split not in {"train", "validation", "test"}:
+            raise ValueError("split must be train, validation or test")
+        if isinstance(example_ids, (str, bytes)) or not isinstance(
+            example_ids, Sequence
+        ):
+            raise TypeError("example_ids must be a sequence of lowercase SHA-256 IDs")
+        requested = list(example_ids)
+        if not requested or len(requested) > 100_000:
+            raise ValueError("example_ids must contain between 1 and 100000 IDs")
+        if any(
+            type(example_id) is not str
+            or len(example_id) != 64
+            or any(character not in "0123456789abcdef" for character in example_id)
+            for example_id in requested
+        ):
+            raise ValueError("example_ids must contain only lowercase SHA-256 IDs")
+        if len(set(requested)) != len(requested):
+            raise ValueError("example_ids must not contain duplicate IDs")
+
+        selected: dict[str, TaskExample] = {}
+        connection = ResumableCurrentTaskPacking._ro_connect(self.database_path)
+        try:
+            for offset in range(0, len(requested), 500):
+                batch = requested[offset : offset + 500]
+                placeholders = ",".join("?" for _ in batch)
+                query = (
+                    "SELECT example_id, document_id, language, family, record_index, split, "
+                    "input_ids_zlib, token_count, loss_start_index, "
+                    "semantic_spec_sha256, parser_runtime_identity_sha256, source_sha256 "
+                    f"FROM tasks WHERE example_id IN ({placeholders})"
+                )
+                for row in connection.execute(query, batch):
+                    decoded = self._decode_task_row(row)
+                    example_id = decoded["example_id"]
+                    if example_id in selected:
+                        raise ValueError("task database returned a duplicate example ID")
+                    selected[example_id] = decoded
+        finally:
+            connection.close()
+
+        missing = [example_id for example_id in requested if example_id not in selected]
+        if missing:
+            raise ValueError("one or more requested example IDs are missing")
+        wrong_split = [
+            example_id
+            for example_id in requested
+            if selected[example_id]["split"] != split
+        ]
+        if wrong_split:
+            raise ValueError("one or more requested example IDs belong to another split")
+        for example_id in requested:
+            yield selected[example_id]
+
+    def _decode_task_row(self, row: Sequence[object]) -> TaskExample:
+        family = row[3]
+        split_value = row[5]
+        language = row[2]
+        expected_runtime = (
+            PARSER_RUNTIME_NOT_APPLICABLE
+            if family == "instruction_to_code"
+            else PARSER_RUNTIME_IDENTITY_SHA256
+        )
+        if (
+            type(family) is not str
+            or family not in _TASK_FAMILIES
+            or type(split_value) is not str
+            or split_value not in {"train", "validation", "test"}
+            or type(language) is not str
+            or language not in CURRENT_RUNTIME_SPEC_SHA256
+            or str(row[10]) != expected_runtime
+        ):
+            raise ValueError("task row parser runtime lineage mismatch")
+        token_count = row[7]
+        if (
+            type(token_count) is not int
+            or not 2 <= token_count <= self._maximum_sequence_tokens
+        ):
+            raise ValueError("task token count exceeds configured maximum")
+        if type(row[6]) is not bytes:
+            raise ValueError("task token blob is invalid")
+        expected_input_bytes = token_count * 2
+        input_ids = _decode_u16(
+            decompress_bounded(
+                row[6],
+                maximum_output_bytes=expected_input_bytes,
+            )
+        )
+        if len(input_ids) != token_count:
+            raise ValueError("task token count mismatch")
+        if any(token_id >= self._binding.vocab_size for token_id in input_ids):
+            raise ValueError("task token exceeds frozen vocabulary")
+        loss_start = row[8]
+        if type(loss_start) is not int or not 0 < loss_start < len(input_ids):
+            raise ValueError("task loss boundary is invalid")
+        record_index = row[4]
+        if type(record_index) is not int or record_index < 0:
+            raise ValueError("task record index is invalid")
+        cell = (split_value, language, family)
+        return {
+            "example_id": str(row[0]),
+            "document_id": str(row[1]),
+            "language": cell[1],
+            "family": cell[2],
+            "record_index": record_index,
+            "split": cell[0],
+            "input_ids": input_ids,
+            "loss_start_index": loss_start,
+            "sampling_weight": self._weights[cell],
+            "semantic_spec_sha256": str(row[9]),
+            "parser_runtime_identity_sha256": str(row[10]),
+            "source_sha256": str(row[11]),
+        }
 
 
 def audit_task_database(

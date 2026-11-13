@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Sequence
 
 from .artifact_schemas import MODEL_CATEGORY_EVIDENCE_SCHEMA
 from .bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
@@ -68,7 +68,8 @@ def compile_model_category_evidence(
     category: str,
     records: Sequence[dict[str, object]],
     heldout_manifest: dict[str, object],
-    task_database_identity_sha256: str,
+    task_database_identity_sha256: str | None = None,
+    task_database_identities_sha256: Mapping[str, str] | None = None,
     checkpoint_sha256: str,
     checkpoint_step: int,
     strict_uncertainty_receipt: dict[str, object] | None = None,
@@ -76,8 +77,7 @@ def compile_model_category_evidence(
     if category not in ACCEPTANCE_CATEGORIES:
         raise ValueError("model acceptance category is invalid")
     if (
-        not _is_sha256(task_database_identity_sha256)
-        or not _is_sha256(checkpoint_sha256)
+        not _is_sha256(checkpoint_sha256)
         or type(checkpoint_step) is not int
         or checkpoint_step < 1
     ):
@@ -85,6 +85,10 @@ def compile_model_category_evidence(
     suite = verify_heldout_suite_manifest(
         heldout_manifest,
         task_database_identity_sha256=task_database_identity_sha256,
+        task_database_identities_sha256=task_database_identities_sha256,
+    )
+    evidence_database_identity = (
+        suite.evaluation_task_database_identities_sha256["test"]
     )
     declared_metrics: dict[str, object] = {}
     supporting_evidence: dict[str, object] = {}
@@ -127,7 +131,7 @@ def compile_model_category_evidence(
         "passed": not failure_codes,
         "records": list(records),
         "supporting_evidence": supporting_evidence,
-        "task_database_identity_sha256": task_database_identity_sha256,
+        "task_database_identity_sha256": evidence_database_identity,
         "tokenizer_sha256": EXPECTED_TOKENIZER_SHA256,
     }
     return {**body, "artifact_sha256": hashlib.sha256(_canonical(body)).hexdigest()}

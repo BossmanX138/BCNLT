@@ -15,6 +15,7 @@ from .artifact_schemas import (
     CHECKPOINT_INFERENCE_SCHEMA,
     MODEL_CATEGORY_EVIDENCE_SCHEMA,
     MODEL_HELDOUT_SUITE_SCHEMA,
+    MODEL_HELDOUT_SUITE_SCHEMA_V2,
 )
 from .bcnlt_source_pipeline import (
     CURRENT_RUNTIME_SPEC_SHA256,
@@ -195,6 +196,9 @@ def _canonical_sha256(value: object) -> str:
 class GroundedHeldoutSuite:
     manifest_sha256: str
     task_database_identity_sha256: str
+    evaluation_task_database_identities_sha256: dict[str, str]
+    evaluation_example_ids: dict[str, dict[str, tuple[str, ...]]]
+    evaluation_example_ids_sha256: dict[str, dict[str, str]]
     category_example_ids: dict[str, tuple[str, ...]]
     category_example_ids_sha256: dict[str, str]
     category_example_counts: dict[str, int]
@@ -203,11 +207,12 @@ class GroundedHeldoutSuite:
 def verify_heldout_suite_manifest(
     payload: dict[str, object],
     *,
-    task_database_identity_sha256: str,
+    task_database_identity_sha256: str | None = None,
+    task_database_identities_sha256: Mapping[str, str] | None = None,
 ) -> GroundedHeldoutSuite:
     """Verify the exact held-out case inventory used by every acceptance category."""
 
-    required_fields = {
+    legacy_fields = {
         "categories",
         "expected_languages",
         "heldout_split",
@@ -218,26 +223,117 @@ def verify_heldout_suite_manifest(
         "task_database_identity_sha256",
         "tokenizer_sha256",
     }
-    if type(payload) is not dict or set(payload) != required_fields:
+    v2_fields = {
+        "categories",
+        "evaluation_cells",
+        "evaluation_task_database_identities_sha256",
+        "expected_languages",
+        "manifest_sha256",
+        "parser_runtime_identity_sha256",
+        "schema_version",
+        "structured_tasks",
+        "tokenizer_sha256",
+    }
+    if type(payload) is not dict:
         raise ValueError("held-out suite fields do not match the acceptance schema")
-    if not _is_sha256(task_database_identity_sha256):
-        raise ValueError("held-out suite database identity is invalid")
+    payload_fields = frozenset(payload)
+    if payload_fields not in {frozenset(legacy_fields), frozenset(v2_fields)}:
+        raise ValueError("held-out suite fields do not match the acceptance schema")
+    schema_version = payload.get("schema_version")
+    if schema_version == MODEL_HELDOUT_SUITE_SCHEMA:
+        if (
+            not _is_sha256(task_database_identity_sha256)
+            or task_database_identities_sha256 is not None
+        ):
+            raise ValueError("held-out suite database identity is invalid")
+        database_identities = {
+            "validation": task_database_identity_sha256,
+            "test": task_database_identity_sha256,
+        }
+    elif schema_version == MODEL_HELDOUT_SUITE_SCHEMA_V2:
+        if task_database_identity_sha256 is not None or (
+            not isinstance(task_database_identities_sha256, Mapping)
+            or set(task_database_identities_sha256) != {"validation", "test"}
+            or any(
+                not _is_sha256(value)
+                for value in task_database_identities_sha256.values()
+            )
+        ):
+            raise ValueError("held-out suite database identities are invalid")
+        database_identities = dict(task_database_identities_sha256)
+    else:
+        raise ValueError("held-out suite lineage mismatch")
     supplied_hash = payload.get("manifest_sha256")
     unsigned = {key: value for key, value in payload.items() if key != "manifest_sha256"}
     if not _is_sha256(supplied_hash) or supplied_hash != _payload_sha256(unsigned):
         raise ValueError("held-out suite integrity mismatch")
     if (
-        payload.get("schema_version") != MODEL_HELDOUT_SUITE_SCHEMA
-        or payload.get("heldout_split") != "test"
-        or payload.get("task_database_identity_sha256")
-        != task_database_identity_sha256
-        or payload.get("parser_runtime_identity_sha256")
+        payload.get("parser_runtime_identity_sha256")
         != PARSER_RUNTIME_IDENTITY_SHA256
         or payload.get("tokenizer_sha256") != EXPECTED_TOKENIZER_SHA256
         or payload.get("expected_languages") != list(EXPECTED_LANGUAGES)
         or payload.get("structured_tasks") != list(STRUCTURED_TASKS)
     ):
         raise ValueError("held-out suite lineage mismatch")
+    evaluation_ids: dict[str, dict[str, tuple[str, ...]]] = {}
+    evaluation_hashes: dict[str, dict[str, str]] = {}
+    if schema_version == MODEL_HELDOUT_SUITE_SCHEMA:
+        if (
+            payload.get("heldout_split") != "test"
+            or payload.get("task_database_identity_sha256")
+            != task_database_identity_sha256
+        ):
+            raise ValueError("held-out suite lineage mismatch")
+    else:
+        if (
+            payload.get("evaluation_task_database_identities_sha256")
+            != database_identities
+        ):
+            raise ValueError("held-out suite lineage mismatch")
+        raw_evaluation_cells = payload.get("evaluation_cells")
+        if type(raw_evaluation_cells) is not dict or set(raw_evaluation_cells) != {
+            "validation",
+            "test",
+        }:
+            raise ValueError("held-out suite evaluation inventory is incomplete")
+        all_split_ids: dict[str, set[str]] = {}
+        for split in ("validation", "test"):
+            raw_cells = raw_evaluation_cells.get(split)
+            if type(raw_cells) is not dict or set(raw_cells) != set(
+                EXPECTED_HELDOUT_CELLS
+            ):
+                raise ValueError("held-out suite evaluation inventory is incomplete")
+            split_ids: dict[str, tuple[str, ...]] = {}
+            split_hashes: dict[str, str] = {}
+            flattened: set[str] = set()
+            for cell, expected_count in EXPECTED_HELDOUT_CELLS.items():
+                entry = raw_cells.get(cell)
+                if type(entry) is not dict or set(entry) != {
+                    "example_ids",
+                    "example_ids_sha256",
+                }:
+                    raise ValueError("held-out suite evaluation inventory is invalid")
+                example_ids = entry.get("example_ids")
+                supplied_ids_hash = entry.get("example_ids_sha256")
+                if (
+                    type(example_ids) is not list
+                    or len(example_ids) != expected_count
+                    or any(not _is_sha256(value) for value in example_ids)
+                    or example_ids != sorted(example_ids)
+                    or len(set(example_ids)) != len(example_ids)
+                    or not _is_sha256(supplied_ids_hash)
+                    or supplied_ids_hash != _canonical_sha256(example_ids)
+                    or not flattened.isdisjoint(example_ids)
+                ):
+                    raise ValueError("held-out suite evaluation inventory is invalid")
+                flattened.update(example_ids)
+                split_ids[cell] = tuple(example_ids)
+                split_hashes[cell] = supplied_ids_hash
+            evaluation_ids[split] = split_ids
+            evaluation_hashes[split] = split_hashes
+            all_split_ids[split] = flattened
+        if not all_split_ids["validation"].isdisjoint(all_split_ids["test"]):
+            raise ValueError("held-out suite evaluation splits overlap")
     categories = payload.get("categories")
     if type(categories) is not dict or set(categories) != set(ACCEPTANCE_CATEGORIES):
         raise ValueError("held-out suite category inventory is incomplete")
@@ -270,7 +366,10 @@ def verify_heldout_suite_manifest(
         category_ids[category] = tuple(example_ids)
     return GroundedHeldoutSuite(
         manifest_sha256=supplied_hash,
-        task_database_identity_sha256=task_database_identity_sha256,
+        task_database_identity_sha256=database_identities["test"],
+        evaluation_task_database_identities_sha256=database_identities,
+        evaluation_example_ids=evaluation_ids,
+        evaluation_example_ids_sha256=evaluation_hashes,
         category_example_ids=category_ids,
         category_example_ids_sha256=category_hashes,
         category_example_counts=category_counts,
@@ -518,6 +617,7 @@ class ModelAcceptanceResult:
     task_database_identity_sha256: str
     checkpoint_task_database_identity_sha256: str
     evaluation_task_database_identity_sha256: str
+    evaluation_task_database_identities_sha256: dict[str, str]
     model_fingerprint: str
     evaluation_sha256: dict[str, str]
     inference_sha256: dict[str, str]
@@ -537,7 +637,8 @@ def verify_model_acceptance(
     binding: NativeTokenizerBinding,
     heldout_manifest: dict[str, object],
     heldout_cases: Mapping[str, HeldoutInferenceCase],
-    task_database_identity_sha256: str,
+    task_database_identity_sha256: str | None = None,
+    task_database_identities_sha256: Mapping[str, str] | None = None,
 ) -> ModelAcceptanceResult:
     if type(evaluations) not in {tuple, list} or len(evaluations) != 2:
         raise ValueError("acceptance requires validation and test evaluations")
@@ -547,13 +648,15 @@ def verify_model_acceptance(
         ACCEPTANCE_CATEGORIES
     ):
         raise ValueError("acceptance requires every independent category")
-    if not _is_sha256(task_database_identity_sha256):
-        raise ValueError("acceptance ground-truth database identity is invalid")
     if type(binding) is not NativeTokenizerBinding:
         raise TypeError("acceptance requires a verified NativeTokenizerBinding")
     heldout_suite = verify_heldout_suite_manifest(
         heldout_manifest,
         task_database_identity_sha256=task_database_identity_sha256,
+        task_database_identities_sha256=task_database_identities_sha256,
+    )
+    evaluation_database_identities = (
+        heldout_suite.evaluation_task_database_identities_sha256
     )
     if not isinstance(heldout_cases, Mapping) or set(heldout_cases) != set(
         STRUCTURED_TASKS
@@ -576,6 +679,14 @@ def verify_model_acceptance(
         ):
             raise ValueError(f"{task} held-out ground truth is invalid")
         heldout_example_ids.add(case.example_id)
+        if heldout_suite.evaluation_example_ids and not any(
+            case.example_id in example_ids
+            for cell, example_ids in heldout_suite.evaluation_example_ids[
+                "test"
+            ].items()
+            if cell.endswith(f"|{task}")
+        ):
+            raise ValueError(f"{task} held-out case is not in the frozen test inventory")
 
     evaluation_by_split: dict[str, dict[str, object]] = {}
     for payload in evaluations:
@@ -677,6 +788,17 @@ def verify_model_acceptance(
         evaluation_by_split[split] = payload
     if set(evaluation_by_split) != {"validation", "test"}:
         raise ValueError("acceptance requires validation and test evaluations")
+    for split, payload in evaluation_by_split.items():
+        expected_database_identity = evaluation_database_identities[split]
+        if (
+            payload.get("task_database_identity_sha256")
+            != expected_database_identity
+            or payload.get("evaluation_task_database_identity_sha256")
+            != expected_database_identity
+            or payload.get("checkpoint_evaluation_task_database_identity_sha256")
+            != expected_database_identity
+        ):
+            raise ValueError(f"{split} evaluation database lineage mismatch")
 
     inference_by_task: dict[str, dict[str, object]] = {}
     for payload in inferences:
@@ -759,6 +881,16 @@ def verify_model_acceptance(
         inference_by_task[inference_task] = payload
     if set(inference_by_task) != set(STRUCTURED_TASKS):
         raise ValueError("acceptance requires all structured response protocols")
+    for task, payload in inference_by_task.items():
+        if (
+            payload.get("task_database_identity_sha256")
+            != evaluation_database_identities["test"]
+            or payload.get("evaluation_task_database_identity_sha256")
+            != evaluation_database_identities["test"]
+            or payload.get("checkpoint_evaluation_task_database_identity_sha256")
+            != evaluation_database_identities["test"]
+        ):
+            raise ValueError(f"{task} inference database lineage mismatch")
 
     category_by_name: dict[str, dict[str, object]] = {}
     for payload in category_evidence:
@@ -834,6 +966,11 @@ def verify_model_acceptance(
         if payload.get("metrics") != recomputed_metrics:
             raise ValueError(f"{category} metrics do not match held-out records")
         verify_category_metrics(category, recomputed_metrics)
+        if (
+            payload.get("task_database_identity_sha256")
+            != evaluation_database_identities["test"]
+        ):
+            raise ValueError(f"{category} evidence database lineage mismatch")
         category_by_name[category] = payload
     if set(category_by_name) != set(ACCEPTANCE_CATEGORIES):
         raise ValueError("acceptance requires every independent category")
@@ -843,9 +980,6 @@ def verify_model_acceptance(
         *inference_by_task.values(),
         *category_by_name.values(),
     ]
-    database_ids = {
-        payload.get("task_database_identity_sha256") for payload in all_payloads
-    }
     model_ids = {payload.get("model_fingerprint") for payload in all_payloads}
     checkpoint_ids = {payload.get("checkpoint_sha256") for payload in all_payloads}
     checkpoint_steps = {payload.get("checkpoint_step") for payload in all_payloads}
@@ -857,51 +991,39 @@ def verify_model_acceptance(
         payload.get("checkpoint_task_database_identity_sha256")
         for payload in checkpoint_bound_payloads
     }
-    checkpoint_evaluation_database_ids = {
-        payload.get("checkpoint_evaluation_task_database_identity_sha256")
-        for payload in checkpoint_bound_payloads
-    }
     checkpoint_heldout_suite_ids = {
         payload.get("checkpoint_heldout_suite_manifest_sha256")
         for payload in checkpoint_bound_payloads
     }
     if (
-        len(database_ids) != 1
-        or len(model_ids) != 1
+        len(model_ids) != 1
         or len(checkpoint_ids) != 1
         or len(checkpoint_steps) != 1
     ):
         raise ValueError("acceptance evidence lineage mismatch")
     if (
         len(checkpoint_training_database_ids) != 1
-        or len(checkpoint_evaluation_database_ids) != 1
     ):
         raise ValueError("acceptance checkpoint database lineage mismatch")
     if len(checkpoint_heldout_suite_ids) != 1:
         raise ValueError("acceptance checkpoint held-out suite lineage mismatch")
-    database_identity_value = next(iter(database_ids))
+    database_identity_value = evaluation_database_identities["test"]
     model_fingerprint_value = next(iter(model_ids))
     checkpoint_sha256_value = next(iter(checkpoint_ids))
     checkpoint_step_value = next(iter(checkpoint_steps))
     checkpoint_training_database_identity_value = next(
         iter(checkpoint_training_database_ids)
     )
-    checkpoint_evaluation_database_identity_value = next(
-        iter(checkpoint_evaluation_database_ids)
-    )
+    checkpoint_evaluation_database_identity_value = evaluation_database_identities["test"]
     checkpoint_heldout_suite_identity_value = next(
         iter(checkpoint_heldout_suite_ids)
     )
     if (
-        not _is_sha256(database_identity_value)
-        or database_identity_value != task_database_identity_sha256
-        or model_fingerprint_value != EXPECTED_MODEL_FINGERPRINT
+        model_fingerprint_value != EXPECTED_MODEL_FINGERPRINT
         or not _is_sha256(checkpoint_sha256_value)
         or type(checkpoint_step_value) is not int
         or checkpoint_step_value < 1
         or not _is_sha256(checkpoint_training_database_identity_value)
-        or checkpoint_evaluation_database_identity_value
-        != task_database_identity_sha256
     ):
         raise ValueError("acceptance evidence lineage mismatch")
     if checkpoint_heldout_suite_identity_value != heldout_suite.manifest_sha256:
@@ -938,6 +1060,9 @@ def verify_model_acceptance(
         ),
         evaluation_task_database_identity_sha256=(
             checkpoint_evaluation_database_identity_value
+        ),
+        evaluation_task_database_identities_sha256=(
+            evaluation_database_identities
         ),
         model_fingerprint=model_fingerprint_value,
         evaluation_sha256={

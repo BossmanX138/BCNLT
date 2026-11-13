@@ -79,15 +79,40 @@ def main() -> int:
     parser.add_argument("--category", choices=ACCEPTANCE_CATEGORIES, required=True)
     parser.add_argument("--records", type=Path, required=True)
     parser.add_argument("--heldout-manifest", type=Path, required=True)
-    parser.add_argument("--task-database", type=Path, required=True)
+    parser.add_argument("--task-database", type=Path)
+    parser.add_argument("--validation-database", type=Path)
+    parser.add_argument("--test-database", type=Path)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--checkpoint-step", type=int, required=True)
     parser.add_argument("--strict-uncertainty-receipt", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
+    plural_databases = (
+        arguments.validation_database is not None or arguments.test_database is not None
+    )
+    if (arguments.validation_database is None) != (arguments.test_database is None):
+        parser.error("validation-database and test-database must be supplied together")
+    if (arguments.task_database is None) == (not plural_databases):
+        parser.error("supply either task-database or both split databases")
 
     binding = NativeTokenizerBinding.load()
-    database = audit_task_database(binding, arguments.task_database)
+    database_identity: str | None = None
+    database_identities: dict[str, str] | None = None
+    if arguments.task_database is not None:
+        database_identity = audit_task_database(
+            binding, arguments.task_database
+        ).database_identity_sha256
+    else:
+        if arguments.validation_database is None or arguments.test_database is None:
+            raise RuntimeError("validated split databases are missing")
+        database_identities = {
+            "validation": audit_task_database(
+                binding, arguments.validation_database
+            ).database_identity_sha256,
+            "test": audit_task_database(
+                binding, arguments.test_database
+            ).database_identity_sha256,
+        }
     receipt = (
         _read_object(
             arguments.strict_uncertainty_receipt,
@@ -103,7 +128,8 @@ def main() -> int:
             arguments.heldout_manifest,
             "held-out manifest",
         ),
-        task_database_identity_sha256=database.database_identity_sha256,
+        task_database_identity_sha256=database_identity,
+        task_database_identities_sha256=database_identities,
         checkpoint_sha256=checkpoint_sha256(arguments.checkpoint),
         checkpoint_step=arguments.checkpoint_step,
         strict_uncertainty_receipt=receipt,

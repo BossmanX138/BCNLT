@@ -28,6 +28,10 @@ if tokenizers.__version__ != "0.23.2":
 
 from bosscrafts_model.artifact_schemas import CHECKPOINT_INFERENCE_SCHEMA
 from bosscrafts_model.config import ModelConfig
+from bosscrafts_model.frozen_evaluation import (
+    iter_frozen_evaluation_examples,
+    load_heldout_suite_manifest,
+)
 from bosscrafts_model.inference_protocol import (
     INFERENCE_TASKS,
     build_inference_prompt,
@@ -37,6 +41,7 @@ from bosscrafts_model.inference_protocol import (
     task_end_token_id,
 )
 from bosscrafts_model.model import EngineeringModel
+from bosscrafts_model.model_acceptance import verify_heldout_suite_manifest
 from bosscrafts_model.resumable_task_packing import (
     ResumableTaskDataset,
     audit_task_database,
@@ -91,6 +96,9 @@ def _publish_new_inference(path: Path, rendered: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--database", type=Path, default=DEFAULT_DATABASE)
+    parser.add_argument("--validation-database", type=Path)
+    parser.add_argument("--test-database", type=Path)
+    parser.add_argument("--heldout-suite-manifest", type=Path)
     parser.add_argument(
         "--checkpoint-database",
         type=Path,
@@ -114,6 +122,17 @@ def main() -> int:
         parser.error("max-new-tokens must be between 1 and 256")
     if arguments.prompt is not None and not arguments.prompt:
         parser.error("prompt must not be empty")
+    plural_evaluation = (
+        arguments.validation_database is not None or arguments.test_database is not None
+    )
+    if (arguments.validation_database is None) != (arguments.test_database is None):
+        parser.error("validation-database and test-database must be supplied together")
+    if plural_evaluation != (arguments.heldout_suite_manifest is not None):
+        parser.error(
+            "both evaluation databases and heldout-suite-manifest must be supplied together"
+        )
+    if plural_evaluation and arguments.checkpoint_database is None:
+        parser.error("two-database inference requires checkpoint-database")
     if (
         arguments.heldout_family is not None
         and arguments.task is not None
@@ -130,13 +149,44 @@ def main() -> int:
         parser.error("CUDA bfloat16 was requested but is unsupported")
 
     binding = NativeTokenizerBinding.load()
-    task_audit = audit_task_database(binding, arguments.database)
+    heldout_suite = None
+    evaluation_database_identities_sha256: dict[str, str] | None = None
+    if plural_evaluation:
+        if (
+            arguments.validation_database is None
+            or arguments.test_database is None
+            or arguments.heldout_suite_manifest is None
+        ):
+            raise RuntimeError("validated frozen evaluation arguments are incomplete")
+        evaluation_paths = {
+            "validation": arguments.validation_database,
+            "test": arguments.test_database,
+        }
+        evaluation_audits = {
+            split: audit_task_database(binding, path)
+            for split, path in evaluation_paths.items()
+        }
+        evaluation_database_identities_sha256 = {
+            split: audit.database_identity_sha256
+            for split, audit in evaluation_audits.items()
+        }
+        heldout_suite = verify_heldout_suite_manifest(
+            load_heldout_suite_manifest(arguments.heldout_suite_manifest),
+            task_database_identities_sha256=(
+                evaluation_database_identities_sha256
+            ),
+        )
+        evaluation_database = evaluation_paths[arguments.heldout_split]
+        task_audit = evaluation_audits[arguments.heldout_split]
+    else:
+        evaluation_database = arguments.database
+        task_audit = audit_task_database(binding, evaluation_database)
     checkpoint_task_audit = (
         audit_task_database(binding, arguments.checkpoint_database)
         if arguments.checkpoint_database is not None
         else task_audit
     )
-    dataset = ResumableTaskDataset(binding, arguments.database)
+    dataset = ResumableTaskDataset(binding, evaluation_database)
     if arguments.full_model:
         config = bound_native_65k_config(binding)
     else:
@@ -155,18 +205,36 @@ def main() -> int:
         ),
         expected_binding_sha256=binding.binding_sha256,
         expected_model_fingerprint=config.fingerprint(),
+        expected_evaluation_task_database_identities_sha256=(
+            evaluation_database_identities_sha256
+        ),
+        expected_heldout_suite_manifest_sha256=(
+            heldout_suite.manifest_sha256 if heldout_suite is not None else None
+        ),
     )
-    if (
-        state.evaluation_task_database_identity_sha256 is not None
-        and state.evaluation_task_database_identity_sha256
-        != task_audit.database_identity_sha256
+    checkpoint_evaluation_identity = (
+        state.evaluation_task_database_identities_sha256[arguments.heldout_split]
+        if state.evaluation_task_database_identities_sha256 is not None
+        else state.evaluation_task_database_identity_sha256
+    )
+    if checkpoint_evaluation_identity is not None and (
+        checkpoint_evaluation_identity != task_audit.database_identity_sha256
     ):
         raise ValueError("checkpoint frozen evaluation database mismatch")
     task = arguments.heldout_family or arguments.task or "raw"
     heldout_case = None
     if arguments.heldout_family is not None:
+        heldout_examples = (
+            iter_frozen_evaluation_examples(
+                dataset,
+                heldout_suite,
+                split=arguments.heldout_split,
+            )
+            if heldout_suite is not None
+            else dataset.iter_examples(split=arguments.heldout_split)
+        )
         heldout_case = select_heldout_inference_case(
-            dataset.iter_examples(split=arguments.heldout_split),
+            heldout_examples,
             family=arguments.heldout_family,
             max_new_tokens=arguments.max_new_tokens,
             maximum_sequence=config.max_sequence,
@@ -207,7 +275,7 @@ def main() -> int:
             checkpoint_task_audit.database_identity_sha256
         ),
         "checkpoint_evaluation_task_database_identity_sha256": (
-            state.evaluation_task_database_identity_sha256
+            checkpoint_evaluation_identity
         ),
         "checkpoint_heldout_suite_manifest_sha256": (
             state.heldout_suite_manifest_sha256

@@ -8,6 +8,7 @@ import math
 import sqlite3
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -17,6 +18,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from bosscrafts_model.balanced_curriculum import TASK_FAMILIES
 from bosscrafts_model.bcnlt_source_pipeline import CURRENT_RUNTIME_SPEC_SHA256
 from bosscrafts_model.instruction_curriculum import INSTRUCTION_FAMILY
+from bosscrafts_model.model_acceptance import verify_heldout_suite_manifest
 from bosscrafts_model.resumable_task_packing import (
     CELL_WEIGHT_MULTIPLIERS_METADATA_KEY,
     TASK_DATABASE_SCHEMA,
@@ -66,6 +68,7 @@ PLANNED_OPTIMIZER_STEPS = math.ceil(TRAIN_EXAMPLES / GRADIENT_ACCUMULATION)
 LEARNING_RATE = 0.00002
 WARMUP_RATIO = 0.01
 MINIMUM_LEARNING_RATE_RATIO = 0.1
+MAX_HELDOUT_MANIFEST_BYTES = 16 * 1024 * 1024
 
 
 def expected_initialization() -> dict[str, object]:
@@ -76,7 +79,76 @@ def expected_initialization() -> dict[str, object]:
     }
 
 
-def expected_training_plan_sha256() -> str:
+def _is_sha256(value: object) -> bool:
+    return (
+        type(value) is str
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    payload: dict[str, object] = {}
+    for key, value in pairs:
+        if key in payload:
+            raise ValueError(f"duplicate held-out manifest key: {key}")
+        payload[key] = value
+    return payload
+
+
+def read_v10_heldout_manifest(path: Path) -> dict[str, object]:
+    try:
+        content = path.resolve().read_bytes()
+        if not content or len(content) > MAX_HELDOUT_MANIFEST_BYTES:
+            raise ValueError("v10 held-out manifest size is invalid")
+        payload = json.loads(
+            content.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("v10 held-out manifest is unreadable") from error
+    if type(payload) is not dict:
+        raise ValueError("v10 held-out manifest must be a JSON object")
+    return payload
+
+
+def verify_v10_evaluation_contract(
+    *,
+    task_database_identities_sha256: Mapping[str, str],
+    heldout_manifest: dict[str, object],
+) -> tuple[dict[str, str], str]:
+    suite = verify_heldout_suite_manifest(
+        heldout_manifest,
+        task_database_identities_sha256=task_database_identities_sha256,
+    )
+    return suite.evaluation_task_database_identities_sha256, suite.manifest_sha256
+
+
+def v10_evaluation_identities_from_manifest(
+    heldout_manifest: dict[str, object],
+) -> dict[str, str]:
+    value = heldout_manifest.get("evaluation_task_database_identities_sha256")
+    if (
+        type(value) is not dict
+        or set(value) != {"validation", "test"}
+        or any(not _is_sha256(identity) for identity in value.values())
+    ):
+        raise ValueError("v10 held-out manifest database identities are invalid")
+    return {split: str(identity) for split, identity in value.items()}
+
+
+def expected_training_plan_sha256(
+    evaluation_task_database_identities_sha256: Mapping[str, str],
+    heldout_suite_manifest_sha256: str,
+) -> str:
+    if (
+        set(evaluation_task_database_identities_sha256) != {"validation", "test"}
+        or any(
+            not _is_sha256(value)
+            for value in evaluation_task_database_identities_sha256.values()
+        )
+        or not _is_sha256(heldout_suite_manifest_sha256)
+    ):
+        raise ValueError("v10 frozen evaluation contract is invalid")
     warmup_steps = min(
         PLANNED_OPTIMIZER_STEPS - 1,
         int(PLANNED_OPTIMIZER_STEPS * WARMUP_RATIO),
@@ -102,14 +174,84 @@ def expected_training_plan_sha256() -> str:
             "warmup_ratio": WARMUP_RATIO,
             "warmup_steps": warmup_steps,
         },
-        "schema_version": "bosscrafts-training-plan-v2",
+        "schema_version": "bosscrafts-training-plan-v4",
         "seed": 7,
         "split": "train",
         "initialization": expected_initialization(),
+        "evaluation_contract": {
+            "evaluation_task_database_identities_sha256": (
+                dict(evaluation_task_database_identities_sha256)
+            ),
+            "heldout_suite_manifest_sha256": heldout_suite_manifest_sha256,
+        },
     }
     return hashlib.sha256(
         json.dumps(plan, separators=(",", ":"), sort_keys=True).encode("utf-8")
     ).hexdigest()
+
+
+def build_bounded_training_command(
+    *,
+    database: Path,
+    checkpoint: Path,
+    status_output: Path,
+    parent_database: Path,
+    parent_checkpoint: Path,
+    validation_database: Path,
+    test_database: Path,
+    heldout_suite_manifest: Path,
+    resume: bool,
+) -> list[str]:
+    command = [
+        sys.executable,
+        str(PROJECT_ROOT / "scripts" / "run_bounded_training_trial.py"),
+        "--database",
+        str(database),
+        "--validation-database",
+        str(validation_database),
+        "--test-database",
+        str(test_database),
+        "--heldout-suite-manifest",
+        str(heldout_suite_manifest),
+        "--checkpoint",
+        str(checkpoint),
+        "--status-output",
+        str(status_output),
+        "--device",
+        "cuda",
+        "--dtype",
+        "bfloat16",
+        "--full-model",
+        "--gradient-checkpointing",
+        "--gradient-accumulation",
+        str(GRADIENT_ACCUMULATION),
+        "--learning-rate",
+        str(LEARNING_RATE),
+        "--warmup-ratio",
+        str(WARMUP_RATIO),
+        "--minimum-learning-rate-ratio",
+        str(MINIMUM_LEARNING_RATE_RATIO),
+        "--max-steps",
+        "100",
+        "--epochs",
+        "1",
+        "--initialization-checkpoint-sha256",
+        PARENT_CHECKPOINT_SHA256,
+        "--initialization-database-identity-sha256",
+        PARENT_DATABASE_IDENTITY_SHA256,
+    ]
+    if resume:
+        command.append("--resume")
+    else:
+        command.extend(
+            [
+                "--initial-model-checkpoint",
+                str(parent_checkpoint),
+                "--initial-checkpoint-database",
+                str(parent_database),
+            ]
+        )
+    return command
 
 
 def _verify_database(database: Path) -> None:
@@ -186,6 +328,9 @@ def main() -> int:
     parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT)
     parser.add_argument("--parent-database", type=Path, default=DEFAULT_PARENT_DATABASE)
     parser.add_argument("--parent-checkpoint", type=Path, default=DEFAULT_PARENT_CHECKPOINT)
+    parser.add_argument("--validation-database", type=Path, required=True)
+    parser.add_argument("--test-database", type=Path, required=True)
+    parser.add_argument("--heldout-suite-manifest", type=Path, required=True)
     parser.add_argument("--status-output", type=Path)
     parser.add_argument("--dry-run", action="store_true")
     arguments = parser.parse_args()
@@ -193,6 +338,9 @@ def main() -> int:
     checkpoint = arguments.checkpoint.resolve()
     parent_database = arguments.parent_database.resolve()
     parent_checkpoint = arguments.parent_checkpoint.resolve()
+    validation_database = arguments.validation_database.resolve()
+    test_database = arguments.test_database.resolve()
+    heldout_suite_manifest = arguments.heldout_suite_manifest.resolve()
     status_output = (
         arguments.status_output.resolve()
         if arguments.status_output is not None
@@ -201,44 +349,49 @@ def main() -> int:
     _verify_database(database)
     if not parent_database.is_file() or not parent_checkpoint.is_file():
         raise ValueError("verified v8 parent artifacts are required")
+    manifest = read_v10_heldout_manifest(heldout_suite_manifest)
+    (
+        evaluation_database_identities_sha256,
+        heldout_suite_manifest_sha256,
+    ) = verify_v10_evaluation_contract(
+        task_database_identities_sha256=(
+            v10_evaluation_identities_from_manifest(manifest)
+        ),
+        heldout_manifest=manifest,
+    )
     resume = checkpoint.is_file()
-    command = [
-        sys.executable,
-        str(PROJECT_ROOT / "scripts" / "run_bounded_training_trial.py"),
-        "--database", str(database),
-        "--checkpoint", str(checkpoint),
-        "--status-output", str(status_output),
-        "--device", "cuda",
-        "--dtype", "bfloat16",
-        "--full-model",
-        "--gradient-checkpointing",
-        "--gradient-accumulation", str(GRADIENT_ACCUMULATION),
-        "--learning-rate", str(LEARNING_RATE),
-        "--warmup-ratio", str(WARMUP_RATIO),
-        "--minimum-learning-rate-ratio", str(MINIMUM_LEARNING_RATE_RATIO),
-        "--max-steps", "100",
-        "--epochs", "1",
-        "--initialization-checkpoint-sha256", PARENT_CHECKPOINT_SHA256,
-        "--initialization-database-identity-sha256", PARENT_DATABASE_IDENTITY_SHA256,
-    ]
-    if resume:
-        command.append("--resume")
-    else:
-        command.extend(
-            [
-                "--initial-model-checkpoint", str(parent_checkpoint),
-                "--initial-checkpoint-database", str(parent_database),
-            ]
-        )
+    command = build_bounded_training_command(
+        database=database,
+        checkpoint=checkpoint,
+        status_output=status_output,
+        parent_database=parent_database,
+        parent_checkpoint=parent_checkpoint,
+        validation_database=validation_database,
+        test_database=test_database,
+        heldout_suite_manifest=heldout_suite_manifest,
+        resume=resume,
+    )
     contract = {
-        "schema_version": "bosscrafts-v10-instruction-training-chunk-contract-v1",
+        "schema_version": "bosscrafts-v10-instruction-training-chunk-contract-v2",
         "database": str(database),
         "database_identity_sha256": EXPECTED_DATABASE_IDENTITY,
         "checkpoint": str(checkpoint),
         "parent_database": str(parent_database),
         "parent_checkpoint": str(parent_checkpoint),
         "parent_checkpoint_sha256": PARENT_CHECKPOINT_SHA256,
-        "expected_training_plan_sha256": expected_training_plan_sha256(),
+        "evaluation_databases": {
+            "validation": str(validation_database),
+            "test": str(test_database),
+        },
+        "evaluation_database_identities_sha256": (
+            evaluation_database_identities_sha256
+        ),
+        "heldout_suite_manifest": str(heldout_suite_manifest),
+        "heldout_suite_manifest_sha256": heldout_suite_manifest_sha256,
+        "expected_training_plan_sha256": expected_training_plan_sha256(
+            evaluation_database_identities_sha256,
+            heldout_suite_manifest_sha256,
+        ),
         "planned_optimizer_steps": PLANNED_OPTIMIZER_STEPS,
         "train_examples": TRAIN_EXAMPLES,
         "instruction_train_examples": INSTRUCTION_TRAIN_EXAMPLES,

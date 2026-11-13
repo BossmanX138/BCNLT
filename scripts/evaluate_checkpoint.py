@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import tempfile
+from collections.abc import Iterator
 from dataclasses import asdict
 from pathlib import Path
 
@@ -35,9 +36,18 @@ from bosscrafts_model.evaluation import (
     evaluate_model,
     load_evaluation_baseline,
 )
+from bosscrafts_model.frozen_evaluation import (
+    iter_frozen_evaluation_examples,
+    load_heldout_suite_manifest,
+)
 from bosscrafts_model.model import EngineeringModel
+from bosscrafts_model.model_acceptance import (
+    GroundedHeldoutSuite,
+    verify_heldout_suite_manifest,
+)
 from bosscrafts_model.resumable_task_packing import (
     ResumableTaskDataset,
+    TaskExample,
     audit_task_database,
 )
 from bosscrafts_model.tokenizer import NativeTokenizerBinding, bound_native_65k_config
@@ -90,6 +100,9 @@ def _publish_new_evaluation(path: Path, rendered: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--database", type=Path, default=DEFAULT_DATABASE)
+    parser.add_argument("--validation-database", type=Path)
+    parser.add_argument("--test-database", type=Path)
+    parser.add_argument("--heldout-suite-manifest", type=Path)
     parser.add_argument(
         "--checkpoint-database",
         type=Path,
@@ -107,11 +120,24 @@ def main() -> int:
     parser.add_argument(
         "--split", choices=("train", "validation", "test"), default="validation"
     )
-    parser.add_argument("--max-examples", type=int, default=100)
+    parser.add_argument("--max-examples", type=int)
     parser.add_argument("--output", type=Path)
     arguments = parser.parse_args()
-    if not 1 <= arguments.max_examples <= 10_000:
-        parser.error("max-examples must be between 1 and 10000")
+    if arguments.max_examples is not None and not 1 <= arguments.max_examples <= 100_000:
+        parser.error("max-examples must be between 1 and 100000")
+    plural_evaluation = (
+        arguments.validation_database is not None or arguments.test_database is not None
+    )
+    if (arguments.validation_database is None) != (arguments.test_database is None):
+        parser.error("validation-database and test-database must be supplied together")
+    if plural_evaluation != (arguments.heldout_suite_manifest is not None):
+        parser.error(
+            "both evaluation databases and heldout-suite-manifest must be supplied together"
+        )
+    if plural_evaluation and arguments.split == "train":
+        parser.error("a frozen two-database evaluation supports validation or test only")
+    if plural_evaluation and arguments.checkpoint_database is None:
+        parser.error("two-database evaluation requires checkpoint-database")
     if arguments.device == "cuda" and not torch.cuda.is_available():
         parser.error("CUDA was requested but is unavailable")
     if (
@@ -122,14 +148,64 @@ def main() -> int:
         parser.error("CUDA bfloat16 was requested but is unsupported")
 
     binding = NativeTokenizerBinding.load()
-    task_audit = audit_task_database(binding, arguments.database)
+    heldout_suite: GroundedHeldoutSuite | None = None
+    evaluation_database_identities_sha256: dict[str, str] | None = None
+    if plural_evaluation:
+        if (
+            arguments.validation_database is None
+            or arguments.test_database is None
+            or arguments.heldout_suite_manifest is None
+        ):
+            raise RuntimeError("validated frozen evaluation arguments are incomplete")
+        evaluation_paths = {
+            "validation": arguments.validation_database,
+            "test": arguments.test_database,
+        }
+        evaluation_audits = {
+            split: audit_task_database(binding, path)
+            for split, path in evaluation_paths.items()
+        }
+        evaluation_database_identities_sha256 = {
+            split: audit.database_identity_sha256
+            for split, audit in evaluation_audits.items()
+        }
+        heldout_suite = verify_heldout_suite_manifest(
+            load_heldout_suite_manifest(arguments.heldout_suite_manifest),
+            task_database_identities_sha256=(
+                evaluation_database_identities_sha256
+            ),
+        )
+        evaluation_database = evaluation_paths[arguments.split]
+        task_audit = evaluation_audits[arguments.split]
+    else:
+        evaluation_database = arguments.database
+        task_audit = audit_task_database(binding, evaluation_database)
     checkpoint_task_audit = (
         audit_task_database(binding, arguments.checkpoint_database)
         if arguments.checkpoint_database is not None
         else task_audit
     )
-    dataset = ResumableTaskDataset(binding, arguments.database)
-    split_example_count = dataset.example_count(split=arguments.split)
+    dataset = ResumableTaskDataset(binding, evaluation_database)
+    if heldout_suite is None:
+        split_example_count = dataset.example_count(split=arguments.split)
+        evaluation_limit = arguments.max_examples or 100
+    else:
+        split_example_count = sum(
+            len(example_ids)
+            for example_ids in heldout_suite.evaluation_example_ids[
+                arguments.split
+            ].values()
+        )
+        evaluation_limit = arguments.max_examples or split_example_count
+
+    def selected_examples() -> Iterator[TaskExample]:
+        if heldout_suite is None:
+            return dataset.iter_examples(split=arguments.split)
+        return iter_frozen_evaluation_examples(
+            dataset,
+            heldout_suite,
+            split=arguments.split,
+        )
     torch.manual_seed(7)
     if arguments.full_model:
         config = bound_native_65k_config(binding)
@@ -147,9 +223,9 @@ def main() -> int:
     if arguments.baseline_evaluation is None:
         baseline = evaluate_model(
             model,
-            dataset.iter_examples(split=arguments.split),
+            selected_examples(),
             device=device,
-            max_examples=arguments.max_examples,
+            max_examples=evaluation_limit,
         )
         baseline_source = "deterministic_random_initialization"
     else:
@@ -163,11 +239,22 @@ def main() -> int:
         ),
         expected_binding_sha256=binding.binding_sha256,
         expected_model_fingerprint=config.fingerprint(),
+        expected_evaluation_task_database_identities_sha256=(
+            evaluation_database_identities_sha256
+        ),
+        expected_heldout_suite_manifest_sha256=(
+            heldout_suite.manifest_sha256
+            if heldout_suite is not None
+            else None
+        ),
     )
-    if (
-        state.evaluation_task_database_identity_sha256 is not None
-        and state.evaluation_task_database_identity_sha256
-        != task_audit.database_identity_sha256
+    checkpoint_evaluation_identity = (
+        state.evaluation_task_database_identities_sha256[arguments.split]
+        if state.evaluation_task_database_identities_sha256 is not None
+        else state.evaluation_task_database_identity_sha256
+    )
+    if checkpoint_evaluation_identity is not None and (
+        checkpoint_evaluation_identity != task_audit.database_identity_sha256
     ):
         raise ValueError("checkpoint frozen evaluation database mismatch")
     if baseline_path is not None:
@@ -186,9 +273,9 @@ def main() -> int:
         baseline_evaluation_sha256 = baseline.artifact_sha256
     result = evaluate_model(
         model,
-        dataset.iter_examples(split=arguments.split),
+        selected_examples(),
         device=device,
-        max_examples=arguments.max_examples,
+        max_examples=evaluation_limit,
     )
     relative_improvement = (baseline.mean_loss - result.mean_loss) / baseline.mean_loss
     language_regressions = sorted(
@@ -258,7 +345,7 @@ def main() -> int:
             checkpoint_task_audit.database_identity_sha256
         ),
         "checkpoint_evaluation_task_database_identity_sha256": (
-            state.evaluation_task_database_identity_sha256
+            checkpoint_evaluation_identity
         ),
         "checkpoint_heldout_suite_manifest_sha256": (
             state.heldout_suite_manifest_sha256

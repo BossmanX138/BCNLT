@@ -15,6 +15,80 @@ from bosscrafts_model.model import EngineeringModel, next_token_loss
 
 
 class TrainingCheckpointTests(unittest.TestCase):
+    def test_checkpoint_binds_both_frozen_evaluation_databases(self):
+        module = importlib.import_module("bosscrafts_model.training_checkpoint")
+        config = ModelConfig.tiny()
+        model = EngineeringModel(config)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
+        evaluation_database_identities = {
+            "validation": "e" * 64,
+            "test": "f" * 64,
+        }
+        heldout_suite_identity = "9" * 64
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "checkpoint.pt"
+            module.save_training_checkpoint(
+                path,
+                model,
+                optimizer,
+                step=1,
+                examples_seen=1,
+                epoch_index=0,
+                target_epochs=1,
+                last_example_id="c" * 64,
+                cursor_after_example_id="c" * 64,
+                task_database_identity_sha256="a" * 64,
+                evaluation_task_database_identities_sha256=(
+                    evaluation_database_identities
+                ),
+                heldout_suite_manifest_sha256=heldout_suite_identity,
+                binding_sha256="b" * 64,
+                model_fingerprint=config.fingerprint(),
+                training_plan_sha256="d" * 64,
+            )
+            state = module.load_training_checkpoint(
+                path,
+                model,
+                optimizer,
+                expected_task_database_identity_sha256="a" * 64,
+                expected_evaluation_task_database_identities_sha256=(
+                    evaluation_database_identities
+                ),
+                expected_heldout_suite_manifest_sha256=heldout_suite_identity,
+                expected_binding_sha256="b" * 64,
+                expected_model_fingerprint=config.fingerprint(),
+                expected_target_epochs=1,
+                expected_training_plan_sha256="d" * 64,
+            )
+            payload = torch.load(path, map_location="cpu", weights_only=True)
+            self.assertEqual(
+                payload["schema_version"],
+                "bosscrafts-training-checkpoint-v6",
+            )
+            self.assertEqual(
+                state.evaluation_task_database_identities_sha256,
+                evaluation_database_identities,
+            )
+
+            before = model.embedding.weight.detach().clone()
+            substituted = dict(evaluation_database_identities)
+            substituted["validation"] = "0" * 64
+            with self.assertRaisesRegex(ValueError, "evaluation.*lineage"):
+                module.load_training_checkpoint(
+                    path,
+                    model,
+                    optimizer,
+                    expected_task_database_identity_sha256="a" * 64,
+                    expected_evaluation_task_database_identities_sha256=substituted,
+                    expected_heldout_suite_manifest_sha256=heldout_suite_identity,
+                    expected_binding_sha256="b" * 64,
+                    expected_model_fingerprint=config.fingerprint(),
+                    expected_target_epochs=1,
+                    expected_training_plan_sha256="d" * 64,
+                )
+            self.assertTrue(torch.equal(model.embedding.weight, before))
+
     def test_checkpoint_binds_frozen_evaluation_database_and_heldout_suite(self):
         module = importlib.import_module("bosscrafts_model.training_checkpoint")
         config = ModelConfig.tiny()
