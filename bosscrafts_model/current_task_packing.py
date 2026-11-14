@@ -15,6 +15,10 @@ from .tokenizer import NativeTokenizerBinding
 EXAMPLE_SCHEMA = "bosscrafts-current-task-example-v2"
 PACKED_MANIFEST_SCHEMA = "bosscrafts-current-task-manifest-v2"
 FAMILIES = ("code_to_semantic", "semantic_continuation", "semantic_to_code")
+MAX_PILOT_ADMISSION_BYTES = 128 * 1024 * 1024
+MAX_PILOT_DOCUMENTS = 64
+MAX_PILOT_TASKS = 100_000
+MAX_PILOT_TASK_JSONL_BYTES = 256 * 1024 * 1024
 
 
 def _canonical_json(value: object) -> str:
@@ -69,6 +73,15 @@ class CurrentCorpusTaskPacker:
         claimed_manifest_hash = manifest.pop("manifest_sha256", None)
         if claimed_manifest_hash != _sha256_text(_canonical_json(manifest)):
             raise ValueError("admission manifest SHA-256 mismatch")
+        try:
+            records_size = records_path.stat().st_size
+        except OSError as error:
+            raise ValueError("admission records cannot be read") from error
+        if records_size > MAX_PILOT_ADMISSION_BYTES:
+            raise ValueError(
+                "non-resumable task packer exceeds its admission byte limit; "
+                "use ResumableCurrentTaskPacking for full corpora"
+            )
         records_text = records_path.read_text(encoding="utf-8")
         if _sha256_text(records_text) != manifest.get("records_sha256"):
             raise ValueError("admission records SHA-256 mismatch")
@@ -96,6 +109,11 @@ class CurrentCorpusTaskPacker:
             ):
                 raise ValueError("admission record tokenizer lineage mismatch")
             rows.append(row)
+            if len(rows) > MAX_PILOT_DOCUMENTS:
+                raise ValueError(
+                    "non-resumable task packer exceeds its document limit; "
+                    "use ResumableCurrentTaskPacking for full corpora"
+                )
         if len(rows) != manifest.get("admitted_count"):
             raise ValueError("admission record count mismatch")
         return {**manifest, "manifest_sha256": claimed_manifest_hash}, rows
@@ -327,6 +345,11 @@ class CurrentCorpusTaskPacker:
             row_examples, row_rejections = self.pack_row(row)
             examples.extend(row_examples)
             rejections.extend(row_rejections)
+            if len(examples) + len(rejections) > MAX_PILOT_TASKS:
+                raise ValueError(
+                    "non-resumable task packer exceeds its task limit; "
+                    "use ResumableCurrentTaskPacking for full corpora"
+                )
 
         examples.sort(key=lambda item: str(item["example_id"]))
         rejections.sort(
@@ -337,8 +360,18 @@ class CurrentCorpusTaskPacker:
                 str(item["reason_code"]),
             )
         )
-        examples_text = "".join(f"{_canonical_json(item)}\n" for item in examples)
-        rejections_text = "".join(f"{_canonical_json(item)}\n" for item in rejections)
+        example_lines = [f"{_canonical_json(item)}\n" for item in examples]
+        rejection_lines = [f"{_canonical_json(item)}\n" for item in rejections]
+        encoded_bytes = sum(
+            len(line.encode("utf-8")) for line in (*example_lines, *rejection_lines)
+        )
+        if encoded_bytes > MAX_PILOT_TASK_JSONL_BYTES:
+            raise ValueError(
+                "non-resumable task packer exceeds its output byte limit; "
+                "use ResumableCurrentTaskPacking for full corpora"
+            )
+        examples_text = "".join(example_lines)
+        rejections_text = "".join(rejection_lines)
         examples_sha256 = _sha256_text(examples_text)
         rejections_sha256 = _sha256_text(rejections_text)
         family_counts = {

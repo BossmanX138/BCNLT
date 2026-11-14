@@ -1,4 +1,5 @@
 """Record-independent task fragments for compact semantic wire V2."""
+
 from __future__ import annotations
 
 import hashlib
@@ -36,7 +37,11 @@ class CompactCurrentCorpusTaskPacker(CurrentCorpusTaskPacker):
         if type(payload) is not dict:
             raise ValueError("canonical task record must be an object")
         span = payload.get("span")
-        if type(span) is not list or len(span) != 4:
+        if (
+            type(span) is not list
+            or len(span) != 4
+            or any(type(value) is not int or value < 0 for value in span)
+        ):
             raise ValueError("canonical task record span is invalid")
         return BCNLTCanonicalRecord(
             language=language,
@@ -46,7 +51,7 @@ class CompactCurrentCorpusTaskPacker(CurrentCorpusTaskPacker):
             surface=str(payload.get("surface")),
             confidence_band=str(payload.get("confidence_band")),
             uncertainty_band=str(payload.get("uncertainty_band")),
-            span=tuple(span),  # type: ignore[arg-type]
+            span=(span[0], span[1], span[2], span[3]),
         )
 
     def _semantic_record_fragments(self, row: dict[str, object]) -> list[list[int]]:
@@ -60,7 +65,9 @@ class CompactCurrentCorpusTaskPacker(CurrentCorpusTaskPacker):
             raise ValueError("compact task canonical record count mismatch")
         records = tuple(self._record(language, line) for line in lines)
         fragments: list[list[int]] = []
-        for fragment_values in self._compact_codec.encode_independent_fragments(records):
+        for fragment_values in self._compact_codec.encode_independent_fragments(
+            records
+        ):
             fragment = list(fragment_values)
             if (
                 not fragment

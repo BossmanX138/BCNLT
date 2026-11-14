@@ -1,4 +1,5 @@
 """Content-addressed, leakage-resistant source freeze for V10 training admission."""
+
 from __future__ import annotations
 
 import hashlib
@@ -7,13 +8,13 @@ import os
 import sqlite3
 import tempfile
 from collections import Counter, defaultdict
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, ClassVar
 
-from .current_corpus import APPROVED_LICENSES, SQLiteSourceCatalog
+from .current_corpus import APPROVED_LICENSES, SourceCandidate, SQLiteSourceCatalog
 from .jsonl import split_jsonl_records
 
 FREEZE_MANIFEST_SCHEMA = "bosscrafts-training-source-freeze-v1"
@@ -143,7 +144,10 @@ class VerifiedTrainingSourceFreeze:
         ):
             raise ValueError("training source freeze manifest lineage mismatch")
         catalog_sha256 = manifest.get("source_catalog_sha256")
-        if not _is_sha256(catalog_sha256) or _sha256_file(self.catalog_path) != catalog_sha256:
+        if (
+            not _is_sha256(catalog_sha256)
+            or _sha256_file(self.catalog_path) != catalog_sha256
+        ):
             raise ValueError("frozen source catalog SHA-256 mismatch")
 
         documents_path = self.freeze_root / str(manifest.get("documents_file"))
@@ -187,7 +191,8 @@ class VerifiedTrainingSourceFreeze:
         connection.execute("PRAGMA query_only=ON")
         try:
             catalog_ids = {
-                str(row[0]) for row in connection.execute("SELECT document_id FROM documents")
+                str(row[0])
+                for row in connection.execute("SELECT document_id FROM documents")
             }
         except sqlite3.Error as exc:
             raise ValueError("frozen source catalog database is invalid") from exc
@@ -199,9 +204,7 @@ class VerifiedTrainingSourceFreeze:
         self._manifest = manifest
         self._records = rows
         self._training_ids = {
-            document_id
-            for document_id, row in rows.items()
-            if row["split"] == "train"
+            document_id for document_id, row in rows.items() if row["split"] == "train"
         }
 
     @property
@@ -220,7 +223,7 @@ class VerifiedTrainingSourceFreeze:
     def training_document_count(self) -> int:
         return int(self._manifest["training_document_count"])
 
-    def iter_training_candidates(self):
+    def iter_training_candidates(self) -> Iterator[SourceCandidate]:
         """Yield source candidates only after the complete inventory is verified."""
         seen: set[str] = set()
         catalog = SQLiteSourceCatalog(
@@ -289,7 +292,9 @@ class TrainingCorpusFreezer:
         if _sha256_file(catalog) != expected_catalog_sha256:
             raise ValueError("source catalog SHA-256 mismatch")
         if output.exists() and any(output.iterdir()):
-            raise ValueError("training source freeze output already exists and is not empty")
+            raise ValueError(
+                "training source freeze output already exists and is not empty"
+            )
 
         rows = self._load_catalog(catalog)
         by_id = {str(row["document_id"]): row for row in rows}
@@ -316,7 +321,11 @@ class TrainingCorpusFreezer:
 
         for row in sorted(rows, key=lambda item: str(item["document_id"])):
             group_kind, group = self._split_group(row)
-            split = "reserved_heldout" if group in heldout_groups else assign_source_split(group)
+            split = (
+                "reserved_heldout"
+                if group in heldout_groups
+                else assign_source_split(group)
+            )
             document_id = str(row["document_id"])
             language = str(row["canonical_language"])
             source_name = str(row["source_name"])
@@ -413,9 +422,7 @@ class TrainingCorpusFreezer:
         manifest_sha256 = _sha256_bytes(_canonical(unsigned).encode("utf-8"))
         manifest = {**unsigned, "manifest_sha256": manifest_sha256}
         _atomic_write(output / "documents.jsonl", documents_text.encode("utf-8"))
-        _atomic_write(
-            output / "manifest.json", f"{_canonical(manifest)}\n".encode()
-        )
+        _atomic_write(output / "manifest.json", f"{_canonical(manifest)}\n".encode())
         return TrainingCorpusFreezeResult(
             output_root=output,
             source_document_count=len(records),
@@ -427,7 +434,9 @@ class TrainingCorpusFreezer:
         )
 
     def _load_catalog(self, catalog: Path) -> list[dict[str, Any]]:
-        connection = sqlite3.connect(f"{catalog.as_uri()}?mode=ro", uri=True, timeout=30)
+        connection = sqlite3.connect(
+            f"{catalog.as_uri()}?mode=ro", uri=True, timeout=30
+        )
         connection.execute("PRAGMA query_only=ON")
         try:
             if str(connection.execute("PRAGMA integrity_check").fetchone()[0]) != "ok":
@@ -516,15 +525,19 @@ class TrainingCorpusFreezer:
         count = 0
         for file_key, hash_key, expected_count, hash_field in (
             ("records_file", "records_sha256", "admitted_count", "source_sha256"),
-            ("rejections_file", "rejections_sha256", "rejected_count", "content_sha256"),
+            (
+                "rejections_file",
+                "rejections_sha256",
+                "rejected_count",
+                "content_sha256",
+            ),
         ):
             path = root / str(manifest[file_key])
             data = path.read_bytes()
             if _sha256_bytes(data) != manifest[hash_key]:
                 raise ValueError("heldout admission payload SHA-256 mismatch")
             rows = [
-                json.loads(line)
-                for line in split_jsonl_records(data.decode("utf-8"))
+                json.loads(line) for line in split_jsonl_records(data.decode("utf-8"))
             ]
             if len(rows) != manifest[expected_count]:
                 raise ValueError("heldout admission payload count mismatch")
@@ -553,6 +566,8 @@ class TrainingCorpusFreezer:
             report = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise ValueError("semantic audit qualification is invalid") from exc
+        if type(report) is not dict:
+            raise ValueError("semantic audit qualification is invalid")
         unsigned = dict(report)
         claimed = unsigned.pop("report_sha256", None)
         metrics = report.get("defect_metrics")

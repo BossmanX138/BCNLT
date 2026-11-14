@@ -4,14 +4,13 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-from dataclasses import dataclass
-from pathlib import Path
 import subprocess
 import threading
 import time
 import uuid
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, TypedDict
-
 
 PROTOCOL = "bosscrafts-bcnlt-sandbox-v1"
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -234,15 +233,23 @@ class DockerScientificSandbox:
             )
         finally:
             if container_id is not None:
-                removed = subprocess.run(
-                    [self._docker, "rm", "--force", container_id],
-                    capture_output=True,
-                    timeout=10,
-                    check=False,
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                )
-                if removed.returncode != 0:
-                    cleanup_error = removed.stderr.decode("utf-8", errors="replace").strip()
+                try:
+                    removed = subprocess.run(
+                        [self._docker, "rm", "--force", container_id],
+                        capture_output=True,
+                        timeout=10,
+                        check=False,
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    )
+                except subprocess.TimeoutExpired:
+                    cleanup_error = "docker rm timed out"
+                except OSError as exc:
+                    cleanup_error = f"docker rm could not start: {exc}"
+                else:
+                    if removed.returncode != 0:
+                        cleanup_error = removed.stderr.decode(
+                            "utf-8", errors="replace"
+                        ).strip()
             if cleanup_error is not None:
                 raise SandboxExecutionError(
                     "sandbox container cleanup failed" +

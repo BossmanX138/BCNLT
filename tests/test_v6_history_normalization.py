@@ -1,20 +1,19 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import subprocess
+import sys
 import unicodedata
+from pathlib import Path
 
 import pytest
-
 from runtime_import import select_bcnlt_runtime
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = PROJECT_ROOT / "vendor" / "bcnlt_runtime_v6_candidate"
+RUNTIME = PROJECT_ROOT / "vendor" / "bcnlt_runtime_v10_learning_candidate"
 SIDECAR = RUNTIME / "bcnlt_source_sidecar.py"
-PYTHON_313 = Path(r"C:\ProgramData\anaconda3\python.exe")
-PROTOCOL = "bosscrafts-bcnlt-source-sidecar-v1"
+PYTHON_313 = Path(sys.executable).resolve()
+PROTOCOL = "bosscrafts-bcnlt-source-sidecar-v2"
 select_bcnlt_runtime(RUNTIME / "source")
 
 from bcnlt.adapters.python import PythonAdapter  # noqa: E402
@@ -48,6 +47,8 @@ def test_history_is_normalized_before_truncation(language: str, source: str) -> 
         "language": language,
         "path": f"history-normalization.{language}",
         "dialect": None,
+        "learning_mode": "ephemeral",
+        "learned_memory_root": None,
     }
     completed = subprocess.run(
         [str(PYTHON_313), "-I", str(SIDECAR)],

@@ -1,0 +1,7 @@
+{
+  "base_model_sha256": "32a1cafb2522be4550c45ef83c52b8034c4a45a6e7aed2643f500cccef3d035c",
+  "corpus_manifest_sha256": "3a8853e6ac9b8dd37a64fcce78242811dc48c70b45485ebb057101472c353c8f",
+  "engine": "unsloth",
+  "tokenizer_manifest_sha256": "ed2fda54ea4ccd004b535186dfa5177fb407b6b32d20b6334dcf50ce3bae8310",
+  "training_config_sha256": "3052ab98cd0a1b88b0f5fb97fa06bd8d5898a5fbd73d28fcc00107c2b40d4c7d"
+}

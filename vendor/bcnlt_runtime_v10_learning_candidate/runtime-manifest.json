@@ -6,14 +6,15 @@
     "source_aggregate_sha256": "3f22cc7526e5f185170c71eeb5e240c44cd40f35d62c6d33bbe0dd9e9f6e4edd"
   },
   "source": {
-    "origin": "preserved verified V6 candidate plus persistent-learning transport, sandbox-attested scientific promotion, immutable Extended Core version control, and held-out uncertainty calibration",
+    "origin": "preserved verified V6 candidate plus persistent-learning transport, sandbox-attested scientific promotion, immutable Extended Core version control, held-out uncertainty calibration, and the verified model-runtime semantic-integrity repair",
     "git_head": "27521f4bce5426712edc5ed92adca961dfa9ae28",
     "working_tree_was_dirty": true,
-    "copy_policy": "preserved verified V6 runtime copy; added an explicit immutable-mode learning boundary without changing Common Core or tokenizer IDs",
-    "contained_patch": "The Tree-sitter engine accepts a read-only learned-memory policy; the sidecar has explicit ephemeral, observe and read-only modes; learned state remains per-language append-only Wildcard Memory and validated entries remain outside immutable Common Core in Extended Core; scientific promotion requires independent sandbox-attested executions with negative controls; Extended Core versions use immutable content-addressed artifacts, separate validation receipts, atomic activation, append-only activation events, and rollback; uncertainty calibration uses disjoint calibration and held-out identities, Brier and ECE gates, per-language coverage, and integrity-pinned promoted artifacts",
+    "copy_policy": "preserved verified V6 runtime copy; added an explicit immutable-mode learning boundary without changing Common Core or tokenizer IDs; selectively ported and regression-tested the model-runtime semantic-integrity repair without modifying the upstream BCNLM snapshot",
+    "contained_patch": "The Tree-sitter engine accepts a read-only learned-memory policy; the sidecar has explicit ephemeral, observe and read-only modes; learned state remains per-language append-only Wildcard Memory and validated entries remain outside immutable Common Core in Extended Core; scientific promotion requires independent sandbox-attested executions with negative controls; Extended Core versions use immutable content-addressed artifacts, separate validation receipts, atomic activation, append-only activation events, and rollback; uncertainty calibration uses disjoint calibration and held-out identities, Brier and ECE gates, per-language coverage, and integrity-pinned promoted artifacts. The semantic-integrity repair excludes anonymous grammar tokens from semantic rules, registers JavaScript and TypeScript function expressions, emits Common Core returns for arrow and Rust implicit returns, prevents unresolved unknown syntax from becoming validated knowledge, removes the prototype zero-entropy stub, and fails closed on invalid injected model entropy. The local integrity overlay serializes and reloads wildcard-memory mutations across threads and processes, serializes Extended Core activation and rollback so concurrent writers cannot lose evidence or duplicate activation-event sequences, and restricts parser-provenance downloads and every redirect to pinned HTTPS release hosts before accepting hash-pinned content.",
+    "identity_policy": "python-source-bytes-crlf-cr-to-lf-v1",
     "file_count": 79,
-    "bytes": 705094,
-    "aggregate_sha256": "8f7f820ba20206a61ddc3509dd8c2a7564954bb3197de118fdc373a2fffc7c66"
+    "bytes": 698056,
+    "aggregate_sha256": "c5623e97f3f1e1e884e1d54a316d174292fbcbf61da3ddfdbf3b432418e0450a"
   },
   "runtime": {
     "python_requirement": "CPython 3.13.x Windows x86_64",
@@ -27,7 +28,9 @@
     "grammar_bytes": 34186752,
     "grammar_aggregate_sha256": "19fc42827e8ab3b37282c0666caa1ddd8abcd3708298fb1665c10df440c3d090",
     "sidecar_bytes": 9541,
-    "sidecar_sha256": "c86f40828c0303adad2cbf05eb25b5c358ff88ffc1bb9ebcbd39d9de75b158cc"
+    "sidecar_sha256": "c86f40828c0303adad2cbf05eb25b5c358ff88ffc1bb9ebcbd39d9de75b158cc",
+    "python_source_identity_policy": "python-source-bytes-crlf-cr-to-lf-v1",
+    "parser_runtime_identity_sha256": "98d8a4f36757491e6b96e533732180fdb2bddb693756289f0a21337bb4bfa80a"
   },
   "execution_policy": {
     "downloads": false,

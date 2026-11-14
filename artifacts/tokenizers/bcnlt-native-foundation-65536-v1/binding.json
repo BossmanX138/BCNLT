@@ -1,0 +1,52 @@
+{
+  "files": {
+    "model-config-65536.json": {
+      "bytes": 482,
+      "sha256": "02e74e6a9d77e9f97afe61a4ecf4a1051fd16b817cefca5c67094c93d215c578"
+    },
+    "source-manifest.json": {
+      "bytes": 3202,
+      "sha256": "e47a51c182ee9ee4b7662f6cf0b3709cad1ab401f0ce7f267c40ad2df8ba0c83"
+    },
+    "structural-token-ids.json": {
+      "bytes": 2993,
+      "sha256": "05b7d2a3d4f552d7fadd20149d14f7359636cade0756eda9ed1f6170bdfa910e"
+    },
+    "structural-tokens.json": {
+      "bytes": 2478,
+      "sha256": "1745a81d29dbe617bd7c2c87f83567a1aa056953a5ff62e7e5946ebb054f64a0"
+    },
+    "tokenizer.json": {
+      "bytes": 2137239,
+      "sha256": "e1930449f3efe99bbb3f63730f75f71788d4ff21928bcae4d3ee2a520d30d407"
+    }
+  },
+  "lineage": "bcnlt-native-foundation-65536-v1",
+  "maximum_token_id": 65535,
+  "minimum_token_id": 0,
+  "runtime": {
+    "package": "tokenizers",
+    "required_major_minor": "0.23"
+  },
+  "schema_version": "bosscrafts-native-tokenizer-binding-v1",
+  "semantic_boundary": {
+    "claim": "serialized semantic records round-trip as raw text only",
+    "mode": "raw_byte_bpe",
+    "semantic_record_parser_integrated": false
+  },
+  "source_copy": {
+    "copy_policy": "verified_copy_preserve_source",
+    "source_tokenizer_sha256": "e1930449f3efe99bbb3f63730f75f71788d4ff21928bcae4d3ee2a520d30d407"
+  },
+  "structural_tokens": {
+    "atomic_required": true,
+    "contiguous": true,
+    "count": 73,
+    "maximum_id": 76,
+    "minimum_id": 4
+  },
+  "token_id_policy": "frozen_exact_no_resize_no_renumber",
+  "tokenizer_json_version": "1.0",
+  "tokenizer_model_type": "BPE",
+  "vocabulary_size": 65536
+}

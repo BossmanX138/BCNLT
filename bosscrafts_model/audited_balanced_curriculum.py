@@ -1,4 +1,5 @@
 """Bounded, split-exact curriculum selected only from audited eligible sources."""
+
 from __future__ import annotations
 
 import hashlib
@@ -256,7 +257,8 @@ def _load_eligibility(
         type(manifest) is not dict
         or raw_manifest != f"{_canonical_json(manifest)}\n"
         or manifest.get("schema_version") != ELIGIBILITY_MANIFEST_SCHEMA
-        or claimed != hashlib.sha256(_canonical_json(unsigned).encode("utf-8")).hexdigest()
+        or claimed
+        != hashlib.sha256(_canonical_json(unsigned).encode("utf-8")).hexdigest()
         or claimed != expected_manifest_sha256
         or manifest.get("eligibility_complete") is not True
         or manifest.get("training_ready") is not False
@@ -325,7 +327,10 @@ def build_audited_balanced_curriculum(
     if (
         type(quotas) is not dict
         or set(quotas) != set(SPLITS)
-        or any(type(value) is not int or not 8 <= value <= 100_000 for value in quotas.values())
+        or any(
+            type(value) is not int or not 8 <= value <= 100_000
+            for value in quotas.values()
+        )
     ):
         raise ValueError("curriculum quotas must define train, validation and test")
     if type(oversample_factor) is not int or not 2 <= oversample_factor <= 16:
@@ -406,7 +411,9 @@ def build_audited_balanced_curriculum(
     )
     pool_heaps: dict[
         tuple[str, str, str],
-        tuple[list[list[tuple[int, str, _Candidate]]], list[tuple[int, str, _Candidate]]],
+        tuple[
+            list[list[tuple[int, str, _Candidate]]], list[tuple[int, str, _Candidate]]
+        ],
     ] = {}
     processed_documents = 0
     prompt_scratch = destination.with_name(f".{destination.name}.prompt-claims.tmp")
@@ -420,67 +427,85 @@ def build_audited_balanced_curriculum(
                 try:
                     for language in languages:
                         rows = admission.execute(
-                        """SELECT document_id,content_sha256,relative_path,
+                            """SELECT document_id,content_sha256,relative_path,
                                   semantic_spec_sha256,parser_runtime_identity_sha256,
                                   canonical_sha256,canonical_jsonl_zlib,semantic_ids_zlib,
                                   semantic_record_count,semantic_token_count
                            FROM documents WHERE status='admitted' AND language=?
                            ORDER BY document_id""",
-                        (language,),
-                    )
+                            (language,),
+                        )
                         for admission_row in rows:
                             document_id = str(admission_row[0])
                             if document_id not in eligible_by_split[split]:
                                 continue
                             seen_eligible.add(document_id)
                             source_row = catalog.execute(
-                            """SELECT canonical_language,content,relative_path,content_sha256
+                                """SELECT canonical_language,content,relative_path,content_sha256
                                FROM documents WHERE document_id=?""",
-                            (document_id,),
-                        ).fetchone()
+                                (document_id,),
+                            ).fetchone()
                             if source_row is None:
-                                raise ValueError("eligible document is absent from source catalog")
-                            source_language, source, relative_path, source_sha = map(str, source_row)
+                                raise ValueError(
+                                    "eligible document is absent from source catalog"
+                                )
+                            source_language, source, relative_path, source_sha = map(
+                                str, source_row
+                            )
                             if (
-                            source_language != language
-                            or relative_path != admission_row[2]
-                            or source_sha != admission_row[1]
-                            or hashlib.sha256(source.encode("utf-8")).hexdigest() != source_sha
-                            or admission_row[3] != CURRENT_RUNTIME_SPEC_SHA256[language]
-                            or admission_row[4] != PARSER_RUNTIME_IDENTITY_SHA256
+                                source_language != language
+                                or relative_path != admission_row[2]
+                                or source_sha != admission_row[1]
+                                or hashlib.sha256(source.encode("utf-8")).hexdigest()
+                                != source_sha
+                                or admission_row[3]
+                                != CURRENT_RUNTIME_SPEC_SHA256[language]
+                                or admission_row[4] != PARSER_RUNTIME_IDENTITY_SHA256
                             ):
                                 raise ValueError("eligible source lineage mismatch")
                             canonical_jsonl = decompress_bounded(
-                            admission_row[6], maximum_output_bytes=MAX_CANONICAL_OUTPUT_BYTES
-                        ).decode("utf-8")
-                            if hashlib.sha256(canonical_jsonl.encode("utf-8")).hexdigest() != admission_row[5]:
-                                raise ValueError("eligible canonical payload SHA-256 mismatch")
+                                admission_row[6],
+                                maximum_output_bytes=MAX_CANONICAL_OUTPUT_BYTES,
+                            ).decode("utf-8")
+                            if (
+                                hashlib.sha256(
+                                    canonical_jsonl.encode("utf-8")
+                                ).hexdigest()
+                                != admission_row[5]
+                            ):
+                                raise ValueError(
+                                    "eligible canonical payload SHA-256 mismatch"
+                                )
                             expected_semantic_bytes = int(admission_row[9]) * 2
                             semantic_ids = _decode_u16(
-                            decompress_bounded(
-                                admission_row[7],
-                                maximum_output_bytes=expected_semantic_bytes,
+                                decompress_bounded(
+                                    admission_row[7],
+                                    maximum_output_bytes=expected_semantic_bytes,
+                                )
                             )
-                        )
                             if len(semantic_ids) != int(admission_row[9]):
-                                raise ValueError("eligible semantic token count mismatch")
+                                raise ValueError(
+                                    "eligible semantic token count mismatch"
+                                )
                             examples, _ = packer.pack_row(
-                            {
-                                "document_id": document_id,
-                                "language": language,
-                                "relative_path": relative_path,
-                                "source": source,
-                                "source_sha256": source_sha,
-                                "binding_sha256": binding.binding_sha256,
-                                "tokenizer_sha256": binding.tokenizer_sha256,
-                                "semantic_spec_sha256": str(admission_row[3]),
-                                "parser_runtime_identity_sha256": str(admission_row[4]),
-                                "canonical_sha256": str(admission_row[5]),
-                                "canonical_jsonl": canonical_jsonl,
-                                "semantic_record_count": int(admission_row[8]),
-                                "semantic_token_ids": semantic_ids,
-                            }
-                        )
+                                {
+                                    "document_id": document_id,
+                                    "language": language,
+                                    "relative_path": relative_path,
+                                    "source": source,
+                                    "source_sha256": source_sha,
+                                    "binding_sha256": binding.binding_sha256,
+                                    "tokenizer_sha256": binding.tokenizer_sha256,
+                                    "semantic_spec_sha256": str(admission_row[3]),
+                                    "parser_runtime_identity_sha256": str(
+                                        admission_row[4]
+                                    ),
+                                    "canonical_sha256": str(admission_row[5]),
+                                    "canonical_jsonl": canonical_jsonl,
+                                    "semantic_record_count": int(admission_row[8]),
+                                    "semantic_token_ids": semantic_ids,
+                                }
+                            )
                             processed_documents += 1
                             for item in examples:
                                 family = item.get("family")
@@ -491,7 +516,9 @@ def build_audited_balanced_curriculum(
                                 if family not in FAMILIES:
                                     raise ValueError("packed task family is invalid")
                                 if type(raw_ids_value) is not list:
-                                    raise ValueError("packed task input IDs are invalid")
+                                    raise ValueError(
+                                        "packed task input IDs are invalid"
+                                    )
                                 input_ids = cast(list[int], raw_ids_value)
                                 if (
                                     type(loss_start_value) is not int
@@ -500,56 +527,66 @@ def build_audited_balanced_curriculum(
                                     or record_index_value < 0
                                     or not _is_sha256(example_id_value)
                                 ):
-                                    raise ValueError("packed task identity or loss boundary is invalid")
+                                    raise ValueError(
+                                        "packed task identity or loss boundary is invalid"
+                                    )
                                 cell = (split, language, family)
                                 raw_ids = _encode_u16(input_ids)
                                 loss_start = loss_start_value
                                 target_tokens = len(input_ids) - loss_start
                                 candidate = _Candidate(
-                                example_id=cast(str, example_id_value),
-                                document_id=document_id,
-                                language=language,
-                                family=family,
-                                record_index=record_index_value,
-                                split=split,
-                                input_ids_zlib=zlib.compress(raw_ids, 6),
-                                token_count=len(input_ids),
-                                loss_start_index=loss_start,
-                                semantic_spec_sha256=str(item["semantic_spec_sha256"]),
-                                parser_runtime_identity_sha256=str(
-                                    item["parser_runtime_identity_sha256"]
-                                ),
-                                source_sha256=source_sha,
-                                prompt_key=(
-                                    family,
-                                    hashlib.sha256(raw_ids[: loss_start * 2]).hexdigest(),
-                                    loss_start,
-                                ),
-                                target_key=(
-                                    hashlib.sha256(raw_ids[loss_start * 2 :]).hexdigest(),
-                                    target_tokens,
-                                ),
-                                target_tokens=target_tokens,
+                                    example_id=cast(str, example_id_value),
+                                    document_id=document_id,
+                                    language=language,
+                                    family=family,
+                                    record_index=record_index_value,
+                                    split=split,
+                                    input_ids_zlib=zlib.compress(raw_ids, 6),
+                                    token_count=len(input_ids),
+                                    loss_start_index=loss_start,
+                                    semantic_spec_sha256=str(
+                                        item["semantic_spec_sha256"]
+                                    ),
+                                    parser_runtime_identity_sha256=str(
+                                        item["parser_runtime_identity_sha256"]
+                                    ),
+                                    source_sha256=source_sha,
+                                    prompt_key=(
+                                        family,
+                                        hashlib.sha256(
+                                            raw_ids[: loss_start * 2]
+                                        ).hexdigest(),
+                                        loss_start,
+                                    ),
+                                    target_key=(
+                                        hashlib.sha256(
+                                            raw_ids[loss_start * 2 :]
+                                        ).hexdigest(),
+                                        target_tokens,
+                                    ),
+                                    target_tokens=target_tokens,
                                 )
                                 prompt_claims.add(candidate)
                                 bucket_heaps, fallback_heap = pool_heaps.setdefault(
-                                cell, ([[] for _ in range(8)], [])
-                            )
+                                    cell, ([[] for _ in range(8)], [])
+                                )
                                 bucket_limit = math.ceil(
-                                quotas[split] * oversample_factor / 8
-                            )
+                                    quotas[split] * oversample_factor / 8
+                                )
                                 _push_candidate(
-                                bucket_heaps[_bucket(target_tokens)],
-                                candidate,
-                                bucket_limit,
-                            )
+                                    bucket_heaps[_bucket(target_tokens)],
+                                    candidate,
+                                    bucket_limit,
+                                )
                                 _push_candidate(
-                                fallback_heap,
-                                candidate,
-                                quotas[split] * oversample_factor,
-                            )
+                                    fallback_heap,
+                                    candidate,
+                                    quotas[split] * oversample_factor,
+                                )
                     if seen_eligible != eligible_by_split[split]:
-                        raise ValueError(f"{split} eligibility inventory was not fully processed")
+                        raise ValueError(
+                            f"{split} eligibility inventory was not fully processed"
+                        )
                 finally:
                     admission.close()
         finally:
@@ -617,7 +654,11 @@ def build_audited_balanced_curriculum(
                 f"{'|'.join(cell)} needs {target}, has {len(selected_ids)}"
             )
         chosen_candidates = sorted(
-            (candidate for candidate in candidates if candidate.example_id in selected_ids),
+            (
+                candidate
+                for candidate in candidates
+                if candidate.example_id in selected_ids
+            ),
             key=lambda item: item.example_id,
         )
         selected.extend(chosen_candidates)
@@ -664,7 +705,9 @@ def build_audited_balanced_curriculum(
     try:
         output.execute("PRAGMA journal_mode=DELETE")
         output.execute("PRAGMA synchronous=FULL")
-        output.execute("CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
+        output.execute(
+            "CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)"
+        )
         output.execute(
             """CREATE TABLE tasks(
                    example_id TEXT PRIMARY KEY,document_id TEXT NOT NULL,
@@ -702,9 +745,7 @@ def build_audited_balanced_curriculum(
             "source_admission_identities_json": _canonical_json(admission_identities),
             "source_audit_identity_sha256": aggregate_audit_identity,
             "audited_source_eligibility_manifests_json": _canonical_json(
-                {
-                    split: manifests[split]["manifest_sha256"] for split in SPLITS
-                }
+                {split: manifests[split]["manifest_sha256"] for split in SPLITS}
             ),
             "training_eligibility_manifest_sha256": str(
                 manifests["train"]["manifest_sha256"]
@@ -722,7 +763,8 @@ def build_audited_balanced_curriculum(
             "curriculum_policy_sha256": policy_sha,
         }
         output.executemany(
-            "INSERT INTO metadata(key,value) VALUES(?,?)", sorted(output_metadata.items())
+            "INSERT INTO metadata(key,value) VALUES(?,?)",
+            sorted(output_metadata.items()),
         )
         output.executemany(
             "INSERT INTO tasks VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",

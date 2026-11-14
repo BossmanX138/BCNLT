@@ -1,23 +1,23 @@
 """Promote reviewed semantic labels through contained and strict calibration gates."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import importlib
 import importlib.util
 import json
 import os
-from pathlib import Path
 import sys
 import tempfile
+from dataclasses import dataclass
+from pathlib import Path
 from types import ModuleType
 from typing import Protocol
 
+from .runtime_identity import aggregate_sha256
 from .strict_uncertainty_acceptance import (
     StrictUncertaintyPolicy,
     verify_strict_uncertainty_acceptance,
 )
-
 
 _DATASET_SCHEMA = "bosscrafts-semantic-calibration-dataset-v1"
 _OBSERVATION_SCHEMA = "bosscrafts-semantic-uncertainty-observation-v1"
@@ -32,35 +32,14 @@ _CONTAINED_PACKAGE_ROOT = (
 )
 _CONTAINED_PACKAGE_NAME = "_bosscrafts_bcnlt_v10_calibration_runtime"
 _EXPECTED_SOURCE_SHA256 = (
-    "8f7f820ba20206a61ddc3509dd8c2a7564954bb3197de118fdc373a2fffc7c66"
+    "c5623e97f3f1e1e884e1d54a316d174292fbcbf61da3ddfdbf3b432418e0450a"
 )
 _EXPECTED_SOURCE_FILE_COUNT = 79
-_EXPECTED_SOURCE_BYTES = 705094
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+_EXPECTED_SOURCE_BYTES = 698056
 
 
 def _contained_source_identity() -> tuple[str, int, int]:
-    paths = sorted(
-        _CONTAINED_PACKAGE_ROOT.rglob("*.py"),
-        key=lambda item: item.relative_to(_CONTAINED_PACKAGE_ROOT).as_posix(),
-    )
-    digest = hashlib.sha256()
-    total_bytes = 0
-    for path in paths:
-        relative = path.relative_to(_CONTAINED_PACKAGE_ROOT).as_posix()
-        digest.update(relative.encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(_sha256(path).encode("ascii"))
-        digest.update(b"\n")
-        total_bytes += path.stat().st_size
-    return digest.hexdigest(), len(paths), total_bytes
+    return aggregate_sha256(_CONTAINED_PACKAGE_ROOT, "*.py")
 
 
 def _load_contained_calibration_runtime() -> ModuleType:

@@ -1,0 +1,25 @@
+[project]
+name = "bcnlt"
+version = "0.1.0"
+description = "Bosscrafts Coding Neural Learning Tokenizer prototype"
+requires-python = ">=3.10"
+readme = "README.md"
+
+[project.optional-dependencies]
+tokenizer = [
+    "huggingface_hub>=0.23",
+    "tokenizers>=0.19",
+    "transformers>=4.40",
+]
+multilingual = [
+    "tree-sitter==0.26.0",
+    "tree-sitter-language-pack==1.22.1",
+]
+
+[project.scripts]
+bcnlt = "bcnlt.cli:main"
+bcnlt-tokenizer = "bcnlt.tokenizer_cli:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

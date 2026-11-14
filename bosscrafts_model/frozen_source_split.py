@@ -1,16 +1,18 @@
 """Verified access to a non-training split of the immutable V10 source freeze."""
+
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
-from .current_corpus import SQLiteSourceCatalog
+from .current_corpus import SourceCandidate, SQLiteSourceCatalog
 from .training_corpus_freeze import VerifiedTrainingSourceFreeze
 
 
 class VerifiedFrozenSourceSplit(VerifiedTrainingSourceFreeze):
     """Expose one exact held-out split after the full freeze is reverified."""
 
-    _ALLOWED_SPLITS = {"validation", "test", "reserved_heldout"}
+    _ALLOWED_SPLITS = frozenset({"validation", "test", "reserved_heldout"})
 
     def __init__(
         self,
@@ -43,7 +45,7 @@ class VerifiedFrozenSourceSplit(VerifiedTrainingSourceFreeze):
     def document_count(self) -> int:
         return len(self._split_ids)
 
-    def iter_candidates(self):
+    def iter_candidates(self) -> Iterator[SourceCandidate]:
         """Yield only exact members of the selected, verified frozen split."""
         seen: set[str] = set()
         catalog = SQLiteSourceCatalog(

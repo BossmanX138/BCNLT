@@ -2,17 +2,17 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
-
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = PROJECT_ROOT / "vendor" / "bcnlt_runtime_v3_candidate"
+RUNTIME = PROJECT_ROOT / "vendor" / "bcnlt_runtime_v10_learning_candidate"
 SIDECAR = RUNTIME / "bcnlt_source_sidecar.py"
-PYTHON_313 = Path(r"C:\ProgramData\anaconda3\python.exe")
-PROTOCOL = "bosscrafts-bcnlt-source-sidecar-v1"
+PYTHON_313 = Path(sys.executable).resolve()
+PROTOCOL = "bosscrafts-bcnlt-source-sidecar-v2"
 
 
 def _run_raw_sidecar(request: str) -> subprocess.CompletedProcess[str]:
@@ -35,6 +35,8 @@ def _run_sidecar(language: str, source: str) -> list[dict[str, object]]:
         "language": language,
         "path": f"v3-audit.{language}",
         "dialect": None,
+        "learning_mode": "ephemeral",
+        "learned_memory_root": None,
     }
     completed = _run_raw_sidecar(json.dumps(request))
     if completed.returncode:
@@ -286,14 +288,14 @@ CASES = (
 )
 
 
-class BCNltRuntimeV3SemanticTests(unittest.TestCase):
+class BCNltCurrentRuntimeSemanticTests(unittest.TestCase):
     def test_all_reviewed_semantic_repairs_are_present(self):
         for name, language, source, evaluator in CASES:
             with self.subTest(case=name):
                 self.assertTrue(evaluator(_run_sidecar(language, source)))
 
     def test_missing_owned_grammar_fails_without_pack_fallback(self):
-        with tempfile.TemporaryDirectory(prefix="bcnlt-v3-offline-test-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="bcnlt-v10-offline-test-") as temporary:
             code = f"""
 import os
 from pathlib import Path
@@ -330,7 +332,8 @@ with patch('tree_sitter_language_pack.get_parser', side_effect=AssertionError('p
         request = (
             '{"protocol":"' + PROTOCOL + '","source":"x = 1\\n",'
             '"source":"x = 2\\n","language":"python",'
-            '"path":"duplicate.py","dialect":null}'
+            '"path":"duplicate.py","dialect":null,'
+            '"learning_mode":"ephemeral","learned_memory_root":null}'
         )
         completed = _run_raw_sidecar(request)
         self.assertEqual(completed.returncode, 2)
@@ -346,6 +349,8 @@ with patch('tree_sitter_language_pack.get_parser', side_effect=AssertionError('p
                 "language": "python",
                 "path": "dialect.py",
                 "dialect": "x" * 257,
+                "learning_mode": "ephemeral",
+                "learned_memory_root": None,
             }
         )
         completed = _run_raw_sidecar(request)

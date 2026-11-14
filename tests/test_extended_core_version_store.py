@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from pathlib import Path
 import sys
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from threading import Barrier
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from runtime_import import select_bcnlt_runtime
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_SOURCE = (
@@ -30,6 +31,7 @@ from bcnlt.scientific_learning import (
 )
 from bcnlt.tokenizer_manifest import BaseTokenizerIdentity, TokenizerManifest
 from bcnlt.wildcard import ProvisionalMeaning, WildcardMemory
+
 from bosscrafts_model.scientific_sandbox import DockerScientificSandbox
 
 
@@ -219,6 +221,42 @@ class ExtendedCoreVersionStoreTests(unittest.TestCase):
             self.assertTrue(store.version_path(first.version_sha256).is_dir())
             self.assertTrue(store.version_path(second.version_sha256).is_dir())
             store.verify_all()
+
+    def test_concurrent_activation_has_one_event_and_one_winner(self) -> None:
+        memory = WildcardMemory(
+            language="python",
+            semantic_spec_sha256="f" * 64,
+            minimum_reproductions=2,
+        )
+        self._attest(
+            memory,
+            surface="concurrent_binary",
+            relation="binary_expression.operator.concurrent",
+            seed=70,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = ExtendedCoreVersionStore(root, self._v1_manifest())
+            version = first.stage(ExtendedCorePromotionCandidate.from_memory(memory))
+            first.validate(version.version_sha256, validation_report_sha256="3" * 64)
+            second = ExtendedCoreVersionStore(root, self._v1_manifest())
+            barrier = Barrier(2)
+
+            def activate(store: ExtendedCoreVersionStore) -> str:
+                barrier.wait(timeout=5)
+                try:
+                    return store.activate(version.version_sha256).pointer_sha256
+                except ValueError as exc:
+                    return f"error:{exc}"
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                results = tuple(executor.map(activate, (first, second)))
+
+            assert sum(not item.startswith("error:") for item in results) == 1
+            assert sum("activation parent" in item for item in results) == 1
+            assert len(tuple(first.events.glob("*.json"))) == 1
+            assert first.active().sequence == 1
+            first.verify_all()
 
 
 if __name__ == "__main__":

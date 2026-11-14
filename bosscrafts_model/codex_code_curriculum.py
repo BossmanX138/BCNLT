@@ -1,22 +1,23 @@
 """Resumable CodeX-2M final-code curriculum for the frozen native-65K model."""
+
 from __future__ import annotations
 
 import ast
-from collections import Counter
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import asdict, dataclass
 import gzip
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import sqlite3
-from typing import Mapping
 import zlib
+from collections import Counter
+from collections.abc import Mapping
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import asdict, dataclass
+from pathlib import Path
 
-from .bcnlt_source_pipeline import CURRENT_RUNTIME_SPEC_SHA256
 from .bcnlt_source_pipeline import (
+    CURRENT_RUNTIME_SPEC_SHA256,
     PARSER_RUNTIME_IDENTITY_SHA256,
     PARSER_RUNTIME_NOT_APPLICABLE,
 )
@@ -29,13 +30,14 @@ from .resumable_task_packing import (
 )
 from .tokenizer import NativeTokenizerBinding, _load_owned_tokenizers
 
-
 CURRICULUM_SCHEMA = "bosscrafts-codex-final-code-curriculum-v1"
 DATASET_NAME = "Modotte/CodeX-2M-Thinking"
 DATASET_REVISION = "01e0bb5"
 DATASET_LICENSE = "Apache-2.0"
 INSTRUCTION_FAMILY = "instruction_to_code"
-SPLIT_POLICY = "sha256(canonical_input_and_code)_mod_100:train_0_95,validation_96_97,test_98_99"
+SPLIT_POLICY = (
+    "sha256(canonical_input_and_code)_mod_100:train_0_95,validation_96_97,test_98_99"
+)
 SELECTION_POLICY = "final_supported_fenced_code_after_closing_think"
 _FENCE = re.compile(r"```([^\r\n`]*)\r?\n(.*?)```", re.DOTALL)
 _WORD = re.compile(r"[A-Za-z0-9_]+")
@@ -234,14 +236,18 @@ def _write_progress(path: Path, payload: dict[str, object]) -> None:
     temporary.replace(path)
 
 
-def _initialize_shard_database(path: Path, metadata: dict[str, str]) -> sqlite3.Connection:
+def _initialize_shard_database(
+    path: Path, metadata: dict[str, str]
+) -> sqlite3.Connection:
     connection = sqlite3.connect(path)
     connection.execute("PRAGMA journal_mode=DELETE")
     # The shard database is a private temporary artifact until it is closed and
     # atomically renamed. NORMAL avoids a physical disk flush for every bounded
     # transaction while still leaving an interrupted build unpublishable.
     connection.execute("PRAGMA synchronous=NORMAL")
-    connection.execute("CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
+    connection.execute(
+        "CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)"
+    )
     connection.execute(
         """CREATE TABLE tasks(
                example_id TEXT PRIMARY KEY,
@@ -281,7 +287,9 @@ def _initialize_shard_database(path: Path, metadata: dict[str, str]) -> sqlite3.
     return connection
 
 
-def _load_completed_shard(path: Path, expected: dict[str, str]) -> ShardBuildStatus | None:
+def _load_completed_shard(
+    path: Path, expected: dict[str, str]
+) -> ShardBuildStatus | None:
     if not path.is_file():
         return None
     connection = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True, timeout=30)
@@ -298,7 +306,9 @@ def _load_completed_shard(path: Path, expected: dict[str, str]) -> ShardBuildSta
         language_counts = dict(
             connection.execute("SELECT language,COUNT(*) FROM tasks GROUP BY language")
         )
-        rejection_counts = dict(connection.execute("SELECT reason_code,count FROM rejection_counts"))
+        rejection_counts = dict(
+            connection.execute("SELECT reason_code,count FROM rejection_counts")
+        )
         counts = connection.execute(
             "SELECT COUNT(*),COALESCE(SUM(token_count),0),"
             "COALESCE(SUM(token_count-loss_start_index),0) FROM tasks"
@@ -333,7 +343,8 @@ def _build_shard_worker(
     max_sequence: int,
     batch_size: int,
 ) -> ShardBuildStatus:
-    import pyarrow.parquet as parquet  # type: ignore[import-untyped]
+    from pyarrow import parquet
+
     tokenizers = _load_owned_tokenizers()
 
     if tokenizers.__version__ != "0.23.2":
@@ -402,7 +413,12 @@ def _build_shard_worker(
                     )
                 ):
                     source_row_index = row_offset + start + local_index
-                    if type(prompt) is not str or type(output) is not str or not prompt or not output:
+                    if (
+                        type(prompt) is not str
+                        or type(output) is not str
+                        or not prompt
+                        or not output
+                    ):
                         rejection_counts["invalid_text_fields"] += 1
                         continue
                     extracted = extract_final_code(output)
@@ -437,8 +453,12 @@ def _build_shard_worker(
                     )
                 if not raw_batch:
                     continue
-                prompt_encodings = tokenizer.encode_batch([item[1] for item in raw_batch])
-                code_encodings = tokenizer.encode_batch([item[3].code for item in raw_batch])
+                prompt_encodings = tokenizer.encode_batch(
+                    [item[1] for item in raw_batch]
+                )
+                code_encodings = tokenizer.encode_batch(
+                    [item[3].code for item in raw_batch]
+                )
                 admitted_before_batch = admitted
                 for item, prompt_encoding, code_encoding in zip(
                     raw_batch, prompt_encodings, code_encodings, strict=True
@@ -685,7 +705,9 @@ def _merge_shards(
                         duplicate_count += 1
                         continue
                     seen.add(content_sha256)
-                    output.execute("INSERT INTO tasks VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", row[:12])
+                    output.execute(
+                        "INSERT INTO tasks VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", row[:12]
+                    )
                     output.execute(
                         "INSERT INTO codex_provenance VALUES(?,?,?,?,?,?,?,?,?,?)",
                         (row[0], *row[12:]),
@@ -720,7 +742,9 @@ def _merge_shards(
         output.close()
     temporary.replace(destination)
     audit = audit_task_database(binding, destination)
-    connection = sqlite3.connect(f"{destination.as_uri()}?mode=ro", uri=True, timeout=30)
+    connection = sqlite3.connect(
+        f"{destination.as_uri()}?mode=ro", uri=True, timeout=30
+    )
     connection.execute("PRAGMA query_only=ON")
     try:
         target_tokens = int(
@@ -764,7 +788,9 @@ def build_codex_code_curriculum(
     if (
         type(shard_indices) is not tuple
         or not shard_indices
-        or any(type(index) is not int or not 0 <= index <= 250 for index in shard_indices)
+        or any(
+            type(index) is not int or not 0 <= index <= 250 for index in shard_indices
+        )
         or len(set(shard_indices)) != len(shard_indices)
     ):
         raise ValueError("shard_indices must be a unique nonempty tuple in [0,250]")
@@ -779,7 +805,9 @@ def build_codex_code_curriculum(
     humaneval = Path(humaneval_dataset).resolve()
     if not root.is_dir() or not humaneval.is_file():
         raise ValueError("dataset root and HumanEval exclusion file must exist")
-    source_paths = [root / f"shard_{index:05d}.parquet" for index in sorted(shard_indices)]
+    source_paths = [
+        root / f"shard_{index:05d}.parquet" for index in sorted(shard_indices)
+    ]
     missing = [str(path) for path in source_paths if not path.is_file()]
     if missing:
         raise ValueError(f"CodeX source shards are missing: {missing}")
@@ -834,12 +862,17 @@ def build_codex_code_curriculum(
     else:
         failures: list[str] = []
         with ProcessPoolExecutor(max_workers=min(workers, len(arguments))) as executor:
-            futures = {executor.submit(_build_shard_worker, *argument): argument[0] for argument in arguments}
+            futures = {
+                executor.submit(_build_shard_worker, *argument): argument[0]
+                for argument in arguments
+            }
             for future in as_completed(futures):
                 try:
                     statuses.append(future.result())
                 except BaseException as error:
-                    failures.append(f"{futures[future]}: {type(error).__name__}: {error}")
+                    failures.append(
+                        f"{futures[future]}: {type(error).__name__}: {error}"
+                    )
                 _write_progress(
                     progress_path,
                     {

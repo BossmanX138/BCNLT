@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
 from bosscrafts_model.bcnlt_source_pipeline import (
-    BCNLTSourcePipeline,
     PARSER_RUNTIME_IDENTITY_SHA256,
+    BCNLTSourcePipeline,
 )
 from bosscrafts_model.current_corpus import CurrentCorpusAdmission, SourceCandidate
 from bosscrafts_model.current_task_packing import CurrentCorpusTaskPacker
@@ -134,6 +135,23 @@ class CurrentCorpusTaskPackingTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("--max-sequence", completed.stdout)
+
+    def test_nonresumable_packer_fails_closed_above_pilot_limit(self):
+        candidates = (_candidate("doc-a", "value = 1\n"),)
+        with (
+            tempfile.TemporaryDirectory() as admission_dir,
+            tempfile.TemporaryDirectory() as output_dir,
+        ):
+            CurrentCorpusAdmission(self.pipeline).materialize(candidates, admission_dir)
+            with mock.patch(
+                "bosscrafts_model.current_task_packing.MAX_PILOT_DOCUMENTS",
+                0,
+            ):
+                with self.assertRaisesRegex(ValueError, "ResumableCurrentTaskPacking"):
+                    CurrentCorpusTaskPacker(self.binding).materialize(
+                        admission_dir,
+                        output_dir,
+                    )
 
 
 if __name__ == "__main__":

@@ -1,10 +1,11 @@
 """Deterministic current-spec corpus admission for the frozen native 65K lineage."""
+
 from __future__ import annotations
 
 import hashlib
 import json
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -32,10 +33,14 @@ APPROVED_LICENSES = frozenset(
     )
 )
 MAX_SOURCE_BYTES = 200 * 1024
+MAX_PILOT_DOCUMENTS = 64
+MAX_PILOT_JSONL_BYTES = 128 * 1024 * 1024
 
 
 def _canonical_json(payload: object) -> str:
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
 
 
 def _sha256_bytes(payload: bytes) -> str:
@@ -103,7 +108,9 @@ class SQLiteSourceCatalog:
             if (
                 type(expected_sha256) is not str
                 or len(expected_sha256) != 64
-                or any(character not in "0123456789abcdef" for character in expected_sha256)
+                or any(
+                    character not in "0123456789abcdef" for character in expected_sha256
+                )
             ):
                 raise ValueError("expected source catalog SHA-256 is invalid")
             if _sha256_file(self.database_path) != expected_sha256:
@@ -117,7 +124,9 @@ class SQLiteSourceCatalog:
             return f"file://{quote(posix_path, safe='/:')}?mode=ro"
         return f"{database_path.as_uri()}?mode=ro"
 
-    def iter_candidates(self, *, limit_per_language: int | None = None):
+    def iter_candidates(
+        self, *, limit_per_language: int | None = None
+    ) -> Iterator[SourceCandidate]:
         if limit_per_language is not None and (
             type(limit_per_language) is not int or limit_per_language <= 0
         ):
@@ -240,8 +249,20 @@ class CurrentCorpusAdmission:
         candidates: Iterable[SourceCandidate],
         output_root: str | Path,
     ) -> CurrentCorpusResult:
-        indexed = list(enumerate(candidates))
-        ordered = [item for _, item in sorted(indexed, key=lambda pair: (pair[1].document_id, pair[0]))]
+        indexed: list[tuple[int, SourceCandidate]] = []
+        for index, candidate in enumerate(candidates):
+            if index >= MAX_PILOT_DOCUMENTS:
+                raise ValueError(
+                    "non-resumable pilot admission exceeds its document limit; "
+                    "use ResumableCurrentCorpusAdmission for full corpora"
+                )
+            indexed.append((index, candidate))
+        ordered = [
+            item
+            for _, item in sorted(
+                indexed, key=lambda pair: (pair[1].document_id, pair[0])
+            )
+        ]
         root = Path(output_root).resolve()
         root.mkdir(parents=True, exist_ok=True)
         records: list[dict[str, object]] = []
@@ -271,9 +292,7 @@ class CurrentCorpusAdmission:
             except (BCNLTPreprocessingError, ValueError) as error:
                 detail = " ".join(str(error).split())[:512]
                 rejections.append(
-                    self._rejection(
-                        candidate, "semantic_preprocessing_failure", detail
-                    )
+                    self._rejection(candidate, "semantic_preprocessing_failure", detail)
                 )
                 continue
             raw = self._pipeline.prepare_raw(
@@ -312,8 +331,16 @@ class CurrentCorpusAdmission:
                 }
             )
 
-        records_text = "".join(f"{_canonical_json(record)}\n" for record in records)
-        rejections_text = "".join(f"{_canonical_json(record)}\n" for record in rejections)
+        record_lines = [f"{_canonical_json(record)}\n" for record in records]
+        rejection_lines = [f"{_canonical_json(record)}\n" for record in rejections]
+        encoded_bytes = sum(len(line.encode("utf-8")) for line in (*record_lines, *rejection_lines))
+        if encoded_bytes > MAX_PILOT_JSONL_BYTES:
+            raise ValueError(
+                "non-resumable pilot admission exceeds its output byte limit; "
+                "use ResumableCurrentCorpusAdmission for full corpora"
+            )
+        records_text = "".join(record_lines)
+        rejections_text = "".join(rejection_lines)
         records_sha256 = _sha256_text(records_text)
         rejections_sha256 = _sha256_text(rejections_text)
         language_ids = sorted({str(record["language"]) for record in records})
@@ -328,7 +355,9 @@ class CurrentCorpusAdmission:
         per_language = {
             language: {
                 "admitted": sum(record["language"] == language for record in records),
-                "rejected": sum(record["language"] == language for record in rejections),
+                "rejected": sum(
+                    record["language"] == language for record in rejections
+                ),
             }
             for language in sorted(
                 {str(record["language"]) for record in (*records, *rejections)}
