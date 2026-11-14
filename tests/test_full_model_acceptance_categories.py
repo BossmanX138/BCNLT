@@ -24,6 +24,7 @@ from bosscrafts_model.bcnlt_source_pipeline import (
     PARSER_RUNTIME_IDENTITY_SHA256,
     _NativeSemanticStreamCodec,
 )
+from bosscrafts_model.category_case_inventory import CATEGORY_CASE_SCHEMA
 from bosscrafts_model.code_acceptance import (
     CodeAcceptanceBatchResult,
     build_code_acceptance_receipt,
@@ -39,6 +40,7 @@ from bosscrafts_model.ifeval_case_runner import (
 from bosscrafts_model.ifeval_runtime import EXPECTED_IFEVAL_RUNTIME_MANIFEST_SHA256
 from bosscrafts_model.inference_protocol import (
     HeldoutInferenceCase,
+    build_inference_prompt,
     response_payload_token_ids,
 )
 from bosscrafts_model.model_acceptance import (
@@ -56,6 +58,11 @@ from bosscrafts_model.model_response_generation import (
 from bosscrafts_model.regression_acceptance import (
     RegressionResult,
     build_regression_receipt,
+)
+from bosscrafts_model.resource_acceptance import (
+    RESOURCE_BENCHMARK_PROMPT,
+    ResourceAcceptanceResult,
+    build_resource_acceptance_receipt,
 )
 from bosscrafts_model.safety_judge_case_runner import (
     SafetyJudgeBatchResult,
@@ -115,12 +122,40 @@ def _canonical(value: object) -> bytes:
     ).encode("utf-8")
 
 
+def _resource_case_record() -> dict[str, object]:
+    body: dict[str, object] = {
+        "schema_version": CATEGORY_CASE_SCHEMA,
+        "category": "resources",
+        "case_kind": "resource_budget",
+        "case": {
+            "vram_limit_bytes": 12 * 1024**3,
+            "ram_limit_bytes": 64 * 1024**3,
+            "minimum_tokens_per_second": 1.0,
+        },
+        "provenance": {
+            "source": "fixture://resource-budget",
+            "revision": "b" * 40,
+            "source_sha256": "c" * 64,
+            "license": "BossCrafts-internal",
+            "attribution": "BossCrafts resource acceptance fixture",
+        },
+    }
+    return {
+        **body,
+        "example_id": hashlib.sha256(_canonical(body)).hexdigest(),
+    }
+
+
 def _heldout_suite_manifest() -> dict[str, object]:
     categories: dict[str, object] = {}
     for category in CATEGORIES:
-        example_ids = sorted(
-            hashlib.sha256(f"{category}:{index}".encode()).hexdigest()
-            for index in range(CATEGORY_MINIMUMS[category])
+        example_ids = (
+            [str(_resource_case_record()["example_id"])]
+            if category == "resources"
+            else sorted(
+                hashlib.sha256(f"{category}:{index}".encode()).hexdigest()
+                for index in range(CATEGORY_MINIMUMS[category])
+            )
         )
         categories[category] = {
             "example_ids": example_ids,
@@ -408,6 +443,7 @@ def _metrics(category: str) -> dict[str, object]:
             "ram_limit_bytes": 64 * 1024**3,
             "oom_count": 0,
             "inference_tokens_per_second": 5.0,
+            "minimum_tokens_per_second": 1.0,
         },
     }[category]
 
@@ -475,6 +511,7 @@ def _records(category: str) -> list[dict[str, object]]:
                 "ram_limit_bytes": 64 * 1024**3,
                 "oom_count": 0,
                 "inference_tokens_per_second": 5.0,
+                "minimum_tokens_per_second": 1.0,
             },
         }[category]
         records.append(record)
@@ -655,6 +692,50 @@ def _regression_receipt_payload() -> dict[str, object]:
         checkpoint_sha256=CHECKPOINT_ID,
         checkpoint_step=86_016,
         example_id=HELDOUT_SUITE.category_example_ids["regression"][0],
+    )
+
+
+def _resource_receipt_payload() -> dict[str, object]:
+    generated_ids = [100] * 10
+    iterations = tuple(
+        {
+            "phase": "warmup" if position == 0 else "measured",
+            "iteration": 0 if position == 0 else position - 1,
+            "status": "completed",
+            "elapsed_ns": 2_000_000_000,
+            "generated_token_count": len(generated_ids),
+            "generated_ids": generated_ids,
+            "generated_ids_sha256": hashlib.sha256(
+                _canonical(generated_ids)
+            ).hexdigest(),
+        }
+        for position in range(4)
+    )
+    result = ResourceAcceptanceResult(
+        case_bundle_manifest_sha256="1" * 64,
+        case_inventory_sha256="2" * 64,
+        test_task_database_identity_sha256=DATABASE_ID,
+        binding_sha256=BINDING.binding_sha256,
+        tokenizer_sha256=BINDING.tokenizer_sha256,
+        model_fingerprint=MODEL_ID,
+        device_type="cuda",
+        dtype="bfloat16",
+        case_record=_resource_case_record(),
+        prompt_ids=tuple(
+            build_inference_prompt(
+                BINDING,
+                task="instruction_to_code",
+                prompt=RESOURCE_BENCHMARK_PROMPT,
+            )
+        ),
+        peak_vram_bytes=8 * 1024**3,
+        peak_ram_bytes=16 * 1024**3,
+        iterations=iterations,
+    )
+    return build_resource_acceptance_receipt(
+        result,
+        checkpoint_sha256=CHECKPOINT_ID,
+        checkpoint_step=86_016,
     )
 
 
@@ -905,6 +986,10 @@ def _category(category: str) -> dict[str, object]:
     elif category == "regression":
         supporting_evidence = {
             "regression_receipt": _regression_receipt_payload()
+        }
+    elif category == "resources":
+        supporting_evidence = {
+            "resource_acceptance_receipt": _resource_receipt_payload()
         }
     else:
         supporting_evidence = {}

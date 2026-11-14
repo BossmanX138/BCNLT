@@ -257,6 +257,24 @@ def _rebind_database(payload: dict[str, object], database_identity: str) -> None
                 metrics["semantic_acceptance_receipt_sha256"] = semantic_receipt[
                     "receipt_sha256"
                 ]
+        resource_receipt = supporting.get("resource_acceptance_receipt")
+        if type(resource_receipt) is dict:
+            resource_receipt["test_task_database_identity_sha256"] = (
+                database_identity
+            )
+            receipt_body = {
+                key: value
+                for key, value in resource_receipt.items()
+                if key != "receipt_sha256"
+            }
+            resource_receipt["receipt_sha256"] = hashlib.sha256(
+                json.dumps(
+                    receipt_body,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest()
     if "artifact_sha256" in payload:
         body = {key: value for key, value in payload.items() if key != "artifact_sha256"}
         payload["artifact_sha256"] = hashlib.sha256(

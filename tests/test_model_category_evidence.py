@@ -27,6 +27,7 @@ from test_full_model_acceptance_categories import (
     _inference,
     _records,
     _regression_receipt_payload,
+    _resource_receipt_payload,
     _safety_content_receipt_payload,
     _semantic_receipt_payload,
     _tokenizer_fidelity_receipt_payload,
@@ -100,6 +101,7 @@ def _compile(
     tokenizer_receipt: dict[str, object] | None = None,
     code_receipt: dict[str, object] | None = None,
     semantic_receipt: dict[str, object] | None = None,
+    resource_receipt: dict[str, object] | None = None,
 ):
     return compile_model_category_evidence(
         category=category,
@@ -116,6 +118,7 @@ def _compile(
         tokenizer_fidelity_receipt=tokenizer_receipt,
         code_acceptance_receipt=code_receipt,
         semantic_acceptance_receipt=semantic_receipt,
+        resource_acceptance_receipt=resource_receipt,
     )
 
 
@@ -214,6 +217,18 @@ def test_ordinary_compiler_requires_grounded_ifeval_receipt():
     forged["checkpoint_sha256"] = "f" * 64
     with pytest.raises(ValueError, match="integrity|lineage"):
         _compile("ordinary_instruction", ifeval_receipt=forged)
+
+
+def test_resource_compiler_requires_grounded_benchmark_receipt():
+    with pytest.raises(ValueError, match="requires a resource acceptance receipt"):
+        _compile("resources")
+
+    receipt = _resource_receipt_payload()
+    compiled = _compile("resources", resource_receipt=receipt)
+    assert compiled["passed"] is True
+    assert compiled["supporting_evidence"] == {
+        "resource_acceptance_receipt": receipt
+    }
 
 
 def test_failed_case_outcome_is_published_as_failed_not_promoted():

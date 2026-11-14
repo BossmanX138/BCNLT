@@ -1314,6 +1314,32 @@ def _validated_category_supporting_evidence(
             expected_records=expected_records,
         )
         return regression_receipt_metrics(raw_receipt)
+    if category == "resources":
+        from .resource_acceptance import (
+            resource_acceptance_receipt_metrics,
+            validate_resource_acceptance_receipt,
+        )
+
+        if (
+            type(value) is not dict
+            or set(value) != {"resource_acceptance_receipt"}
+            or type(checkpoint_sha256) is not str
+            or type(checkpoint_step) is not int
+            or type(expected_records) is not list
+        ):
+            raise ValueError("resources supporting evidence is incomplete")
+        raw_receipt = value.get("resource_acceptance_receipt")
+        validate_resource_acceptance_receipt(
+            raw_receipt,
+            expected_checkpoint_sha256=checkpoint_sha256,
+            expected_checkpoint_step=checkpoint_step,
+            expected_example_ids=tuple(expected_example_ids),
+            expected_records=expected_records,
+            expected_task_database_identity_sha256=(
+                expected_task_database_identity_sha256
+            ),
+        )
+        return resource_acceptance_receipt_metrics(raw_receipt)
     if category != "semantic_fidelity":
         if value != {}:
             raise ValueError(f"{category} supporting evidence must be empty")
@@ -1418,6 +1444,7 @@ _CATEGORY_RECORD_FIELDS = {
         "ram_limit_bytes",
         "oom_count",
         "inference_tokens_per_second",
+        "minimum_tokens_per_second",
     },
 }
 
@@ -1670,6 +1697,10 @@ def recompute_category_metrics(
                 _record_number(record, "inference_tokens_per_second")
                 for record in records
             ),
+            "minimum_tokens_per_second": max(
+                _record_number(record, "minimum_tokens_per_second")
+                for record in records
+            ),
         }
     raise AssertionError(f"unhandled acceptance category: {category}")
 
@@ -1824,17 +1855,21 @@ def verify_category_metrics(category: str, value: object) -> None:
             "ram_limit_bytes",
             "oom_count",
             "inference_tokens_per_second",
+            "minimum_tokens_per_second",
         }:
             raise ValueError("resources metric fields are invalid")
         peak_vram = _metric_count(metrics, "peak_vram_bytes")
         vram_limit = _metric_count(metrics, "vram_limit_bytes")
         peak_ram = _metric_count(metrics, "peak_ram_bytes")
         ram_limit = _metric_count(metrics, "ram_limit_bytes")
+        inference_rate = _metric_number(metrics, "inference_tokens_per_second")
+        minimum_rate = _metric_number(metrics, "minimum_tokens_per_second")
         if (
             not 0 < peak_vram <= vram_limit <= 12 * 1024**3
             or not 0 < peak_ram <= ram_limit
             or _metric_count(metrics, "oom_count") != 0
-            or _metric_number(metrics, "inference_tokens_per_second") <= 0.0
+            or minimum_rate <= 0.0
+            or inference_rate < minimum_rate
         ):
             raise ValueError("resources acceptance gate failed")
         return

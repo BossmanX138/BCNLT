@@ -32,6 +32,10 @@ from .regression_acceptance import (
     regression_receipt_metrics,
     validate_regression_receipt,
 )
+from .resource_acceptance import (
+    resource_acceptance_receipt_metrics,
+    validate_resource_acceptance_receipt,
+)
 from .safety_judge_case_runner import (
     safety_content_receipt_metrics,
     validate_safety_content_receipt,
@@ -107,6 +111,7 @@ def compile_model_category_evidence(
     tokenizer_fidelity_receipt: dict[str, object] | None = None,
     code_acceptance_receipt: dict[str, object] | None = None,
     semantic_acceptance_receipt: dict[str, object] | None = None,
+    resource_acceptance_receipt: dict[str, object] | None = None,
 ) -> dict[str, object]:
     if category not in ACCEPTANCE_CATEGORIES:
         raise ValueError("model acceptance category is invalid")
@@ -137,6 +142,7 @@ def compile_model_category_evidence(
                 regression_receipt,
                 code_acceptance_receipt,
                 semantic_acceptance_receipt,
+                resource_acceptance_receipt,
             )
         ):
             raise ValueError("category receipt is not valid for tokenizer fidelity")
@@ -164,6 +170,7 @@ def compile_model_category_evidence(
                 regression_receipt,
                 tokenizer_fidelity_receipt,
                 code_acceptance_receipt,
+                resource_acceptance_receipt,
             )
         ):
             raise ValueError("category receipt is not valid for semantic fidelity")
@@ -200,6 +207,7 @@ def compile_model_category_evidence(
                 regression_receipt,
                 tokenizer_fidelity_receipt,
                 semantic_acceptance_receipt,
+                resource_acceptance_receipt,
             )
         ):
             raise ValueError("category receipt is not valid for code acceptance")
@@ -227,6 +235,7 @@ def compile_model_category_evidence(
                 tokenizer_fidelity_receipt,
                 code_acceptance_receipt,
                 semantic_acceptance_receipt,
+                resource_acceptance_receipt,
             )
         ):
             raise ValueError("category receipt is not valid for ordinary instruction")
@@ -250,6 +259,7 @@ def compile_model_category_evidence(
                 tokenizer_fidelity_receipt,
                 code_acceptance_receipt,
                 semantic_acceptance_receipt,
+                resource_acceptance_receipt,
             )
         ):
             raise ValueError("category receipt is not valid for safety")
@@ -311,6 +321,7 @@ def compile_model_category_evidence(
                 tokenizer_fidelity_receipt,
                 code_acceptance_receipt,
                 semantic_acceptance_receipt,
+                resource_acceptance_receipt,
             )
         ):
             raise ValueError("category receipt is not valid for regression")
@@ -325,6 +336,33 @@ def compile_model_category_evidence(
         )
         declared_metrics = regression_receipt_metrics(receipt_payload)
         supporting_evidence = {"regression_receipt": receipt_payload}
+    elif category == "resources":
+        if any(
+            receipt is not None
+            for receipt in (
+                strict_uncertainty_receipt,
+                ifeval_batch_receipt,
+                safety_content_receipt,
+                containment_receipt,
+                regression_receipt,
+                tokenizer_fidelity_receipt,
+                code_acceptance_receipt,
+                semantic_acceptance_receipt,
+            )
+        ):
+            raise ValueError("category receipt is not valid for resources")
+        if type(resource_acceptance_receipt) is not dict:
+            raise ValueError("resources requires a resource acceptance receipt")
+        receipt_payload = validate_resource_acceptance_receipt(
+            resource_acceptance_receipt,
+            expected_checkpoint_sha256=checkpoint_sha256,
+            expected_checkpoint_step=checkpoint_step,
+            expected_example_ids=suite.category_example_ids[category],
+            expected_records=list(records),
+            expected_task_database_identity_sha256=evidence_database_identity,
+        )
+        declared_metrics = resource_acceptance_receipt_metrics(receipt_payload)
+        supporting_evidence = {"resource_acceptance_receipt": receipt_payload}
     elif any(
         receipt is not None
         for receipt in (
@@ -336,6 +374,7 @@ def compile_model_category_evidence(
             tokenizer_fidelity_receipt,
             code_acceptance_receipt,
             semantic_acceptance_receipt,
+            resource_acceptance_receipt,
         )
     ):
         raise ValueError("category receipt is not valid for this category")

@@ -259,6 +259,20 @@ actionable defect after the repairs and gates below.
     response substitution, malformed protocol output, mismatched prompts,
     model/runtime substitutions and caller-supplied response files now fail.
     Category Evidence Schema V12 makes the stronger receipts explicit.
+27. Resource acceptance remained the last category compiled from a
+    caller-authored record. Its declared VRAM, RAM, OOM and throughput values
+    could pass without loading or timing the named checkpoint, and the frozen
+    minimum-throughput budget was not enforced by the final gate. The resource
+    runner now resets CUDA peak statistics before constructing the model, loads
+    only a complete exact-lineage checkpoint, and executes one fixed native
+    instruction workload with a warmup and three synchronized measured greedy
+    generations. Its receipt binds the full content-addressed budget case,
+    prompt IDs, generated IDs, nanosecond timings, OS-reported peak process RAM,
+    peak CUDA allocator-reserved VRAM and every OOM result. Validators rederive
+    token throughput and the category record, and final acceptance requires
+    throughput to meet the frozen minimum in addition to the 12 GiB VRAM, RAM
+    and zero-OOM budgets. Category Evidence Schema V13 removes the final
+    caller-authored category-record exception.
 
 ## Boundaries
 
@@ -285,7 +299,7 @@ pending authentication. The ordinary-instruction runner is executable and
 audited, and it now generates both the candidate and fixed random baseline
 itself. The safety runner likewise generates its candidate responses directly
 from the complete checkpoint before invoking the pinned judge. The exact
-current tree passes 624 tests and 195 subtests, along with
+current tree passes 631 tests and 195 subtests, along with
 Ruff and strict mypy across 83 source files. The regression receipt path is now
 implemented and mandatory, but its fixed worker must still be exercised from a
 clean committed tree. Tokenizer fidelity is also executable and receipt-bound,
@@ -296,8 +310,11 @@ acceptance; the live containment probes pass, while the 8.64 GB pinned safety
 judge has not yet been installed or executed. Raw-code and execution-correctness
 generation and execution are now receipt-bound, but their production runs still
 require the final frozen category-case bundle and a completed current-lineage
-checkpoint. Other remaining category runners also require completion. Training
-and meaningful model insertion stay held; a
+checkpoint. Resource measurement is now likewise checkpoint-bound and
+receipt-backed. All eight category paths have executable receipt contracts;
+their real production receipts still require the final frozen case bundle and
+a completed current-lineage checkpoint. Training and meaningful model insertion
+stay held; a
 read-only diagnostic Mk10 smoke would be permissible but would not be promotion
 evidence. That smoke has now executed against the preserved incomplete V8
 checkpoint: the current runtime loaded its verified real weights on the RTX
@@ -310,4 +327,4 @@ matches and 0/12 exact clean-core matches, and failed promotion-quality
 protocol rates. Its evidence and non-promotion decision are recorded in
 `docs/v12-recovery-diagnostic-20261113.md`. Neither diagnostic is evidence that
 a model has been trained, promoted, or improved. The exact current tree passes
-624 tests and 195 subtests.
+631 tests and 195 subtests.

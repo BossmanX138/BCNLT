@@ -20,6 +20,7 @@ from bosscrafts_model.model_category_evidence import (
     compile_model_category_evidence,
     publish_model_category_evidence,
 )
+from bosscrafts_model.resource_acceptance import MAX_RESOURCE_RECEIPT_BYTES
 from bosscrafts_model.resumable_task_packing import audit_task_database
 from bosscrafts_model.safety_judge_case_runner import MAX_SAFETY_BATCH_BYTES
 from bosscrafts_model.semantic_acceptance import (
@@ -119,6 +120,7 @@ def main() -> int:
     parser.add_argument("--tokenizer-fidelity-receipt", type=Path)
     parser.add_argument("--code-acceptance-receipt", type=Path)
     parser.add_argument("--semantic-acceptance-receipt", type=Path)
+    parser.add_argument("--resource-acceptance-receipt", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
     plural_databases = (
@@ -174,6 +176,11 @@ def main() -> int:
             parser.error("regression requires --regression-receipt")
         if arguments.records is not None:
             parser.error("regression records come from the regression receipt")
+    elif arguments.category == "resources":
+        if arguments.resource_acceptance_receipt is None:
+            parser.error("resources requires --resource-acceptance-receipt")
+        if arguments.records is not None:
+            parser.error("resources records come from the resource receipt")
     elif arguments.records is None:
         parser.error("all other categories require --records")
 
@@ -257,6 +264,15 @@ def main() -> int:
         if arguments.semantic_acceptance_receipt is not None
         else None
     )
+    resource_receipt = (
+        _read_object(
+            arguments.resource_acceptance_receipt,
+            "resource acceptance receipt",
+            maximum_bytes=MAX_RESOURCE_RECEIPT_BYTES,
+        )
+        if arguments.resource_acceptance_receipt is not None
+        else None
+    )
     if arguments.category == "tokenizer_fidelity":
         raw_records = (
             tokenizer_receipt.get("records")
@@ -313,6 +329,15 @@ def main() -> int:
         if type(raw_record) is not dict:
             raise ValueError("regression receipt category record is invalid")
         records = [raw_record]
+    elif arguments.category == "resources":
+        raw_record = (
+            resource_receipt.get("record")
+            if resource_receipt is not None
+            else None
+        )
+        if type(raw_record) is not dict:
+            raise ValueError("resource receipt category record is invalid")
+        records = [raw_record]
     else:
         if arguments.records is None:
             raise RuntimeError("validated category records path is missing")
@@ -336,6 +361,7 @@ def main() -> int:
         tokenizer_fidelity_receipt=tokenizer_receipt,
         code_acceptance_receipt=code_receipt,
         semantic_acceptance_receipt=semantic_receipt,
+        resource_acceptance_receipt=resource_receipt,
     )
     publish_model_category_evidence(arguments.output, payload)
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
