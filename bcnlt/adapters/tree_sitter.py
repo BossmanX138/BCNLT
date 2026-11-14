@@ -16,7 +16,7 @@ from bcnlt.semantic_schema import SEMANTIC_SCHEMA_VERSION
 from bcnlt.uncertainty import KnowledgeBoundaryAssessment
 
 from .carousel import LanguageCartridge
-from .coverage import SemanticCoverage, SemanticExtraction
+from .coverage import SemanticCoverage, SemanticExtraction, is_unresolved_unknown
 from .spec import IdentifierRoleRule, NodeRule, ScopeRule
 from .symbols import LexicalSymbolTable
 
@@ -63,6 +63,7 @@ class TreeSitterSemanticEngine:
         wildcard_memory_root: str | Path | None = None,
         wildcard_memory_path: str | Path | None = None,
         wildcard_memory_storage: Literal["jsonl", "sqlite"] = "jsonl",
+        wildcard_memory_read_only: bool = False,
     ) -> None:
         self._parser_provider = parser_provider or _default_parser_provider
         self._wildcard_memory_root = (
@@ -73,6 +74,7 @@ class TreeSitterSemanticEngine:
             memory_root=self._wildcard_memory_root,
             memory_path=wildcard_memory_path,
             memory_storage=wildcard_memory_storage,
+            memory_read_only=wildcard_memory_read_only,
         )
 
     def close(self) -> None:
@@ -153,7 +155,9 @@ class TreeSitterSemanticEngine:
             return (row + 1, column, row + 1, column)
 
         def field(node: Any, name: str | None) -> Any | None:
-            if not name:
+            if name == "":
+                return node
+            if name is None:
                 return None
             current = node
             for segment in name.split("."):
@@ -228,25 +232,43 @@ class TreeSitterSemanticEngine:
                 total_named_nodes += 1
                 named_nodes.add(key)
 
-            roles: dict[str, tuple[str, str | None, Any]] = {}
+            roles: dict[str, tuple[str, str | None, Any, str]] = {}
             for role_rule in role_rules.get(str(node.type), ()):
                 child = field(node, role_rule.field_name)
                 if child is None:
                     continue
                 child_key = node_key(child)
+                if role_rule.role == "reference" and child_key in definition_owned_nodes:
+                    continue
                 if bool(getattr(child, "is_named", False)):
                     mapped_nodes.add(child_key)
                 name = text(child)
                 child_span = span(child)
                 if role_rule.role == "definition":
                     definition_owned_nodes.add(child_key)
-                    symbol_id = symbols.define(name, child_span)
+                    binding_scope = symbols.scope
+                    parent = getattr(node, "parent", None)
+                    is_javascript_var = (
+                        document.language in {"javascript", "typescript"}
+                        and str(node.type) == "variable_declarator"
+                        and parent is not None
+                        and str(parent.type) == "variable_declaration"
+                        and text(parent).lstrip().startswith("var ")
+                    )
+                    if is_javascript_var:
+                        symbol_id, binding_scope = symbols.define_in_enclosing(
+                            name,
+                            child_span,
+                            kinds=frozenset({"function", "module"}),
+                        )
+                    else:
+                        symbol_id = symbols.define(name, child_span)
                     document.index.define(document.path, symbol_id, name, child_span)
-                    roles[role_rule.field_name] = (name, symbol_id, child)
+                    roles[role_rule.field_name] = (name, symbol_id, child, binding_scope)
                 elif role_rule.role == "reference":
                     symbol_id = symbols.resolve(name)
                     document.index.reference(document.path, symbol_id, name, child_span)
-                    roles[role_rule.field_name] = (name, symbol_id, child)
+                    roles[role_rule.field_name] = (name, symbol_id, child, symbols.scope)
                 else:
                     raise ValueError(f"Unsupported identifier role: {role_rule.role}")
 
@@ -296,15 +318,22 @@ class TreeSitterSemanticEngine:
                     defines=defines,
                     ir=self._ir_for(rule, surface, document.language, node.type),
                     metadata=metadata_for(str(node.type)),
+                    scope=(
+                        role[3]
+                        if role
+                        and _role_for(role_rules, node.type, rule.surface_field)
+                        == "definition"
+                        else None
+                    ),
                 )
 
             for role_rule in role_rules.get(str(node.type), ()):
-                if any(rule.surface_field == role_rule.field_name for rule in rules):
+                if any((rule.surface_field or "") == role_rule.field_name for rule in rules):
                     continue
                 role = roles.get(role_rule.field_name)
                 if role is None:
                     continue
-                name, symbol_id, child = role
+                name, symbol_id, child, binding_scope = role
                 event = "DEFINE" if role_rule.role == "definition" else "REFERENCE"
                 emit(
                     surface=name,
@@ -314,6 +343,7 @@ class TreeSitterSemanticEngine:
                     symbol_id=symbol_id,
                     defines=symbol_id if role_rule.role == "reference" else None,
                     ir=self._core.variable(name),
+                    scope=binding_scope if role_rule.role == "definition" else None,
                 )
 
             active_scope: ScopeRule | None = None
@@ -390,11 +420,7 @@ class TreeSitterSemanticEngine:
             for unit in assessed_units
             if unit.ir is not None and unit.ir.kind is not IRKind.EXTENSION
         )
-        unknown_units = sum(
-            unit.event == "UNKNOWN_SEMANTIC"
-            and unit.metadata.get("learned_definition_state") != "validated"
-            for unit in assessed_units
-        )
+        unknown_units = sum(is_unresolved_unknown(unit) for unit in assessed_units)
         links_valid = all(
             unit.defines is None or unit.defines in document.index.definitions
             for unit in assessed_units
@@ -468,6 +494,6 @@ def _role_for(
     field_name: str | None,
 ) -> str | None:
     for rule in rules.get(str(node_type), ()):
-        if rule.field_name == field_name:
+        if rule.field_name == (field_name or ""):
             return rule.role
     return None

@@ -615,7 +615,13 @@ def _literal_type(record: SemanticTokenRecord) -> str:
     if record.ir is None:
         return "unknown"
     value = thaw_json(record.ir.value)
-    return type(value).__name__
+    if value is not None or record.ir.name is None:
+        return type(value).__name__
+    if record.ast_relation:
+        relation = record.ast_relation.split(".", 1)[0].strip()
+        if relation:
+            return relation
+    return record.ir.kind
 
 
 def _scope_depth(scope: str) -> int:

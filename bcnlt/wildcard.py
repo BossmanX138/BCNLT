@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 import sqlite3
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from enum import Enum
 from pathlib import Path
 from typing import Literal
@@ -12,7 +12,22 @@ from typing import Literal
 from .cache import ProjectIndex
 from .core import ContextualUnit
 from .events import SemanticEvent
+from .extended_core import (
+    ExtendedCoreEntry,
+    ExtendedCoreLibrary,
+    extended_core_id,
+    optional_common_core_projection,
+)
 from .ir import COMMON_CODING_CONCEPTS, IRKind
+from .scientific_learning import (
+    VERIFIER_ID,
+    VERIFIER_VERSION,
+    BoundedProjectionVerifier,
+    CodingExperimentFixture,
+    HypothesisProjection,
+    ScientificExperimentEvidence,
+    VerificationStatus,
+)
 
 
 MAX_EVIDENCE_ITEMS = 64
@@ -20,6 +35,7 @@ MAX_HYPOTHESIS_ITEMS = 16
 MAX_EVIDENCE_KIND_ITEMS = 16
 MAX_CONTEXT_FINGERPRINTS = 64
 MAX_DOCUMENT_IDENTITIES = 64
+MAX_SCIENTIFIC_EXPERIMENTS = 256
 
 
 class DefinitionState(str, Enum):
@@ -36,6 +52,19 @@ class ProvisionalMeaning:
     target_event: str | None = None
     target_ir_kind: str | None = None
     evidence_kinds: tuple[str, ...] = ()
+    extension_name: str | None = None
+
+
+@dataclass(frozen=True)
+class CodingOutcomeEvidence:
+    context_fingerprint: str
+    document_identity: str
+    target_event: str
+    target_ir_kind: str
+    verification_oracle: str
+    result_fingerprint: str
+    correct: bool
+    evidence: tuple[str, ...] = ()
     extension_name: str | None = None
 
 
@@ -59,6 +88,12 @@ class WildcardMemoryRecord:
     document_identities: tuple[str, ...] = ()
     validated_by: str | None = None
     extension_name: str | None = None
+    coding_outcomes: tuple[CodingOutcomeEvidence, ...] = ()
+    learning_schema_version: int = 1
+    hypothesis_revision: int = 1
+    hypothesis_fingerprint: str | None = None
+    validated_domain: str | None = None
+    scientific_experiments: tuple[ScientificExperimentEvidence, ...] = ()
 
 
 class WildcardMemory:
@@ -71,13 +106,24 @@ class WildcardMemory:
         language: str = "python",
         semantic_spec_sha256: str = "legacy-python",
         storage: Literal["jsonl", "sqlite"] = "jsonl",
+        minimum_reproductions: int = 3,
+        read_only: bool = False,
     ) -> None:
         self.path = Path(path) if path is not None else None
         self.language = language
         self.semantic_spec_sha256 = semantic_spec_sha256
         self.storage = storage
+        self.read_only = read_only
+        if (
+            not isinstance(minimum_reproductions, int)
+            or isinstance(minimum_reproductions, bool)
+            or minimum_reproductions < 2
+        ):
+            raise ValueError("Scientific learning requires at least two reproductions")
+        self.minimum_reproductions = minimum_reproductions
         self.records: dict[str, WildcardMemoryRecord] = {}
         self.load_warnings: list[str] = []
+        self._truncated_tail_offset: int | None = None
         self._sqlite: sqlite3.Connection | None = None
         self._sqlite_pending = 0
         if storage == "sqlite":
@@ -100,13 +146,32 @@ class WildcardMemory:
     def lookup(self, unit: ContextualUnit) -> WildcardMemoryRecord | None:
         return self._lookup_signature(self.signature_for(unit))
 
+    def validated_extended_core(self) -> ExtendedCoreLibrary:
+        if self._sqlite is None:
+            records = tuple(self.records.values())
+        else:
+            rows = self._sqlite.execute(
+                "SELECT payload FROM wildcard_definitions ORDER BY signature"
+            ).fetchall()
+            records = tuple(
+                _record_from_json(
+                    json.loads(str(row[0])),
+                    minimum_reproductions=self.minimum_reproductions,
+                )
+                for row in rows
+            )
+        return ExtendedCoreLibrary(
+            entry
+            for record in records
+            if (entry := _extended_core_entry(record)) is not None
+        )
+
     def context_fingerprint_for(
         self,
         unit: ContextualUnit,
         document_identity: str | None = None,
     ) -> str:
         payload = {
-            "document": document_identity or "<unknown>",
             "scope": unit.scope,
             "span": unit.span,
             "relation": unit.ast_relation,
@@ -122,6 +187,8 @@ class WildcardMemory:
         *,
         document_identity: str | None = None,
     ) -> WildcardMemoryRecord:
+        if self.read_only:
+            raise RuntimeError("Frozen wildcard memory is read-only")
         signature = self.signature_for(unit)
         previous = self._lookup_signature(signature)
         seen_count = 1 if previous is None else previous.seen_count + 1
@@ -181,27 +248,21 @@ class WildcardMemory:
                 limit=MAX_EVIDENCE_KIND_ITEMS,
             )
         validated_by = previous.validated_by if previous else None
-        required_contexts = 3 if target_ir_kind == IRKind.EXTENSION.value else 2
-        if (
-            definition_state is DefinitionState.PROVISIONAL
-            and targets_agree
-            and target_event is not None
-            and target_ir_kind is not None
-            and len(context_fingerprints) >= required_contexts
-            and len(document_identities) >= 2
-            and len(evidence_kinds) >= 3
-        ):
-            definition_state = DefinitionState.VALIDATED
-            validated_by = "autonomous"
-            confidence = max(confidence, 0.82)
-            evidence = _merge_tuple(
-                (
-                    "autonomous-validation:independent-contexts="
-                    f"{len(context_fingerprints)};evidence-kinds={len(evidence_kinds)}",
-                ),
-                evidence,
-                limit=MAX_EVIDENCE_ITEMS,
-            )
+        hypothesis_revision = previous.hypothesis_revision if previous else 1
+        projection_changed = previous is not None and (
+            target_event,
+            target_ir_kind,
+            extension_name,
+        ) != (
+            previous.target_event,
+            previous.target_ir_kind,
+            previous.extension_name,
+        )
+        if projection_changed:
+            hypothesis_revision += 1
+        if not targets_agree:
+            definition_state = DefinitionState.PROVISIONAL
+            validated_by = None
         record = WildcardMemoryRecord(
             signature=signature,
             surface=unit.surface,
@@ -221,7 +282,90 @@ class WildcardMemory:
             document_identities=document_identities,
             validated_by=validated_by,
             extension_name=extension_name,
+            coding_outcomes=previous.coding_outcomes if previous else (),
+            hypothesis_revision=hypothesis_revision,
+            hypothesis_fingerprint=_hypothesis_fingerprint(
+                signature=signature,
+                revision=hypothesis_revision,
+                target_event=target_event,
+                target_ir_kind=target_ir_kind,
+                language=self.language,
+                semantic_spec_sha256=self.semantic_spec_sha256,
+                extension_name=extension_name,
+            ),
+            validated_domain=(
+                None if projection_changed else (previous.validated_domain if previous else None)
+            ),
+            scientific_experiments=(
+                previous.scientific_experiments if previous else ()
+            ),
         )
+        record = _derive_scientific_state(record, self.minimum_reproductions)
+        self._append(record)
+        return record
+
+    def run_scientific_experiment(
+        self,
+        unit: ContextualUnit,
+        *,
+        source: str,
+        fixture: CodingExperimentFixture,
+        negative_control: HypothesisProjection,
+        verifier: BoundedProjectionVerifier | None = None,
+    ) -> WildcardMemoryRecord:
+        if self.read_only:
+            raise RuntimeError("Frozen wildcard memory is read-only")
+        previous = self.lookup(unit)
+        if previous is None:
+            raise ValueError("Cannot test a hypothesis that wildcard memory has not observed")
+        if previous.target_event is None or previous.target_ir_kind is None:
+            raise ValueError("Wildcard hypothesis has no testable Common Core projection")
+        if fixture.document_identity not in previous.document_identities:
+            raise ValueError("Experiment fixture document identity was not independently observed")
+        context_fingerprint = self.context_fingerprint_for(unit, fixture.document_identity)
+        if context_fingerprint not in previous.context_fingerprints:
+            raise ValueError("Experiment fixture does not match an observed wildcard context")
+        candidate = HypothesisProjection(
+            signature=previous.signature,
+            revision=previous.hypothesis_revision,
+            target_event=previous.target_event,
+            target_ir_kind=previous.target_ir_kind,
+            language=previous.language,
+            semantic_spec_sha256=previous.semantic_spec_sha256,
+            extension_name=previous.extension_name,
+        )
+        if (
+            negative_control.signature != candidate.signature
+            or negative_control.revision != candidate.revision
+            or negative_control.language != candidate.language
+            or negative_control.semantic_spec_sha256 != candidate.semantic_spec_sha256
+        ):
+            raise ValueError("Negative control must use the current hypothesis revision and lineage")
+        result = (verifier or BoundedProjectionVerifier()).verify(
+            candidate,
+            fixture,
+            source=source,
+            context_fingerprint=context_fingerprint,
+            negative_control=negative_control,
+        )
+        experiments = _merge_scientific_experiments(
+            previous.scientific_experiments,
+            (result,),
+        )
+        record = replace(
+            previous,
+            definition_state=DefinitionState.PROVISIONAL,
+            validated_by=None,
+            validated_domain=None,
+            confidence=min(0.71, previous.confidence),
+            evidence_kinds=_merge_tuple(
+                previous.evidence_kinds,
+                ("scientific_experiment",),
+                limit=MAX_EVIDENCE_KIND_ITEMS,
+            ),
+            scientific_experiments=experiments,
+        )
+        record = _derive_scientific_state(record, self.minimum_reproductions)
         self._append(record)
         return record
 
@@ -232,11 +376,35 @@ class WildcardMemory:
         target_event: str,
         target_ir_kind: str,
         evidence: tuple[str, ...],
+        document_identity: str,
+        verification_oracle: str,
+        result_fingerprint: str,
         extension_name: str | None = None,
     ) -> WildcardMemoryRecord:
+        raise RuntimeError(
+            "Direct metadata-only validation is disabled; use the executable bounded "
+            "run_scientific_experiment path for promotion, or record_coding_outcome "
+            "only to retain provisional caller-reported evidence"
+        )
+
+    def record_coding_outcome(
+        self,
+        unit: ContextualUnit,
+        *,
+        target_event: str,
+        target_ir_kind: str,
+        evidence: tuple[str, ...],
+        document_identity: str,
+        verification_oracle: str,
+        result_fingerprint: str,
+        correct: bool,
+        extension_name: str | None = None,
+    ) -> WildcardMemoryRecord:
+        if self.read_only:
+            raise RuntimeError("Frozen wildcard memory is read-only")
         previous = self.lookup(unit)
         if previous is None:
-            raise ValueError("Cannot validate a definition that wildcard memory has not observed")
+            raise ValueError("Cannot verify a definition that wildcard memory has not observed")
         event = SemanticEvent(target_event).value
         ir_kind = IRKind(target_ir_kind)
         allowed_pairs = {(item.event, item.ir_kind) for item in COMMON_CODING_CONCEPTS}
@@ -249,6 +417,65 @@ class WildcardMemory:
             raise ValueError("Validated event and IR kind must name one Common Core concept")
         if not evidence or any(not item.strip() for item in evidence):
             raise ValueError("Validation requires non-empty evidence")
+        if not document_identity.strip():
+            raise ValueError("Validation requires a document identity")
+        if not verification_oracle.strip():
+            raise ValueError("Validation requires the independent verification oracle")
+        if not result_fingerprint.strip():
+            raise ValueError("Validation requires a coding-result fingerprint")
+        if type(correct) is not bool:
+            raise TypeError("correct must be a real boolean")
+        context_fingerprint = self.context_fingerprint_for(unit, document_identity)
+        if (
+            context_fingerprint not in previous.context_fingerprints
+            or document_identity not in previous.document_identities
+        ):
+            raise ValueError(
+                "Coding outcomes must correspond to an independently observed wildcard context"
+            )
+        normalized_extension = extension_name.strip() if extension_name else None
+        outcome = CodingOutcomeEvidence(
+            context_fingerprint=context_fingerprint,
+            document_identity=document_identity,
+            target_event=event,
+            target_ir_kind=ir_kind.value,
+            verification_oracle=verification_oracle.strip(),
+            result_fingerprint=result_fingerprint.strip(),
+            correct=correct,
+            evidence=evidence,
+            extension_name=normalized_extension,
+        )
+        outcomes = _merge_outcomes(previous.coding_outcomes, (outcome,))
+        latest_by_context = {item.context_fingerprint: item for item in outcomes}
+        expected_extension = normalized_extension or previous.extension_name
+        agreed = [
+            item
+            for item in latest_by_context.values()
+            if item.correct
+            and item.target_event == previous.target_event
+            and item.target_ir_kind == previous.target_ir_kind
+            and (
+                item.target_ir_kind != IRKind.EXTENSION.value
+                or item.extension_name == expected_extension
+            )
+        ]
+        required_contexts = 3 if previous.target_ir_kind == IRKind.EXTENSION.value else 2
+        reproduced = (
+            len(agreed) >= required_contexts
+            and len({item.document_identity for item in agreed}) >= 2
+            and len(agreed) == len(latest_by_context)
+        )
+        evidence_kinds = _merge_tuple(
+            previous.evidence_kinds,
+            ("coding_outcome_observation",),
+            limit=MAX_EVIDENCE_KIND_ITEMS,
+        )
+        if reproduced:
+            evidence_kinds = _merge_tuple(
+                evidence_kinds,
+                ("reproduced_claim_pending_verifier",),
+                limit=MAX_EVIDENCE_KIND_ITEMS,
+            )
         record = WildcardMemoryRecord(
             signature=previous.signature,
             surface=previous.surface,
@@ -256,22 +483,24 @@ class WildcardMemory:
             category=previous.category,
             hypotheses=previous.hypotheses,
             evidence=_merge_tuple(evidence, previous.evidence, limit=MAX_EVIDENCE_ITEMS),
-            confidence=max(0.9, previous.confidence),
+            confidence=min(0.71, previous.confidence),
             seen_count=previous.seen_count,
             language=previous.language,
             semantic_spec_sha256=previous.semantic_spec_sha256,
-            definition_state=DefinitionState.VALIDATED,
-            target_event=event,
-            target_ir_kind=ir_kind.value,
-            evidence_kinds=_merge_tuple(
-                ("external_validation",),
-                previous.evidence_kinds,
-                limit=MAX_EVIDENCE_KIND_ITEMS,
-            ),
+            definition_state=DefinitionState.PROVISIONAL,
+            target_event=previous.target_event,
+            target_ir_kind=previous.target_ir_kind,
+            evidence_kinds=evidence_kinds,
             context_fingerprints=previous.context_fingerprints,
             document_identities=previous.document_identities,
-            validated_by="evidence",
-            extension_name=extension_name.strip() if extension_name else None,
+            validated_by=None,
+            extension_name=expected_extension,
+            coding_outcomes=outcomes,
+            learning_schema_version=previous.learning_schema_version,
+            hypothesis_revision=previous.hypothesis_revision,
+            hypothesis_fingerprint=previous.hypothesis_fingerprint,
+            validated_domain=None,
+            scientific_experiments=previous.scientific_experiments,
         )
         self._append(record)
         return record
@@ -296,6 +525,10 @@ class WildcardMemory:
         self.records[record.signature] = record
         if self.path is not None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
+            if self._truncated_tail_offset is not None:
+                with self.path.open("r+b") as handle:
+                    handle.truncate(self._truncated_tail_offset)
+                self._truncated_tail_offset = None
             with self.path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(_record_to_json(record), sort_keys=True) + "\n")
 
@@ -308,10 +541,31 @@ class WildcardMemory:
         ).fetchone()
         if row is None:
             return None
-        return _record_from_json(json.loads(str(row[0])))
+        return _record_from_json(
+            json.loads(str(row[0])),
+            minimum_reproductions=self.minimum_reproductions,
+        )
 
     def _open_sqlite(self) -> None:
         assert self.path is not None
+        if self.read_only:
+            if not self.path.is_file():
+                return
+            connection = sqlite3.connect(
+                f"{self.path.resolve().as_uri()}?mode=ro&immutable=1",
+                uri=True,
+            )
+            metadata = {
+                "schema_version": "bcnlt-wildcard-sqlite-v1",
+                "language": self.language,
+                "semantic_spec_sha256": self.semantic_spec_sha256,
+            }
+            existing = dict(connection.execute("SELECT key, value FROM wildcard_metadata"))
+            if existing != metadata:
+                connection.close()
+                raise ValueError("SQLite wildcard memory metadata does not match this cartridge")
+            self._sqlite = connection
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(self.path)
         connection.execute("PRAGMA journal_mode=WAL")
@@ -343,7 +597,7 @@ class WildcardMemory:
         self._sqlite = connection
 
     def flush(self) -> None:
-        if self._sqlite is None:
+        if self._sqlite is None or self.read_only:
             return
         self._sqlite.commit()
         self._sqlite.execute("BEGIN")
@@ -354,6 +608,9 @@ class WildcardMemory:
             return
         connection = self._sqlite
         self._sqlite = None
+        if self.read_only:
+            connection.close()
+            return
         connection.commit()
         connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         connection.close()
@@ -362,18 +619,20 @@ class WildcardMemory:
     def _load(self) -> None:
         if self.path is None:
             return
-        lines = [
-            (line_number, line)
-            for line_number, line in enumerate(
-                self.path.read_text(encoding="utf-8").splitlines(), start=1
-            )
-            if line.strip()
-        ]
-        for position, (line_number, line) in enumerate(lines):
+        raw_lines = self.path.read_bytes().decode("utf-8").splitlines(keepends=True)
+        lines: list[tuple[int, str, int]] = []
+        byte_offset = 0
+        for line_number, raw_line in enumerate(raw_lines, start=1):
+            line = raw_line.rstrip("\r\n")
+            if line.strip():
+                lines.append((line_number, line, byte_offset))
+            byte_offset += len(raw_line.encode("utf-8"))
+        for position, (line_number, line, line_offset) in enumerate(lines):
             try:
                 payload = json.loads(line)
             except json.JSONDecodeError as exc:
                 if position == len(lines) - 1:
+                    self._truncated_tail_offset = line_offset
                     self.load_warnings.append(
                         f"ignored truncated final learned-memory record at line {line_number}: {exc.msg}"
                     )
@@ -381,18 +640,30 @@ class WildcardMemory:
                 raise ValueError(
                     f"Malformed learned-memory record at line {line_number}: {exc.msg}"
                 ) from exc
-            record = _record_from_json(payload)
+            record = _record_from_json(
+                payload,
+                minimum_reproductions=self.minimum_reproductions,
+            )
             previous = self.records.get(record.signature)
             if previous is None:
                 self.records[record.signature] = record
                 continue
-            newer = record
+            if record.hypothesis_revision < previous.hypothesis_revision:
+                raise ValueError(
+                    "Learned-memory hypothesis revision rollback at line "
+                    f"{line_number}: {record.hypothesis_revision} < "
+                    f"{previous.hypothesis_revision}"
+                )
             if (
-                previous.definition_state is DefinitionState.VALIDATED
-                and record.definition_state is DefinitionState.PROVISIONAL
+                record.hypothesis_revision == previous.hypothesis_revision
+                and record.hypothesis_fingerprint != previous.hypothesis_fingerprint
             ):
-                newer = previous
-            self.records[record.signature] = WildcardMemoryRecord(
+                raise ValueError(
+                    "Conflicting learned-memory hypothesis at the same revision "
+                    f"on line {line_number}"
+                )
+            newer = record
+            merged = WildcardMemoryRecord(
                 signature=record.signature,
                 surface=newer.surface or previous.surface,
                 relation=newer.relation or previous.relation,
@@ -429,8 +700,22 @@ class WildcardMemory:
                     record.document_identities,
                     limit=MAX_DOCUMENT_IDENTITIES,
                 ),
-                validated_by=newer.validated_by or previous.validated_by,
+                validated_by=newer.validated_by,
                 extension_name=newer.extension_name or previous.extension_name,
+                coding_outcomes=_merge_outcomes(
+                    previous.coding_outcomes, record.coding_outcomes
+                ),
+                learning_schema_version=newer.learning_schema_version,
+                hypothesis_revision=newer.hypothesis_revision,
+                hypothesis_fingerprint=newer.hypothesis_fingerprint,
+                validated_domain=newer.validated_domain,
+                scientific_experiments=_merge_scientific_experiments(
+                    previous.scientific_experiments,
+                    record.scientific_experiments,
+                ),
+            )
+            self.records[record.signature] = _derive_scientific_state(
+                merged, self.minimum_reproductions
             )
 
 
@@ -533,6 +818,46 @@ class WildcardResolver:
         return meaning
 
 
+def _extended_core_entry(record: WildcardMemoryRecord) -> ExtendedCoreEntry | None:
+    if (
+        record.definition_state is not DefinitionState.VALIDATED
+        or record.hypothesis_fingerprint is None
+        or record.target_event is None
+        or record.target_ir_kind is None
+        or record.validated_domain is None
+    ):
+        return None
+    return ExtendedCoreEntry(
+        extended_core_id=extended_core_id(
+            language=record.language,
+            signature=record.signature,
+            revision=record.hypothesis_revision,
+        ),
+        signature=record.signature,
+        revision=record.hypothesis_revision,
+        language=record.language,
+        semantic_spec_sha256=record.semantic_spec_sha256,
+        surface=record.surface,
+        relation=record.relation,
+        category=record.category,
+        hypotheses=record.hypotheses,
+        evidence=record.evidence,
+        confidence=record.confidence,
+        validated_domain=record.validated_domain,
+        common_core_projection=optional_common_core_projection(
+            event=record.target_event,
+            ir_kind=record.target_ir_kind,
+        ),
+        evidence_sha256=tuple(
+            item.evidence_sha256
+            for item in record.scientific_experiments
+            if item.hypothesis_fingerprint == record.hypothesis_fingerprint
+            and item.status is VerificationStatus.PASSED
+        ),
+        extension_name=record.extension_name,
+    )
+
+
 def _merge_tuple(
     left: tuple[str, ...],
     right: tuple[str, ...],
@@ -548,6 +873,130 @@ def _merge_tuple(
             if limit is not None and len(merged) >= limit:
                 break
     return tuple(merged)
+
+
+def _merge_outcomes(
+    left: tuple[CodingOutcomeEvidence, ...],
+    right: tuple[CodingOutcomeEvidence, ...],
+) -> tuple[CodingOutcomeEvidence, ...]:
+    merged: list[CodingOutcomeEvidence] = []
+    for item in (*left, *right):
+        if item not in merged:
+            merged.append(item)
+    return tuple(merged)
+
+
+def _merge_scientific_experiments(
+    left: tuple[ScientificExperimentEvidence, ...],
+    right: tuple[ScientificExperimentEvidence, ...],
+) -> tuple[ScientificExperimentEvidence, ...]:
+    merged: list[ScientificExperimentEvidence] = []
+    seen: set[str] = set()
+    for item in (*left, *right):
+        if item.evidence_sha256 in seen:
+            continue
+        seen.add(item.evidence_sha256)
+        merged.append(item)
+    return tuple(merged[-MAX_SCIENTIFIC_EXPERIMENTS:])
+
+
+def _hypothesis_fingerprint(
+    *,
+    signature: str,
+    revision: int,
+    target_event: str | None,
+    target_ir_kind: str | None,
+    language: str,
+    semantic_spec_sha256: str,
+    extension_name: str | None,
+) -> str | None:
+    if target_event is None or target_ir_kind is None:
+        return None
+    return HypothesisProjection(
+        signature=signature,
+        revision=revision,
+        target_event=target_event,
+        target_ir_kind=target_ir_kind,
+        language=language,
+        semantic_spec_sha256=semantic_spec_sha256,
+        extension_name=extension_name,
+    ).fingerprint
+
+
+def _derive_scientific_state(
+    record: WildcardMemoryRecord,
+    minimum_reproductions: int,
+) -> WildcardMemoryRecord:
+    evidence_kinds = tuple(
+        item
+        for item in record.evidence_kinds
+        if item not in {"scientifically_reproduced", "scientific_contradiction"}
+    )
+    current = tuple(
+        item
+        for item in record.scientific_experiments
+        if item.hypothesis_fingerprint == record.hypothesis_fingerprint
+        and item.hypothesis_revision == record.hypothesis_revision
+        and item.language == record.language
+        and item.semantic_spec_sha256 == record.semantic_spec_sha256
+        and item.verifier_id == VERIFIER_ID
+        and item.verifier_version == VERIFIER_VERSION
+    )
+    if not current:
+        return replace(
+            record,
+            definition_state=DefinitionState.PROVISIONAL,
+            validated_by=None,
+            validated_domain=None,
+            confidence=min(0.71, record.confidence),
+            evidence_kinds=evidence_kinds,
+        )
+    if any(item.status is not VerificationStatus.PASSED for item in current):
+        return replace(
+            record,
+            definition_state=DefinitionState.PROVISIONAL,
+            validated_by=None,
+            validated_domain=None,
+            confidence=min(0.71, record.confidence),
+            evidence_kinds=_merge_tuple(
+                evidence_kinds,
+                ("scientific_contradiction",),
+                limit=MAX_EVIDENCE_KIND_ITEMS,
+            ),
+        )
+    by_domain: dict[str, list[ScientificExperimentEvidence]] = {}
+    for item in current:
+        by_domain.setdefault(item.domain, []).append(item)
+    for domain, items in by_domain.items():
+        unique = {item.independence_key: item for item in items}.values()
+        if (
+            len(unique) >= minimum_reproductions
+            and len({item.context_fingerprint for item in unique}) >= minimum_reproductions
+            and len({item.document_identity for item in unique}) >= minimum_reproductions
+            and len({item.stimulus_sha256 for item in unique}) >= minimum_reproductions
+            and len({item.source_sha256 for item in unique}) >= 2
+            and all(item.intended_passed and item.negative_control_rejected for item in unique)
+        ):
+            return replace(
+                record,
+                definition_state=DefinitionState.VALIDATED,
+                validated_by=f"{VERIFIER_ID}:{VERIFIER_VERSION}",
+                validated_domain=domain,
+                confidence=max(0.9, record.confidence),
+                evidence_kinds=_merge_tuple(
+                    evidence_kinds,
+                    ("scientifically_reproduced",),
+                    limit=MAX_EVIDENCE_KIND_ITEMS,
+                ),
+            )
+    return replace(
+        record,
+        definition_state=DefinitionState.PROVISIONAL,
+        validated_by=None,
+        validated_domain=None,
+        confidence=min(0.71, record.confidence),
+        evidence_kinds=evidence_kinds,
+    )
 
 
 def _infer_target(
@@ -594,11 +1043,22 @@ def _record_to_json(record: WildcardMemoryRecord) -> dict[str, object]:
     payload["evidence_kinds"] = list(record.evidence_kinds)
     payload["context_fingerprints"] = list(record.context_fingerprints)
     payload["document_identities"] = list(record.document_identities)
+    payload["coding_outcomes"] = [
+        {**asdict(item), "evidence": list(item.evidence)}
+        for item in record.coding_outcomes
+    ]
+    payload["scientific_experiments"] = [
+        item.to_dict() for item in record.scientific_experiments
+    ]
     return payload
 
 
-def _record_from_json(payload: dict[str, object]) -> WildcardMemoryRecord:
-    return WildcardMemoryRecord(
+def _record_from_json(
+    payload: dict[str, object],
+    *,
+    minimum_reproductions: int = 3,
+) -> WildcardMemoryRecord:
+    record = WildcardMemoryRecord(
         signature=str(payload["signature"]),
         surface=str(payload.get("surface", "")),
         relation=str(payload.get("relation", "")),
@@ -635,4 +1095,72 @@ def _record_from_json(payload: dict[str, object]) -> WildcardMemoryRecord:
             if payload.get("extension_name") is not None
             else None
         ),
+        coding_outcomes=_coding_outcomes_from_json(payload),
+        learning_schema_version=int(payload.get("learning_schema_version", 1)),
+        hypothesis_revision=int(payload.get("hypothesis_revision", 1)),
+        hypothesis_fingerprint=(
+            str(payload["hypothesis_fingerprint"])
+            if payload.get("hypothesis_fingerprint") is not None
+            else None
+        ),
+        validated_domain=(
+            str(payload["validated_domain"])
+            if payload.get("validated_domain") is not None
+            else None
+        ),
+        scientific_experiments=_scientific_experiments_from_json(payload),
     )
+    # A stored fingerprint is evidence metadata, not authority. Recompute it
+    # from the stored projection so edited event/IR fields cannot inherit
+    # validation earned by a different hypothesis.
+    record = replace(
+        record,
+        hypothesis_fingerprint=_hypothesis_fingerprint(
+            signature=record.signature,
+            revision=record.hypothesis_revision,
+            target_event=record.target_event,
+            target_ir_kind=record.target_ir_kind,
+            language=record.language,
+            semantic_spec_sha256=record.semantic_spec_sha256,
+            extension_name=record.extension_name,
+        ),
+    )
+    return _derive_scientific_state(record, minimum_reproductions)
+
+
+def _coding_outcomes_from_json(
+    payload: dict[str, object],
+) -> tuple[CodingOutcomeEvidence, ...]:
+    outcomes: list[CodingOutcomeEvidence] = []
+    for item in payload.get("coding_outcomes", ()):
+        correct = item["correct"]
+        if type(correct) is not bool:
+            raise ValueError("Persisted coding-outcome correct value must be boolean")
+        outcomes.append(
+            CodingOutcomeEvidence(
+                context_fingerprint=str(item["context_fingerprint"]),
+                document_identity=str(item["document_identity"]),
+                target_event=str(item["target_event"]),
+                target_ir_kind=str(item["target_ir_kind"]),
+                verification_oracle=str(item["verification_oracle"]),
+                result_fingerprint=str(item["result_fingerprint"]),
+                correct=correct,
+                evidence=tuple(item.get("evidence", ())),
+                extension_name=item.get("extension_name"),
+            )
+        )
+    return tuple(outcomes)
+
+
+def _scientific_experiments_from_json(
+    payload: dict[str, object],
+) -> tuple[ScientificExperimentEvidence, ...]:
+    experiments: list[ScientificExperimentEvidence] = []
+    raw = payload.get("scientific_experiments", ())
+    if not isinstance(raw, (list, tuple)):
+        raise ValueError("Persisted scientific experiments must be a list")
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValueError("Persisted scientific experiment must be an object")
+        experiments.append(ScientificExperimentEvidence.from_dict(item))
+    return tuple(experiments)

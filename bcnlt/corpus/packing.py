@@ -5,6 +5,7 @@ import json
 import sqlite3
 import struct
 import tempfile
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -85,8 +86,9 @@ def pack_training_shards(
     manifest_digest, vocab_size = _tokenizer_identity(tokenizer)
     output = Path(output_path)
     manifest_path = output / "dataset_manifest.json"
-    with tempfile.TemporaryDirectory(prefix="bcnlt-packing-") as state_root:
-        state = sqlite3.connect(Path(state_root) / "packing-state.sqlite3")
+    with tempfile.TemporaryDirectory(prefix="bcnlt-packing-") as state_root, closing(
+        sqlite3.connect(Path(state_root) / "packing-state.sqlite3")
+    ) as state:
         state.execute("PRAGMA journal_mode=WAL")
         state.execute("PRAGMA synchronous=NORMAL")
         state.execute("PRAGMA temp_store=FILE")

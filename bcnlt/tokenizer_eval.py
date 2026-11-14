@@ -107,6 +107,29 @@ class PromotionDecision:
         return {"promoted": self.promoted, "failure_codes": list(self.failure_codes)}
 
 
+def freeze_evaluation_artifact(
+    evaluation: EvaluationRun,
+    *,
+    artifact_role: str,
+    artifact_sha256: str,
+) -> dict[str, object]:
+    if not artifact_role:
+        raise ValueError("evaluated artifact role is required")
+    if not (
+        len(artifact_sha256) == 64
+        and all(character in "0123456789abcdef" for character in artifact_sha256)
+    ):
+        raise ValueError("evaluated artifact requires a lowercase SHA-256 digest")
+    return {
+        "schema_version": "bcnlt-model-evaluation-v1",
+        "evaluated_artifact": {
+            "role": artifact_role,
+            "sha256": artifact_sha256,
+        },
+        **evaluation.to_dict(),
+    }
+
+
 def load_evaluation_suite(path_value: str | Path) -> EvaluationSuite:
     path = Path(path_value)
     raw = json.loads(path.read_text(encoding="utf-8"))

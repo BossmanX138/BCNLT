@@ -23,6 +23,33 @@ def _handoff(tmp_path: Path) -> Path:
     for role in REQUIRED:
         path = tmp_path / f"{role}.json"
         payload = {"role": role}
+        if role in {"base_evaluation", "adapter_evaluation"}:
+            subject_role = (
+                "base_identity" if role == "base_evaluation" else "adapter_manifest"
+            )
+            payload = {
+                "schema_version": "bcnlt-model-evaluation-v1",
+                "evaluated_artifact": {
+                    "role": subject_role,
+                    "sha256": "PENDING",
+                },
+                "identity": role,
+                "settings": {"seed": 1729, "temperature": 0.0, "max_new_tokens": 64},
+                "results": [
+                    {
+                        "case_id": "case-1",
+                        "category": "raw_code",
+                        "prompt": "prompt",
+                        "expected": "expected",
+                        "output": "expected",
+                        "passed": True,
+                        "error": None,
+                    }
+                ],
+                "metrics": {"raw_code_accuracy": 1.0},
+                "runtime_failures": [],
+                "heldout_loss": 1.0,
+            }
         if role == "corpus_validation":
             payload["passed"] = True
             payload["language_reports"] = [
@@ -63,6 +90,16 @@ def _handoff(tmp_path: Path) -> Path:
             )
         path.write_text(json.dumps(payload), encoding="utf-8")
         artifacts[role] = {"path": str(path), "sha256": _sha(path)}
+    for evaluation_role, subject_role in (
+        ("base_evaluation", "base_identity"),
+        ("adapter_evaluation", "adapter_manifest"),
+    ):
+        path = Path(artifacts[evaluation_role]["path"])
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["evaluated_artifact"]["sha256"] = artifacts[subject_role]["sha256"]
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        artifacts[evaluation_role]["sha256"] = _sha(path)
+    command = ["python", "-m", "trainer", "--full"]
     handoff = tmp_path / "handoff.json"
     handoff.write_text(
         json.dumps(
@@ -74,7 +111,10 @@ def _handoff(tmp_path: Path) -> Path:
                     "minimum_gpu_memory_mib": 50,
                 },
                 "training": {
-                    "command": ["python", "-m", "trainer", "--full"],
+                    "command": command,
+                    "command_sha256": hashlib.sha256(
+                        json.dumps(command, separators=(",", ":")).encode("utf-8")
+                    ).hexdigest(),
                     "estimated_steps": 123,
                     "estimated_tokens": 789,
                     "estimated_disk_bytes": 456,
@@ -229,3 +269,51 @@ def test_exact_resume_checkpoint_is_added_to_the_guarded_command(tmp_path: Path)
         "--resume-sha256",
         _sha(resume),
     )
+
+
+@pytest.mark.parametrize(
+    ("role", "mutation", "message"),
+    (
+        (
+            "base_evaluation",
+            lambda payload: payload.update({"schema_version": "unknown"}),
+            "base evaluation schema",
+        ),
+        (
+            "adapter_evaluation",
+            lambda payload: payload.update({"results": []}),
+            "adapter evaluation results",
+        ),
+        (
+            "base_evaluation",
+            lambda payload: payload["evaluated_artifact"].update(
+                {"sha256": "0" * 64}
+            ),
+            "base evaluation artifact identity",
+        ),
+    ),
+)
+def test_gate_validates_evaluation_schema_and_subject_identity(
+    tmp_path: Path, role: str, mutation, message: str
+):
+    handoff = _handoff(tmp_path)
+    raw = json.loads(handoff.read_text(encoding="utf-8"))
+    artifact = Path(raw["artifacts"][role]["path"])
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+    mutation(payload)
+    artifact.write_text(json.dumps(payload), encoding="utf-8")
+    raw["artifacts"][role]["sha256"] = _sha(artifact)
+    handoff.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        prepare_full_run(handoff, disk_free_bytes=1000, gpu_memory_mib=1000)
+
+
+def test_gate_refuses_a_training_command_that_does_not_match_its_identity(tmp_path: Path):
+    handoff = _handoff(tmp_path)
+    raw = json.loads(handoff.read_text(encoding="utf-8"))
+    raw["training"]["command"][-1] = "--different"
+    handoff.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="training command identity"):
+        prepare_full_run(handoff, disk_free_bytes=1000, gpu_memory_mib=1000)

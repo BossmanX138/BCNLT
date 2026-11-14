@@ -4,7 +4,7 @@ import ast
 from collections import deque
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from bcnlt.cache import ProjectIndex
 from bcnlt.core import ContextualUnit, SourceDocument, Span
@@ -15,7 +15,7 @@ from bcnlt.semantic_schema import SEMANTIC_SCHEMA_VERSION
 
 from .base import LanguageAdapter
 from .carousel import BCNLTMultilingualAdapter, LanguageCarousel, LanguageCartridge
-from .coverage import SemanticCoverage, SemanticExtraction
+from .coverage import SemanticCoverage, SemanticExtraction, is_unresolved_unknown
 from .spec import LanguageSemanticSpec
 
 
@@ -30,12 +30,23 @@ def build_python_spec() -> LanguageSemanticSpec:
 class PythonAdapter(LanguageAdapter):
     language = "python"
 
-    def __init__(self, *, wildcard_memory_path: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        wildcard_memory_path: str | Path | None = None,
+        wildcard_memory_storage: Literal["jsonl", "sqlite"] = "jsonl",
+        wildcard_memory_read_only: bool = False,
+    ) -> None:
         super().__init__()
         carousel = LanguageCarousel.default()
         self.cartridge = carousel.for_language("python")
         self._facade = BCNLTMultilingualAdapter(
-            engine=_PythonCompatibilityEngine(self, wildcard_memory_path=wildcard_memory_path),
+            engine=_PythonCompatibilityEngine(
+                self,
+                wildcard_memory_path=wildcard_memory_path,
+                wildcard_memory_storage=wildcard_memory_storage,
+                wildcard_memory_read_only=wildcard_memory_read_only,
+            ),
             carousel=carousel,
         )
 
@@ -64,9 +75,15 @@ class _PythonCompatibilityEngine:
         adapter: PythonAdapter,
         *,
         wildcard_memory_path: str | Path | None = None,
+        wildcard_memory_storage: Literal["jsonl", "sqlite"] = "jsonl",
+        wildcard_memory_read_only: bool = False,
     ) -> None:
         self.adapter = adapter
-        self.preprocessor = SemanticPreprocessor(memory_path=wildcard_memory_path)
+        self.preprocessor = SemanticPreprocessor(
+            memory_path=wildcard_memory_path,
+            memory_storage=wildcard_memory_storage,
+            memory_read_only=wildcard_memory_read_only,
+        )
 
     def parse(
         self,
@@ -101,11 +118,7 @@ class _PythonCompatibilityEngine:
         units = processed.units
         scope_enters = sum(unit.event == "SCOPE_ENTER" for unit in units)
         scope_exits = sum(unit.event == "SCOPE_EXIT" for unit in units)
-        unknown_units = sum(
-            unit.event == "UNKNOWN_SEMANTIC"
-            and unit.metadata.get("learned_definition_state") != "validated"
-            for unit in units
-        )
+        unknown_units = sum(is_unresolved_unknown(unit) for unit in units)
         common_core_units = sum(
             unit.ir is not None and unit.ir.kind is not IRKind.EXTENSION for unit in units
         )
@@ -129,6 +142,63 @@ class _PythonCompatibilityEngine:
         )
 
 
+class _FunctionBindingCollector(ast.NodeVisitor):
+    """Collect names whose binding scope is the current function body."""
+
+    def __init__(self) -> None:
+        self.locals: set[str] = set()
+        self.globals: set[str] = set()
+        self.nonlocals: set[str] = set()
+
+    def visit_Name(self, node: ast.Name) -> Any:
+        if isinstance(node.ctx, ast.Store):
+            self.locals.add(node.id)
+
+    def visit_Global(self, node: ast.Global) -> Any:
+        self.globals.update(node.names)
+
+    def visit_Nonlocal(self, node: ast.Nonlocal) -> Any:
+        self.nonlocals.update(node.names)
+
+    def visit_Import(self, node: ast.Import) -> Any:
+        for alias in node.names:
+            self.locals.add(alias.asname or alias.name.split(".")[0])
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> Any:
+        for alias in node.names:
+            self.locals.add(alias.asname or alias.name)
+
+    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> Any:
+        if node.name:
+            self.locals.add(node.name)
+        for statement in node.body:
+            self.visit(statement)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> Any:
+        self.locals.add(node.name)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> Any:
+        self.locals.add(node.name)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> Any:
+        self.locals.add(node.name)
+
+    def visit_Lambda(self, node: ast.Lambda) -> Any:
+        return None
+
+    def visit_ListComp(self, node: ast.ListComp) -> Any:
+        return None
+
+    def visit_SetComp(self, node: ast.SetComp) -> Any:
+        return None
+
+    def visit_DictComp(self, node: ast.DictComp) -> Any:
+        return None
+
+    def visit_GeneratorExp(self, node: ast.GeneratorExp) -> Any:
+        return None
+
+
 class _PythonUnitVisitor(ast.NodeVisitor):
     def __init__(self, adapter: PythonAdapter, document: SourceDocument) -> None:
         self.adapter = adapter
@@ -138,9 +208,16 @@ class _PythonUnitVisitor(ast.NodeVisitor):
         self.scopes: list[str] = ["module"]
         self.scope_kinds: list[str] = ["module"]
         self.scope_defs: list[dict[str, str]] = [{}]
+        self.scope_globals: list[set[str]] = [set()]
+        self.scope_nonlocals: list[set[str]] = [set()]
         self.dynamic_symbols: set[str] = set()
 
     def collect(self) -> list[ContextualUnit]:
+        bindings = _FunctionBindingCollector()
+        for statement in self.document.tree.body:
+            bindings.visit(statement)
+        for name in (bindings.locals | bindings.globals) - bindings.nonlocals:
+            self.scope_defs[0][name] = f"module.{name}"
         self.visit(self.document.tree)
         return self.units
 
@@ -189,6 +266,9 @@ class _PythonUnitVisitor(ast.NodeVisitor):
     def _visit_function(
         self, node: ast.FunctionDef | ast.AsyncFunctionDef, *, is_async: bool
     ) -> None:
+        bindings = _FunctionBindingCollector()
+        for statement in node.body:
+            bindings.visit(statement)
         for decorator in node.decorator_list:
             self.visit(decorator)
         self._visit_argument_expressions(node.args)
@@ -222,11 +302,17 @@ class _PythonUnitVisitor(ast.NodeVisitor):
         self.scopes.append(node.name)
         self.scope_kinds.append("function")
         self.scope_defs.append({})
+        self.scope_globals.append(bindings.globals)
+        self.scope_nonlocals.append(bindings.nonlocals)
+        for name in bindings.locals - bindings.globals - bindings.nonlocals:
+            self.scope_defs[-1][name] = f"{self.scope}.{name}"
         try:
             self._define_arguments(node.args)
             for stmt in node.body:
                 self.visit(stmt)
         finally:
+            self.scope_nonlocals.pop()
+            self.scope_globals.pop()
             self.scope_defs.pop()
             self.scope_kinds.pop()
             self.scopes.pop()
@@ -264,10 +350,14 @@ class _PythonUnitVisitor(ast.NodeVisitor):
         self.scopes.append(node.name)
         self.scope_kinds.append("class")
         self.scope_defs.append({})
+        self.scope_globals.append(set())
+        self.scope_nonlocals.append(set())
         try:
             for stmt in node.body:
                 self.visit(stmt)
         finally:
+            self.scope_nonlocals.pop()
+            self.scope_globals.pop()
             self.scope_defs.pop()
             self.scope_kinds.pop()
             self.scopes.pop()
@@ -286,10 +376,14 @@ class _PythonUnitVisitor(ast.NodeVisitor):
         self.scopes.append(name)
         self.scope_kinds.append("lambda")
         self.scope_defs.append({})
+        self.scope_globals.append(set())
+        self.scope_nonlocals.append(set())
         try:
             self._define_arguments(node.args)
             self.visit(node.body)
         finally:
+            self.scope_nonlocals.pop()
+            self.scope_globals.pop()
             self.scope_defs.pop()
             self.scope_kinds.pop()
             self.scopes.pop()
@@ -380,6 +474,14 @@ class _PythonUnitVisitor(ast.NodeVisitor):
         self._emit("while", "LOOP", node, ast_relation="While", ir=self.adapter.common_core.loop())
         for stmt in node.body:
             self.visit(stmt)
+        for stmt in node.orelse:
+            self.visit(stmt)
+
+    def visit_Global(self, node: ast.Global) -> Any:
+        return None
+
+    def visit_Nonlocal(self, node: ast.Nonlocal) -> Any:
+        return None
 
     def visit_If(self, node: ast.If) -> Any:
         self.visit(node.test)
@@ -639,12 +741,19 @@ class _PythonUnitVisitor(ast.NodeVisitor):
             ast_relation=node.__class__.__name__,
             ir=self.adapter.common_core.extension(f"python.{node.__class__.__name__.lower()}"),
         )
+        first_generator, *remaining_generators = node.generators
+        self.visit(first_generator.iter)
         self._emit(name, SemanticEvent.SCOPE_ENTER, node, ast_relation=node.__class__.__name__)
         self.scopes.append(name)
         self.scope_kinds.append("comprehension")
         self.scope_defs.append({})
+        self.scope_globals.append(set())
+        self.scope_nonlocals.append(set())
         try:
-            for generator in node.generators:
+            self._define_target(first_generator.target, "comprehension.target")
+            for condition in first_generator.ifs:
+                self.visit(condition)
+            for generator in remaining_generators:
                 self.visit(generator.iter)
                 self._define_target(generator.target, "comprehension.target")
                 for condition in generator.ifs:
@@ -652,6 +761,8 @@ class _PythonUnitVisitor(ast.NodeVisitor):
             for result in result_nodes:
                 self.visit(result)
         finally:
+            self.scope_nonlocals.pop()
+            self.scope_globals.pop()
             self.scope_defs.pop()
             self.scope_kinds.pop()
             self.scopes.pop()
@@ -713,20 +824,49 @@ class _PythonUnitVisitor(ast.NodeVisitor):
         return None
 
     def _define(self, name: str, node: ast.AST) -> str:
-        symbol_id = f"{self.scope}.{name}"
-        self.scope_defs[-1][name] = symbol_id
+        scope_index = self._binding_scope_index(name)
+        symbol_scope = ".".join(self.scopes[: scope_index + 1])
+        symbol_id = f"{symbol_scope}.{name}"
+        self.scope_defs[scope_index][name] = symbol_id
         self.document.index.define(self.document.path, symbol_id, name, self._span(node))
         return symbol_id
 
     def _resolve(self, name: str) -> str | None:
         inside_function_scope = False
-        for definitions, kind in reversed(list(zip(self.scope_defs, self.scope_kinds))):
+        for index in range(len(self.scope_defs) - 1, -1, -1):
+            definitions = self.scope_defs[index]
+            kind = self.scope_kinds[index]
             if kind in {"function", "lambda", "comprehension"}:
                 inside_function_scope = True
+            if name in self.scope_globals[index]:
+                return self.scope_defs[0].get(name)
+            if name in self.scope_nonlocals[index]:
+                return self._resolve_nonlocal(name, before_index=index)
             if kind == "class" and inside_function_scope:
                 continue
             if name in definitions:
                 return definitions[name]
+        return None
+
+    def _binding_scope_index(self, name: str) -> int:
+        current = len(self.scope_defs) - 1
+        if name in self.scope_globals[current]:
+            return 0
+        if name in self.scope_nonlocals[current]:
+            for index in range(current - 1, -1, -1):
+                if (
+                    self.scope_kinds[index] in {"function", "lambda"}
+                    and name in self.scope_defs[index]
+                ):
+                    return index
+        return current
+
+    def _resolve_nonlocal(self, name: str, *, before_index: int) -> str | None:
+        for index in range(before_index - 1, -1, -1):
+            if self.scope_kinds[index] not in {"function", "lambda"}:
+                continue
+            if name in self.scope_defs[index]:
+                return self.scope_defs[index][name]
         return None
 
     def _visit_argument_expressions(self, arguments: ast.arguments) -> None:

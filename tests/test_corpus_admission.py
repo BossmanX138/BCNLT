@@ -9,14 +9,22 @@ from bcnlt.adapters.python import PythonAdapter
 from bcnlt.corpus.admission import (
     AdmissionPolicy,
     CorpusValidationInput,
+    _literal_type,
     assign_split,
     validate_corpus,
 )
 from bcnlt.corpus.curriculum import CurriculumRecord, generate_document_curriculum
 from bcnlt.corpus.database import SourceDocumentRecord, stable_document_id
 from bcnlt.corpus.streaming_admission import validate_corpus_streaming
-from bcnlt.semantic_record import records_from_units
+from bcnlt.semantic_record import CanonicalIR, ScoreBand, SemanticTokenRecord, records_from_units
 from scripts.validate_bcnlt_corpus import admission_policy_for_profile
+from scripts.recover_bcnlt_validation import (
+    _continue_validation,
+    _empty_state,
+    _open_state_database,
+    _policy_fingerprint,
+    _rebuild_partial_state,
+)
 
 
 class CountingTokenizer:
@@ -27,6 +35,38 @@ class CountingTokenizer:
 
     def encode_records(self, records) -> list[int]:
         return list(range(max(1, len(tuple(records)) * 4)))
+
+
+def test_tree_sitter_literals_preserve_grammar_type_diversity():
+    def literal(surface: str, relation: str) -> SemanticTokenRecord:
+        return SemanticTokenRecord(
+            event="LITERAL",
+            surface=surface,
+            scope="module",
+            span=(1, 0, 1, len(surface)),
+            symbol_id=None,
+            defines=None,
+            ast_relation=f"{relation}.self",
+            ir=CanonicalIR(
+                kind="value",
+                name=surface,
+                value=None,
+                children=(),
+                metadata=(),
+            ),
+            recent_history=(),
+            metadata=(),
+            confidence_band=ScoreBand.HIGH,
+            uncertainty_band=ScoreBand.LOW,
+        )
+
+    records = (
+        literal('"hello"', "string"),
+        literal("7", "integer"),
+        literal("true", "true"),
+    )
+
+    assert {_literal_type(record) for record in records} == {"string", "integer", "true"}
 
 
 def test_smoke_admission_profile_relaxes_only_scale_and_cap_gates():
@@ -168,6 +208,83 @@ def test_streaming_admission_matches_small_in_memory_validation(tmp_path):
     assert actual.distributions["family"] == expected.distributions["family"]
     assert actual.distributions["event"] == expected.distributions["event"]
     assert actual.failure_codes == expected.failure_codes
+
+
+def test_interrupted_streaming_validation_rebuilds_and_resumes_from_ledgers(tmp_path):
+    first = _document("value = 1\n", path="one.py")
+    second = _document("def add(a, b):\n    return a + b\n", path="two.py")
+    candidates = tuple(_curriculum(first) + _curriculum(second))
+    policy = _permissive()
+    expected = validate_corpus(
+        CorpusValidationInput(documents=(first, second), candidates=candidates),
+        CountingTokenizer(),
+        policy,
+    )
+    curriculum_path = tmp_path / "curriculum.jsonl"
+    curriculum_path.write_text(
+        "".join(json.dumps(item.to_dict(), sort_keys=True) + "\n" for item in candidates),
+        encoding="utf-8",
+    )
+    accepted_path = tmp_path / "accepted.jsonl"
+    decisions_path = tmp_path / "decisions.jsonl"
+    interrupted_at = len(candidates) // 2
+    with accepted_path.open("x+", encoding="utf-8", newline="\n") as accepted, decisions_path.open(
+        "x+", encoding="utf-8", newline="\n"
+    ) as decisions:
+        validate_corpus_streaming(
+            (first, second),
+            iter(candidates[:interrupted_at]),
+            candidate_count=len(candidates),
+            tokenizer=CountingTokenizer(),
+            policy=policy,
+            accepted_handle=accepted,
+            decisions_handle=decisions,
+            state_database=tmp_path / "discarded-temporary-state.sqlite3",
+            progress_interval=0,
+        )
+
+    state_path = tmp_path / "recovered-state.sqlite3"
+    connection = _open_state_database(state_path)
+    state = _empty_state()
+    connection.execute("BEGIN")
+    fingerprint = _policy_fingerprint(policy, len(candidates))
+    checkpoint = _rebuild_partial_state(
+        connection,
+        state,
+        None,
+        curriculum_path=curriculum_path,
+        accepted_path=accepted_path,
+        decisions_path=decisions_path,
+        tokenizer=CountingTokenizer(),
+        policy_fingerprint=fingerprint,
+    )
+    assert checkpoint["phase"] == "continuing"
+    assert checkpoint["decision_count"] == interrupted_at
+    assert checkpoint["recovery_boundary"] == interrupted_at
+
+    actual, checkpoint = _continue_validation(
+        connection,
+        state,
+        checkpoint,
+        curriculum_path=curriculum_path,
+        accepted_path=accepted_path,
+        decisions_path=decisions_path,
+        candidate_count=len(candidates),
+        documents=(first, second),
+        tokenizer=CountingTokenizer(),
+        policy=policy,
+        policy_fingerprint=fingerprint,
+    )
+    connection.close()
+
+    reasons = [
+        json.loads(line)["reason_code"]
+        for line in decisions_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert reasons == [decision.reason_code for decision in expected.decisions]
+    assert actual["accepted_record_count"] == len(expected.accepted_records)
+    assert actual["decision_count"] == len(candidates)
+    assert checkpoint["phase"] == "complete"
 
 
 def test_holdout_hash_quarantines_every_copy_before_expansion():

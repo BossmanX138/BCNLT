@@ -50,12 +50,19 @@ def align_target_boundaries(
     offsets: Sequence[tuple[int, int]], boundary_positions: set[int]
 ) -> tuple[bool | None, ...]:
     result: list[bool | None] = []
+    seen_target_spans: set[tuple[int, int]] = set()
     for position in range(len(offsets)):
         if position + 1 >= len(offsets):
             result.append(None)
             continue
         start, end = offsets[position + 1]
-        result.append(end > start and start in boundary_positions)
+        span = (start, end)
+        is_duplicate = span in seen_target_spans
+        if end > start:
+            seen_target_spans.add(span)
+        result.append(
+            end > start and not is_duplicate and start in boundary_positions
+        )
     return tuple(result)
 
 

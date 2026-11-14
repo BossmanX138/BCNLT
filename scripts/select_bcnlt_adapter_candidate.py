@@ -13,21 +13,42 @@ def select_candidate(
     candidates: Sequence[Mapping[str, object]],
     maximum_relative_perplexity_regression: float,
 ) -> dict[str, object]:
+    if not math.isfinite(parent_loss) or not math.isfinite(
+        maximum_relative_perplexity_regression
+    ):
+        raise ValueError("loss and perplexity regression threshold must be finite")
     if parent_loss < 0 or maximum_relative_perplexity_regression < 0:
         raise ValueError("loss and perplexity regression threshold must be non-negative")
-    parent_perplexity = math.exp(parent_loss)
+    parent_perplexity = _finite_perplexity(parent_loss)
     assessed = []
     for value in candidates:
         item = dict(value)
         loss = float(item["heldout_loss"])
         steps = int(item["steps"])
+        if not math.isfinite(loss):
+            raise ValueError("candidate loss must be finite")
         if loss < 0 or steps <= 0:
             raise ValueError("candidate loss and steps must be positive")
-        perplexity = math.exp(loss)
+        if type(item.get("promoted")) is not bool:
+            raise ValueError("candidate promoted decision must be a boolean")
+        metrics = item.get("metrics")
+        if metrics is not None and (
+            not isinstance(metrics, Mapping)
+            or any(
+                not isinstance(name, str)
+                or not name
+                or not isinstance(metric, (int, float))
+                or isinstance(metric, bool)
+                or not math.isfinite(float(metric))
+                for name, metric in metrics.items()
+            )
+        ):
+            raise ValueError("candidate metrics must contain finite numbers")
+        perplexity = _finite_perplexity(loss)
         regression = perplexity / parent_perplexity - 1.0
         item["perplexity"] = perplexity
         item["relative_perplexity_regression"] = regression
-        if not bool(item["promoted"]):
+        if not item["promoted"]:
             item["status"] = "rejected_behavior"
         elif regression > maximum_relative_perplexity_regression:
             item["status"] = "rejected_retention"
@@ -58,6 +79,16 @@ def select_candidate(
         "candidates": assessed,
         "selected": selected,
     }
+
+
+def _finite_perplexity(loss: float) -> float:
+    try:
+        value = math.exp(loss)
+    except OverflowError as exc:
+        raise ValueError("loss must produce a finite perplexity") from exc
+    if not math.isfinite(value):
+        raise ValueError("loss must produce a finite perplexity")
+    return value
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -98,7 +129,7 @@ def main(argv: list[str] | None = None) -> int:
                 "evaluation_path": str(path),
                 "adapter_weights_sha256": report["provenance"]["adapter_weights_sha256"],
                 "heldout_loss": float(adapter["heldout_loss"]),
-                "promoted": bool(promotion["promoted"]),
+                "promoted": promotion["promoted"],
                 "failure_codes": list(promotion["failure_codes"]),
                 "metrics": dict(adapter["metrics"]),
                 "runtime_failures": list(adapter["runtime_failures"]),

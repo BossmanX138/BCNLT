@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from bcnlt.adapters.python import PythonAdapter
 from bcnlt.events import CURRENT_EVENT_VALUES, SemanticEvent
 
@@ -224,3 +226,153 @@ def test_other_unsupported_statement_nodes_emit_unknown_semantic():
     assert unknown.surface == "assert ready"
     assert unknown.metadata["unknown_node"] == "Assert"
     assert unknown.metadata["knowledge_state"] == "provisional"
+
+
+def test_while_else_body_is_semantically_extracted():
+    units = _units("while ready:\n    work()\nelse:\n    fallback = 1\n")
+
+    fallback = next(
+        unit for unit in units if unit.event == "DEFINE" and unit.surface == "fallback"
+    )
+
+    assert fallback.symbol_id == "module.fallback"
+
+
+def test_function_read_before_assignment_resolves_to_predeclared_local():
+    units = _units(
+        "value = 'module'\n"
+        "def read_then_assign():\n"
+        "    consume(value)\n"
+        "    value = 'local'\n"
+    )
+    reference = next(
+        unit
+        for unit in units
+        if unit.event == "REFERENCE"
+        and unit.surface == "value"
+        and unit.scope == "module.read_then_assign"
+    )
+
+    assert reference.defines == "module.read_then_assign.value"
+
+
+def test_global_declaration_binds_assignments_and_reads_to_module_scope():
+    units = _units(
+        "value = 0\n"
+        "def update():\n"
+        "    global value\n"
+        "    value = 1\n"
+        "    return value\n"
+    )
+    function_definitions = [
+        unit
+        for unit in units
+        if unit.event == "DEFINE"
+        and unit.surface == "value"
+        and unit.scope == "module.update"
+    ]
+    function_reference = next(
+        unit
+        for unit in units
+        if unit.event == "REFERENCE"
+        and unit.surface == "value"
+        and unit.scope == "module.update"
+    )
+
+    assert function_definitions[-1].symbol_id == "module.value"
+    assert function_reference.defines == "module.value"
+
+
+def test_global_read_links_to_module_binding_declared_later():
+    units = _units(
+        "def read():\n"
+        "    global value\n"
+        "    return value\n"
+        "value = 1\n"
+    )
+    function_reference = next(
+        unit
+        for unit in units
+        if unit.event == "REFERENCE"
+        and unit.surface == "value"
+        and unit.scope == "module.read"
+    )
+
+    assert function_reference.defines == "module.value"
+
+
+def test_nonlocal_declaration_binds_assignments_and_reads_to_enclosing_function():
+    units = _units(
+        "def outer():\n"
+        "    value = 0\n"
+        "    def update():\n"
+        "        nonlocal value\n"
+        "        value = 1\n"
+        "        return value\n"
+        "    return update\n"
+    )
+    inner_definition = next(
+        unit
+        for unit in units
+        if unit.event == "DEFINE"
+        and unit.surface == "value"
+        and unit.scope == "module.outer.update"
+    )
+    inner_reference = next(
+        unit
+        for unit in units
+        if unit.event == "REFERENCE"
+        and unit.surface == "value"
+        and unit.scope == "module.outer.update"
+    )
+
+    assert inner_definition.symbol_id == "module.outer.value"
+    assert inner_reference.defines == "module.outer.value"
+
+
+def test_nonlocal_binding_skips_an_intermediate_function_without_that_name():
+    units = _units(
+        "def outer():\n"
+        "    value = 0\n"
+        "    def middle():\n"
+        "        def update():\n"
+        "            nonlocal value\n"
+        "            value = 1\n"
+        "            return value\n"
+        "        return update\n"
+        "    return middle\n"
+    )
+    inner_definition = next(
+        unit
+        for unit in units
+        if unit.event == "DEFINE"
+        and unit.surface == "value"
+        and unit.scope == "module.outer.middle.update"
+    )
+
+    assert inner_definition.symbol_id == "module.outer.value"
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "[item for item in source]",
+        "{item for item in source}",
+        "{item: item for item in source}",
+        "(item for item in source)",
+    ],
+)
+def test_comprehension_first_iterable_resolves_in_enclosing_class_scope(expression: str):
+    units = _units(
+        "class Container:\n"
+        "    source = range(3)\n"
+        f"    values = {expression}\n"
+    )
+    source_reference = next(
+        unit
+        for unit in units
+        if unit.event == "REFERENCE" and unit.surface == "source"
+    )
+
+    assert source_reference.scope == "module.Container"
+    assert source_reference.defines == "module.Container.source"

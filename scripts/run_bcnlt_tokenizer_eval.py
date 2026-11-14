@@ -4,13 +4,19 @@ import argparse
 import json
 from pathlib import Path
 
-from bcnlt.tokenizer_eval import evaluate_model, load_evaluation_suite
+from bcnlt.tokenizer_eval import (
+    evaluate_model,
+    freeze_evaluation_artifact,
+    load_evaluation_suite,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the frozen BCNLT tokenizer evaluation")
     parser.add_argument("--model", required=True)
     parser.add_argument("--identity", required=True)
+    parser.add_argument("--evaluated-artifact-role", required=True)
+    parser.add_argument("--evaluated-artifact-sha256", required=True)
     parser.add_argument("--heldout-loss", required=True, type=float)
     parser.add_argument("--suite", default="configs/bcnlt_tokenizer_eval_v1.json")
     parser.add_argument("--output", required=True)
@@ -59,8 +65,13 @@ def main(argv: list[str] | None = None) -> int:
         heldout_loss=args.heldout_loss,
     )
     output.parent.mkdir(parents=True, exist_ok=True)
+    payload = freeze_evaluation_artifact(
+        report,
+        artifact_role=args.evaluated_artifact_role,
+        artifact_sha256=args.evaluated_artifact_sha256,
+    )
     output.write_text(
-        json.dumps(report.to_dict(), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
         newline="\n",
     )

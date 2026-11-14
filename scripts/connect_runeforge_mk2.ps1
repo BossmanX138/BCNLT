@@ -61,7 +61,11 @@ finally { Pop-Location }
 
 $ReportPayload = Get-Content -LiteralPath $Report -Raw | ConvertFrom-Json
 $Evidence = [ordered]@{
-    schema_version = 1
+    schema_version = 2
+    evaluation_kind = $ReportPayload.evaluation_kind
+    target_origin = $ReportPayload.target_origin
+    independent_semantic_oracle = $false
+    promotion_eligible = $false
     integration = $Profile.integration
     runtime_model = $Profile.runtime_model
     source_model = $Profile.source_model
@@ -73,6 +77,8 @@ $Evidence = [ordered]@{
     input = $Input
     report = $Report
     probe_count = $ReportPayload.probe_count
+    standard_extractor_target_hit_rate = $ReportPayload.standard_extractor_target_hit_rate
+    bcnlt_extractor_target_hit_rate = $ReportPayload.bcnlt_extractor_target_hit_rate
     standard_accuracy = $ReportPayload.standard_accuracy
     bcnlt_accuracy = $ReportPayload.bcnlt_accuracy
     completed_at = [DateTimeOffset]::UtcNow.ToString("o")

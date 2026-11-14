@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -120,6 +121,18 @@ def prepare_full_run(
     training_config = MultilingualTrainingConfig.load(resolved["training_config"])
     if training_config.run_kind != "full":
         raise ValueError("full-run handoff must reference the full training config")
+    _validate_evaluation(
+        _load_object(resolved["base_evaluation"]),
+        label="base evaluation",
+        expected_role="base_identity",
+        expected_sha256=hashes["base_identity"],
+    )
+    _validate_evaluation(
+        _load_object(resolved["adapter_evaluation"]),
+        label="adapter evaluation",
+        expected_role="adapter_manifest",
+        expected_sha256=hashes["adapter_manifest"],
+    )
     smoke = _load_object(resolved["smoke_manifest"])
     if smoke.get("finite_loss") is not True or int(
         smoke.get("completed_training_examples", 0)
@@ -147,9 +160,18 @@ def prepare_full_run(
     training = raw.get("training")
     if not isinstance(training, dict) or not isinstance(training.get("command"), list):
         raise ValueError("handoff training command is missing")
-    command = tuple(str(part) for part in training["command"])
-    if not command:
+    if not training["command"] or not all(
+        isinstance(part, str) and part and "\x00" not in part
+        for part in training["command"]
+    ):
         raise ValueError("handoff training command is empty")
+    command = tuple(training["command"])
+    command_sha256 = training.get("command_sha256")
+    actual_command_sha256 = hashlib.sha256(
+        json.dumps(list(command), separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    if not _is_sha256(command_sha256) or command_sha256 != actual_command_sha256:
+        raise ValueError("training command identity does not match the handoff")
     if resume_path is not None:
         command = (
             *command,
@@ -186,6 +208,68 @@ def _load_object(path: Path) -> dict[str, object]:
     return raw
 
 
+def _validate_evaluation(
+    payload: dict[str, object],
+    *,
+    label: str,
+    expected_role: str,
+    expected_sha256: str,
+) -> None:
+    if payload.get("schema_version") != "bcnlt-model-evaluation-v1":
+        raise ValueError(f"{label} schema is unsupported")
+    evaluated = payload.get("evaluated_artifact")
+    if (
+        not isinstance(evaluated, dict)
+        or evaluated.get("role") != expected_role
+        or evaluated.get("sha256") != expected_sha256
+    ):
+        raise ValueError(f"{label} artifact identity does not match the handoff")
+    if not isinstance(payload.get("identity"), str) or not payload["identity"]:
+        raise ValueError(f"{label} identity is missing")
+    settings = payload.get("settings")
+    if (
+        not isinstance(settings, dict)
+        or not _is_int(settings.get("seed"))
+        or not _is_finite_number(settings.get("temperature"))
+        or not _is_int(settings.get("max_new_tokens"))
+        or int(settings["max_new_tokens"]) <= 0
+    ):
+        raise ValueError(f"{label} settings are invalid")
+    results = payload.get("results")
+    if not isinstance(results, list) or not results:
+        raise ValueError(f"{label} results are missing")
+    case_ids: list[str] = []
+    for result in results:
+        if (
+            not isinstance(result, dict)
+            or not isinstance(result.get("case_id"), str)
+            or not result["case_id"]
+            or not isinstance(result.get("category"), str)
+            or not isinstance(result.get("prompt"), str)
+            or not isinstance(result.get("expected"), str)
+            or not isinstance(result.get("output"), str)
+            or type(result.get("passed")) is not bool
+            or not (result.get("error") is None or isinstance(result.get("error"), str))
+        ):
+            raise ValueError(f"{label} results contain an invalid record")
+        case_ids.append(result["case_id"])
+    if len(case_ids) != len(set(case_ids)):
+        raise ValueError(f"{label} results contain duplicate case IDs")
+    metrics = payload.get("metrics")
+    if not isinstance(metrics, dict) or not metrics or any(
+        not isinstance(name, str) or not _is_finite_number(value)
+        for name, value in metrics.items()
+    ):
+        raise ValueError(f"{label} metrics are invalid")
+    failures = payload.get("runtime_failures")
+    if not isinstance(failures, list) or not all(
+        isinstance(failure, str) for failure in failures
+    ):
+        raise ValueError(f"{label} runtime failures are invalid")
+    if not _is_finite_number(payload.get("heldout_loss")):
+        raise ValueError(f"{label} heldout loss is invalid")
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -214,6 +298,18 @@ def _hash_artifact(path: Path) -> str:
 def _is_sha256(value: object) -> bool:
     return isinstance(value, str) and len(value) == 64 and all(
         character in "0123456789abcdef" for character in value
+    )
+
+
+def _is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_finite_number(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
     )
 
 

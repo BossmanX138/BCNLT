@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -172,8 +173,15 @@ def test_powershell_wrapper_forwards_an_argument_list_without_shell_fragments():
     assert "if ($StartTraining)" in source
 
 
-def test_wsl_normalizes_windows_drive_aliases_before_overlap_checks():
-    assert _resolve_platform_path("D:/BCNLT-runs/v4") == Path("/mnt/d/BCNLT-runs/v4")
+def test_platform_path_normalizes_windows_and_wsl_drive_aliases():
+    if os.name == "nt":
+        assert _resolve_platform_path("/mnt/d/BCNLT-runs/v4") == Path(
+            "D:/BCNLT-runs/v4"
+        ).resolve()
+    else:
+        assert _resolve_platform_path("D:/BCNLT-runs/v4") == Path(
+            "/mnt/d/BCNLT-runs/v4"
+        )
 
 
 def test_planning_accepts_a_future_phase_input_but_execution_requires_it(tmp_path: Path):

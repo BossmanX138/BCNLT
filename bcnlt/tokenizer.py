@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from .adapters.carousel import BCNLTMultilingualAdapter
 from .adapters.python import PythonAdapter
 from .adapters.tree_sitter import TreeSitterSemanticEngine
 from .canonical import canonical_record_bytes, record_from_canonical_bytes
+from .extended_core import ExtendedCoreLibrary
 from .semantic_record import SemanticTokenRecord, records_from_assessments
 from .tokenizer_base import BaseTokenizer
 from .tokenizer_manifest import TokenizerManifest, validate_manifest_for_base
+from .wildcard import WildcardMemory
 
 
 _FIELD_ORDER = (
@@ -39,24 +42,89 @@ class BCNLTTokenizer:
         manifest: TokenizerManifest,
         *,
         learned_memory_path: str | Path | None = None,
+        learned_memory_storage: Literal["jsonl", "sqlite"] = "jsonl",
+        learned_memory_read_only: bool = False,
     ) -> None:
         validate_manifest_for_base(manifest, base)
         self.base = base
         self.manifest = manifest
+        self.learned_memory_path = (
+            Path(learned_memory_path) if learned_memory_path is not None else None
+        )
+        if learned_memory_storage not in {"jsonl", "sqlite"}:
+            raise ValueError("Learned-memory storage must be jsonl or sqlite")
+        self.learned_memory_storage = learned_memory_storage
+        self.learned_memory_read_only = learned_memory_read_only
         self._token_to_id = manifest.token_to_id
         self._id_to_token = manifest.id_to_token
         self._semantic_adapter = BCNLTMultilingualAdapter(
-            engine=TreeSitterSemanticEngine(wildcard_memory_path=learned_memory_path)
+            engine=TreeSitterSemanticEngine(
+                wildcard_memory_path=self.learned_memory_path,
+                wildcard_memory_storage=self.learned_memory_storage,
+                wildcard_memory_read_only=self.learned_memory_read_only,
+            )
         )
-        self._python_adapter = PythonAdapter(wildcard_memory_path=learned_memory_path)
+        self._python_adapter = PythonAdapter(
+            wildcard_memory_path=self.learned_memory_path,
+            wildcard_memory_storage=self.learned_memory_storage,
+            wildcard_memory_read_only=self.learned_memory_read_only,
+        )
 
     def encode_text(self, text: str) -> list[int]:
         return self._encode_base_mode("text", text)
 
+    def reload_learned_state(self) -> None:
+        """Reload an externally updated JSONL learning ledger before future encodes."""
+
+        self._semantic_adapter = BCNLTMultilingualAdapter(
+            engine=TreeSitterSemanticEngine(
+                wildcard_memory_path=self.learned_memory_path,
+                wildcard_memory_storage=self.learned_memory_storage,
+                wildcard_memory_read_only=self.learned_memory_read_only,
+            )
+        )
+        self._python_adapter = PythonAdapter(
+            wildcard_memory_path=self.learned_memory_path,
+            wildcard_memory_storage=self.learned_memory_storage,
+            wildcard_memory_read_only=self.learned_memory_read_only,
+        )
+
+    def extended_core_library(self) -> ExtendedCoreLibrary:
+        """Return validated learned meanings without modifying Common Core IDs."""
+
+        if self.learned_memory_path is None or not self.learned_memory_path.is_file():
+            return ExtendedCoreLibrary()
+        memory_kwargs: dict[str, Any] = {"storage": self.learned_memory_storage}
+        if self.learned_memory_storage == "sqlite":
+            with sqlite3.connect(self.learned_memory_path) as connection:
+                metadata = dict(
+                    connection.execute("SELECT key, value FROM wildcard_metadata")
+                )
+            memory_kwargs.update(
+                language=metadata.get("language", "python"),
+                semantic_spec_sha256=metadata.get(
+                    "semantic_spec_sha256", "legacy-python"
+                ),
+            )
+        memory = WildcardMemory(
+            self.learned_memory_path,
+            read_only=True,
+            **memory_kwargs,
+        )
+        try:
+            return memory.validated_extended_core()
+        finally:
+            memory.close()
+
     def save_pretrained(self, path: str | Path) -> tuple[Path, ...]:
         from .hf_tokenizer import save_tokenizer_artifact
 
-        return save_tokenizer_artifact(path, self.manifest)
+        return save_tokenizer_artifact(
+            path,
+            self.manifest,
+            learned_memory_path=self.learned_memory_path,
+            learned_memory_storage=self.learned_memory_storage,
+        )
 
     @classmethod
     def from_pretrained(

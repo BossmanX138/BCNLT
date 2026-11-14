@@ -3,8 +3,10 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
+from .extended_core import CommonCoreProjection
 
-SEMANTIC_SCHEMA_VERSION = "bcnlt-semantic-record-v2"
+
+SEMANTIC_SCHEMA_VERSION = "bcnlt-semantic-record-v3"
 UNCERTAINTY_METADATA_KEYS = (
     "dynamic_call",
     "dynamic_binding",
@@ -19,6 +21,12 @@ UNCERTAINTY_METADATA_KEYS = (
     "learned_definition_signature",
     "learned_definition_state",
     "learned_extension_name",
+    "extended_core_id",
+    "extended_core_signature",
+    "extended_core_revision",
+    "extended_core_state",
+    "extended_core_projection",
+    "extended_core_name",
 )
 
 
@@ -42,6 +50,9 @@ def validate_uncertainty_metadata(key: str, value: Any) -> None:
         "wildcard_category",
         "learned_definition_signature",
         "learned_extension_name",
+        "extended_core_id",
+        "extended_core_signature",
+        "extended_core_name",
     }:
         if not isinstance(value, str):
             raise ValueError(f"{key} metadata must be str")
@@ -49,6 +60,22 @@ def validate_uncertainty_metadata(key: str, value: Any) -> None:
     if key == "learned_definition_state":
         if value != "validated":
             raise ValueError("learned_definition_state metadata must be validated")
+        return
+    if key == "extended_core_state":
+        if value != "validated":
+            raise ValueError("extended_core_state metadata must be validated")
+        return
+    if key == "extended_core_revision":
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise ValueError("extended_core_revision metadata must be a positive integer")
+        return
+    if key == "extended_core_projection":
+        if not isinstance(value, dict) or set(value) != {"event", "ir_kind"}:
+            raise ValueError("extended_core_projection metadata must name event and ir_kind")
+        CommonCoreProjection(
+            event=value["event"],
+            ir_kind=value["ir_kind"],
+        )
         return
     if key == "knowledge_state":
         if not isinstance(value, str) or value not in {state.value for state in KnowledgeState}:

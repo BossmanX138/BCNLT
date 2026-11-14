@@ -56,6 +56,14 @@ def test_boundary_flags_attach_to_target_token_not_predictor():
     assert flags == (True, True, False, None)
 
 
+def test_duplicate_offset_spans_count_a_unicode_boundary_once():
+    offsets = [(0, 1), (1, 2), (1, 2), (2, 3)]
+
+    flags = align_target_boundaries(offsets, {1})
+
+    assert flags == (True, False, False, None)
+
+
 def test_diagnostic_snapshot_helpers_detect_no_mutation(tmp_path: Path):
     paths = []
     for name in ("learned.jsonl", "corpus.sqlite", "tokenizer.json", "candidates.jsonl"):

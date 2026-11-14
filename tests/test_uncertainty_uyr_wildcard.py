@@ -214,7 +214,7 @@ def test_memory_reuse_remains_provisional_even_after_repetition(tmp_path: Path):
     assert assessment.evidence
 
 
-def test_wildcard_memory_bounds_repeated_context_evidence():
+def test_document_renames_do_not_fabricate_independent_context_evidence():
     unit = ContextualUnit("mystery", "UNKNOWN_SEMANTIC", "module", (1, 0, 1, 7))
     memory = WildcardMemory(language="python", semantic_spec_sha256="d" * 64)
     resolver = WildcardResolver(memory)
@@ -231,5 +231,5 @@ def test_wildcard_memory_bounds_repeated_context_evidence():
     assert record is not None
     assert record.seen_count == repetitions
     assert len(record.evidence) <= MAX_EVIDENCE_ITEMS
-    assert len(record.context_fingerprints) == MAX_CONTEXT_FINGERPRINTS
+    assert len(record.context_fingerprints) == 1
     assert len(record.document_identities) == MAX_DOCUMENT_IDENTITIES

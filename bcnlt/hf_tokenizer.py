@@ -3,8 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import sqlite3
 from pathlib import Path
-from typing import Sequence
+from typing import Literal, Sequence
 
 from .tokenizer_manifest import (
     DEFAULT_INVENTORY_PATH,
@@ -17,6 +18,10 @@ from .tokenizer_manifest import (
 
 MANIFEST_FILENAME = "bcnlt_tokenizer_manifest.json"
 INVENTORY_FILENAME = "bcnlt-tokenizer-v1.tokens.json"
+LEARNED_DEFINITIONS_FILENAME = "bcnlt_learned_definitions.jsonl"
+LEARNED_DEFINITIONS_SQLITE_FILENAME = "bcnlt_learned_definitions.sqlite3"
+LEARNED_STATE_FILENAME = "bcnlt_learned_state.json"
+LEARNED_STATE_SCHEMA = "bcnlt-learned-state-v1"
 _TOKENIZER_FILES = (
     "config.json",
     "tokenizer.json",
@@ -171,6 +176,9 @@ def identity_from_directory(
 def save_tokenizer_artifact(
     path: str | Path,
     manifest: TokenizerManifest,
+    *,
+    learned_memory_path: str | Path | None = None,
+    learned_memory_storage: Literal["jsonl", "sqlite"] = "jsonl",
 ) -> tuple[Path, ...]:
     destination = Path(path)
     if destination.exists() and any(destination.iterdir()):
@@ -181,7 +189,54 @@ def save_tokenizer_artifact(
     write_manifest(manifest_path, manifest)
     shutil.copyfile(DEFAULT_INVENTORY_PATH, inventory_path)
     _verify_inventory(inventory_path, manifest.structural_inventory_sha256)
-    return manifest_path, inventory_path
+    files = [manifest_path, inventory_path]
+    if learned_memory_storage not in {"jsonl", "sqlite"}:
+        raise ValueError("Learned-memory storage must be jsonl or sqlite")
+    if learned_memory_path is not None:
+        learned_source = Path(learned_memory_path)
+        if learned_source.is_file():
+            learned_filename = (
+                LEARNED_DEFINITIONS_SQLITE_FILENAME
+                if learned_memory_storage == "sqlite"
+                else LEARNED_DEFINITIONS_FILENAME
+            )
+            learned_path = destination / learned_filename
+            state_path = destination / LEARNED_STATE_FILENAME
+            if learned_memory_storage == "sqlite":
+                source_connection = sqlite3.connect(learned_source)
+                destination_connection = sqlite3.connect(learned_path)
+                try:
+                    source_connection.backup(destination_connection)
+                    destination_connection.commit()
+                    destination_connection.execute("PRAGMA journal_mode=DELETE")
+                    check = destination_connection.execute("PRAGMA quick_check").fetchone()
+                    if check != ("ok",):
+                        raise ValueError("SQLite learned-state snapshot failed integrity check")
+                finally:
+                    destination_connection.close()
+                    source_connection.close()
+            else:
+                shutil.copyfile(learned_source, learned_path)
+            payload = learned_path.read_bytes()
+            state = {
+                "schema_version": LEARNED_STATE_SCHEMA,
+                "storage": learned_memory_storage,
+                "filename": learned_filename,
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "byte_count": len(payload),
+            }
+            state_path.write_text(
+                json.dumps(
+                    state,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            files.extend((learned_path, state_path))
+    return tuple(files)
 
 
 def load_tokenizer_artifact(
@@ -215,10 +270,13 @@ def load_tokenizer_artifact(
     )
     manifest = load_manifest(manifest_path, base, identity)
     _verify_inventory(inventory_path, manifest.structural_inventory_sha256)
+    learned_path, learned_storage = _verify_learned_state(artifact)
     return BCNLTTokenizer(
         base,
         manifest,
-        learned_memory_path=artifact / "bcnlt_learned_definitions.jsonl",
+        learned_memory_path=learned_path,
+        learned_memory_storage=learned_storage,
+        learned_memory_read_only=True,
     )
 
 
@@ -230,3 +288,54 @@ def _verify_inventory(path: Path, expected_sha256: str) -> None:
     actual = hashlib.sha256(payload).hexdigest()
     if actual != expected_sha256:
         raise ValueError("Tokenizer artifact structural inventory hash mismatch")
+
+
+def _verify_learned_state(
+    artifact: Path,
+) -> tuple[Path, Literal["jsonl", "sqlite"]]:
+    jsonl_path = artifact / LEARNED_DEFINITIONS_FILENAME
+    sqlite_path = artifact / LEARNED_DEFINITIONS_SQLITE_FILENAME
+    state_path = artifact / LEARNED_STATE_FILENAME
+    if not jsonl_path.exists() and not sqlite_path.exists() and not state_path.exists():
+        return jsonl_path, "jsonl"
+    if not state_path.is_file():
+        raise ValueError("Tokenizer artifact learned semantic state is incomplete")
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Cannot read tokenizer learned semantic state: {exc}") from exc
+    storage = state.get("storage") if isinstance(state, dict) else None
+    expected_filename = {
+        "jsonl": LEARNED_DEFINITIONS_FILENAME,
+        "sqlite": LEARNED_DEFINITIONS_SQLITE_FILENAME,
+    }.get(storage)
+    if (
+        not isinstance(state, dict)
+        or state.get("schema_version") != LEARNED_STATE_SCHEMA
+        or expected_filename is None
+        or state.get("filename") != expected_filename
+        or not isinstance(state.get("sha256"), str)
+        or not isinstance(state.get("byte_count"), int)
+        or isinstance(state.get("byte_count"), bool)
+    ):
+        raise ValueError("Tokenizer artifact learned semantic state metadata is invalid")
+    learned_path = artifact / expected_filename
+    if not learned_path.is_file():
+        raise ValueError("Tokenizer artifact learned semantic state is incomplete")
+    payload = learned_path.read_bytes()
+    if (
+        len(payload) != state["byte_count"]
+        or hashlib.sha256(payload).hexdigest() != state["sha256"]
+    ):
+        raise ValueError("Tokenizer artifact learned semantic state hash mismatch")
+    if storage == "sqlite":
+        connection = sqlite3.connect(
+            f"{learned_path.resolve().as_uri()}?mode=ro&immutable=1",
+            uri=True,
+        )
+        try:
+            if connection.execute("PRAGMA quick_check").fetchone() != ("ok",):
+                raise ValueError("Tokenizer artifact SQLite learned state is invalid")
+        finally:
+            connection.close()
+    return learned_path, storage
