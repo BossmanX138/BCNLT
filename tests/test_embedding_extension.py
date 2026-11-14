@@ -11,8 +11,11 @@ from integrations.runeforge_mk2_tokenizer.embedding_extension import (
     ExtendedLMHead,
     attach_bcnlt_extension,
     grow_bcnlt_extension,
+    grow_extended_core_extension,
 )
 from bcnlt.adaptive_vocab.manifest import AdaptiveVocabularyManifest, MacroToken
+from bcnlt.extended_core import ExtendedCoreEntry, ExtendedCoreLibrary
+from bcnlt.extended_core_vocab import build_extended_core_vocab
 from integrations.runeforge_mk2_tokenizer.merge_bcnlt_adapter import (
     materialize_extended_tables,
 )
@@ -217,3 +220,88 @@ def test_growth_preserves_all_old_rows_and_initializes_only_appended_macros():
             {"<|bcnlt:macro:0000|>": "common surface sequence"},
             seed=17,
         )
+
+
+def test_extended_core_growth_preserves_v1_rows_and_appends_native_meaning_rows():
+    model = TinyCausalModel()
+    attach_bcnlt_extension(model, Manifest(), DEFINITIONS, seed=3)
+    old_embedding = model.embedding.extension.weight.detach().clone()
+    old_head = model.lm_head.extension.weight.detach().clone()
+    entry = ExtendedCoreEntry(
+        extended_core_id="bcnlt.extended.python.alpha.r1",
+        signature="python|spec|UNKNOWN_SEMANTIC|alpha|surface",
+        revision=1,
+        language="python",
+        semantic_spec_sha256="b" * 64,
+        surface="alpha surface",
+        relation="alpha.self",
+        category="language_extension",
+        hypotheses=("alpha has independently tested behavior",),
+        evidence=("verified alpha",),
+        confidence=0.93,
+        validated_domain="python.alpha",
+        common_core_projection=None,
+        evidence_sha256=("c" * 64,),
+        extension_name="python.alpha",
+    )
+    native = build_extended_core_vocab(
+        Manifest(),
+        ExtendedCoreLibrary((entry,)),
+    )
+
+    grow_extended_core_extension(
+        model,
+        Manifest(),
+        native,
+        seed=17,
+    )
+
+    assert torch.equal(model.embedding.extension.weight[:2], old_embedding)
+    assert torch.equal(model.lm_head.extension.weight[:2], old_head)
+    assert model.embedding.extension.weight.shape[0] == 3
+    assert model.lm_head.extension.weight.shape[0] == 3
+    assert model.embedding.base.weight.requires_grad is False
+    assert model.embedding.extension.weight.requires_grad
+
+
+def test_extended_core_growth_chain_keeps_tombstone_row_and_appends_new_revision():
+    model = TinyCausalModel()
+    attach_bcnlt_extension(model, Manifest(), DEFINITIONS, seed=3)
+
+    def entry(name: str) -> ExtendedCoreEntry:
+        return ExtendedCoreEntry(
+            extended_core_id=f"bcnlt.extended.python.{name}.r1",
+            signature=f"python|spec|UNKNOWN_SEMANTIC|{name}|surface",
+            revision=1,
+            language="python",
+            semantic_spec_sha256="b" * 64,
+            surface=f"{name} surface",
+            relation=f"{name}.self",
+            category="language_extension",
+            hypotheses=(f"{name} has independently tested behavior",),
+            evidence=(f"verified {name}",),
+            confidence=0.93,
+            validated_domain=f"python.{name}",
+            common_core_projection=None,
+            evidence_sha256=("c" * 64,),
+            extension_name=f"python.{name}",
+        )
+
+    first = build_extended_core_vocab(
+        Manifest(),
+        ExtendedCoreLibrary((entry("alpha"),)),
+    )
+    grow_extended_core_extension(model, Manifest(), first, seed=17)
+    first_rows = model.embedding.extension.weight.detach().clone()
+
+    second = build_extended_core_vocab(
+        Manifest(),
+        ExtendedCoreLibrary((entry("beta"),)),
+        previous=first,
+    )
+    grow_extended_core_extension(model, first, second, seed=17)
+
+    assert second.tokens[0].active is False
+    assert torch.equal(model.embedding.extension.weight[:3], first_rows)
+    assert model.embedding.extension.weight.shape[0] == 4
+    assert model.lm_head.extension.weight.shape[0] == 4

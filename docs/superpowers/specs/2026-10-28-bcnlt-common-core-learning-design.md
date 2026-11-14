@@ -1,5 +1,8 @@
 # BCNLT Common Coding Core and Learned Definitions
 
+> Superseded boundary: Common Core is immutable. Validated outlier meanings belong
+> to Extended Core; any Common Core interpretation is decomposition metadata only.
+
 ## Source of truth
 
 This design returns BCNLT to the architecture in the earliest September 20
@@ -95,7 +98,8 @@ autonomous promotion.
 
 The store is append-only. Every revision preserves the original observations,
 evidence kinds, distinct-context fingerprints, validation mode,
-language/grammar identity, semantic-spec hash, and target Common Core concept.
+language/grammar identity, semantic-spec hash, Extended Core identity, and any
+tested Common Core decomposition.
 A changed grammar or spec cannot reuse an unrelated definition accidentally.
 
 ## Boundaries

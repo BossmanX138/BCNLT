@@ -45,6 +45,18 @@ class MeaningEvalReport:
     standard_accuracy: float
     bcnlt_accuracy: float
     results: tuple[RetrievalResult, ...]
+    evaluation_kind: str = "extractor_self_consistency_retrieval"
+    target_origin: str = "same_extractor_output"
+    independent_semantic_oracle: bool = False
+    promotion_eligible: bool = False
+
+    @property
+    def standard_retrieval_hit_rate(self) -> float:
+        return self.standard_accuracy
+
+    @property
+    def bcnlt_retrieval_hit_rate(self) -> float:
+        return self.bcnlt_accuracy
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -54,6 +66,13 @@ class MeaningEvalReport:
             "bcnlt_hit_count": self.bcnlt_hit_count,
             "standard_accuracy": self.standard_accuracy,
             "bcnlt_accuracy": self.bcnlt_accuracy,
+            "standard_retrieval_hit_rate": self.standard_retrieval_hit_rate,
+            "bcnlt_retrieval_hit_rate": self.bcnlt_retrieval_hit_rate,
+            "evaluation_kind": self.evaluation_kind,
+            "target_origin": self.target_origin,
+            "independent_semantic_oracle": self.independent_semantic_oracle,
+            "promotion_eligible": self.promotion_eligible,
+            "legacy_metric_names": ["standard_accuracy", "bcnlt_accuracy"],
             "results": [result.to_dict() for result in self.results],
         }
 

@@ -207,6 +207,114 @@ def grow_bcnlt_extension(
         config.vocab_size = getattr(new_manifest, "vocab_size")
 
 
+def grow_extended_core_extension(
+    model: nn.Module,
+    old_manifest: Any,
+    new_manifest: Any,
+    *,
+    seed: int,
+) -> None:
+    """Append native Extended Core rows while preserving every existing row."""
+
+    old_vocab_size = getattr(old_manifest, "vocab_size", None)
+    old_base_size = getattr(old_manifest, "base_vocab_size", None)
+    old_tokens = tuple(getattr(old_manifest, "tokens", ()))
+    new_tokens = tuple(getattr(new_manifest, "tokens", ()))
+    if old_tokens:
+        exact_parent = (
+            getattr(new_manifest, "v1_vocab_size", None)
+            == getattr(old_manifest, "v1_vocab_size", None)
+            and getattr(new_manifest, "v1_manifest_sha256", None)
+            == getattr(old_manifest, "v1_manifest_sha256", None)
+        )
+        old_identity = [
+            (item.name, item.id, item.extended_core_id, item.definition)
+            for item in old_tokens
+        ]
+        new_prefix_identity = [
+            (item.name, item.id, item.extended_core_id, item.definition)
+            for item in new_tokens[: len(old_tokens)]
+        ]
+        exact_parent = exact_parent and old_identity == new_prefix_identity
+    else:
+        exact_parent = (
+            getattr(new_manifest, "v1_vocab_size", None) == old_vocab_size
+            and getattr(new_manifest, "v1_manifest_sha256", None)
+            == getattr(old_manifest, "manifest_sha256", None)
+        )
+    if (
+        not exact_parent
+        or getattr(new_manifest, "base_vocab_size", None) != old_base_size
+        or getattr(new_manifest, "parent_manifest_sha256", None)
+        != getattr(old_manifest, "manifest_sha256", None)
+    ):
+        raise ValueError(
+            "Extended Core manifest does not append to the exact existing vocabulary"
+        )
+    appended_tokens = new_tokens[len(old_tokens) :]
+    if [item.id for item in appended_tokens] != list(
+        range(old_vocab_size, old_vocab_size + len(appended_tokens))
+    ):
+        raise ValueError("Extended Core token IDs must append contiguously")
+    definitions = [item.definition for item in appended_tokens]
+    if any(not isinstance(item, str) or not item.strip() for item in definitions):
+        raise ValueError("every Extended Core token requires a definition")
+
+    embedding = model.get_input_embeddings()  # type: ignore[attr-defined]
+    output = model.get_output_embeddings()  # type: ignore[attr-defined]
+    if isinstance(embedding, ExtendedEmbedding):
+        frozen_embedding = embedding.base
+        old_embedding_extension = embedding.extension.weight.detach().clone()
+    elif isinstance(embedding, nn.Embedding):
+        frozen_embedding = embedding
+        old_embedding_extension = embedding.weight.new_empty((0, embedding.embedding_dim))
+    else:
+        raise TypeError("Extended Core growth requires an embedding table")
+    if isinstance(output, ExtendedLMHead):
+        frozen_head = output.base
+        old_head_extension = output.extension.weight.detach().clone()
+    elif isinstance(output, nn.Linear):
+        frozen_head = output
+        old_head_extension = output.weight.new_empty((0, output.in_features))
+    else:
+        raise TypeError("Extended Core growth requires a linear output table")
+    if (
+        frozen_embedding.num_embeddings + old_embedding_extension.shape[0]
+        != old_vocab_size
+        or frozen_head.out_features + old_head_extension.shape[0] != old_vocab_size
+    ):
+        raise ValueError("model tables do not match the existing vocabulary before append")
+    if not definitions:
+        return
+
+    preserved = [
+        f"preserved-v1-extension-{index}"
+        for index in range(old_embedding_extension.shape[0])
+    ]
+    grown_embedding = ExtendedEmbedding(
+        frozen_embedding,
+        (*preserved, *definitions),
+        seed=seed,
+        expected_base_vocab_size=frozen_embedding.num_embeddings,
+    )
+    grown_head = ExtendedLMHead(
+        frozen_head,
+        (*preserved, *definitions),
+        seed=seed,
+        expected_base_vocab_size=frozen_head.out_features,
+    )
+    with torch.no_grad():
+        grown_embedding.extension.weight[: len(preserved)].copy_(
+            old_embedding_extension
+        )
+        grown_head.extension.weight[: len(preserved)].copy_(old_head_extension)
+    model.set_input_embeddings(grown_embedding)  # type: ignore[attr-defined]
+    model.set_output_embeddings(grown_head)  # type: ignore[attr-defined]
+    config = getattr(model, "config", None)
+    if config is not None:
+        config.vocab_size = getattr(new_manifest, "vocab_size")
+
+
 def _initialize_rows(
     destination: torch.Tensor,
     base_weight: torch.Tensor,

@@ -28,8 +28,22 @@ class AdaptiveBCNLTTokenizer:
     def encode_records(self, records: Iterable[SemanticTokenRecord]) -> list[int]:
         return self._substitute_stream(self.v1.encode_records(records))
 
-    def encode_source(self, source: str, path: str = "<memory>") -> list[int]:
-        return self._substitute_stream(self.v1.encode_source(source, path=path))
+    def encode_source(
+        self,
+        source: str,
+        path: str = "<memory>",
+        *,
+        language: str = "python",
+        dialect: str | None = None,
+    ) -> list[int]:
+        return self._substitute_stream(
+            self.v1.encode_source(
+                source,
+                path=path,
+                language=language,
+                dialect=dialect,
+            )
+        )
 
     def decode(self, ids: Sequence[int]) -> str:
         return self.v1.decode(self.codec.expand(ids))

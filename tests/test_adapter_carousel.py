@@ -6,9 +6,14 @@ from pathlib import Path
 import pytest
 
 from bcnlt.adapters.carousel import BCNLTMultilingualAdapter, LanguageCarousel
-from bcnlt.adapters.coverage import SemanticCoverage, SemanticExtraction
+from bcnlt.adapters.coverage import (
+    SemanticCoverage,
+    SemanticExtraction,
+    is_unresolved_unknown,
+)
 from bcnlt.adapters.spec import LanguageSemanticSpec, NodeRule
 from bcnlt.core import ContextualUnit, SourceDocument
+from bcnlt.ir import IRKind, IRNode
 from bcnlt.languages import CANONICAL_LANGUAGE_IDS, resolve_language_id
 from bcnlt.semantic_schema import SEMANTIC_SCHEMA_VERSION, UNCERTAINTY_METADATA_KEYS
 
@@ -88,7 +93,7 @@ def test_public_adapter_selects_only_from_explicit_metadata():
 
     assert document.language == "javascript"
     assert engine.parsed == [("let answer = 42;", "javascript", "misleading.py", None)]
-    assert extraction.schema_version == "bcnlt-semantic-record-v2"
+    assert extraction.schema_version == "bcnlt-semantic-record-v3"
     assert extraction.language == "javascript"
     assert extraction.coverage.ratio == 1.0
     assert engine.extracted == [("misleading.py", "javascript")]
@@ -127,10 +132,10 @@ def test_semantic_spec_hash_resolves_inherited_family_rules():
     assert child.canonical_hash == same_resolved_rules.canonical_hash
 
 
-def test_v2_schema_adds_uncertainty_keys_without_changing_token_inventory():
+def test_v3_schema_adds_extended_core_keys_without_changing_token_inventory():
     inventory = Path(__file__).parents[1] / "bcnlt" / "vocab" / "bcnlt-tokenizer-v1.tokens.json"
 
-    assert SEMANTIC_SCHEMA_VERSION == "bcnlt-semantic-record-v2"
+    assert SEMANTIC_SCHEMA_VERSION == "bcnlt-semantic-record-v3"
     assert UNCERTAINTY_METADATA_KEYS == (
         "dynamic_call",
         "dynamic_binding",
@@ -145,7 +150,29 @@ def test_v2_schema_adds_uncertainty_keys_without_changing_token_inventory():
         "learned_definition_signature",
         "learned_definition_state",
         "learned_extension_name",
+        "extended_core_id",
+        "extended_core_signature",
+        "extended_core_revision",
+        "extended_core_state",
+        "extended_core_projection",
+        "extended_core_name",
     )
     assert hashlib.sha256(inventory.read_bytes()).hexdigest() == (
         "1745a81d29dbe617bd7c2c87f83567a1aa056953a5ff62e7e5946ebb054f64a0"
     )
+
+
+def test_validated_extended_core_unit_is_not_reported_as_unresolved_unknown():
+    unit = ContextualUnit(
+        "match value",
+        "UNKNOWN_SEMANTIC",
+        "module",
+        (1, 0, 1, 11),
+        ir=IRNode(IRKind.EXTENSION, name="python.match"),
+        metadata={
+            "extended_core_id": "bcnlt.extended.python.example.r1",
+            "extended_core_state": "validated",
+        },
+    )
+
+    assert is_unresolved_unknown(unit) is False

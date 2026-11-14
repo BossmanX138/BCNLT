@@ -41,9 +41,21 @@ class LexicalSymbolTable:
         self._frames.pop()
 
     def define(self, name: str, span: Span) -> str:
-        identity = self._stable_id(f"symbol|{self.scope}|{name}|{span[0]}:{span[1]}")
-        self._frames[-1].definitions[name] = identity
+        identity, _ = self._define_in_frame(len(self._frames) - 1, name, span)
         return identity
+
+    def define_in_enclosing(
+        self,
+        name: str,
+        span: Span,
+        *,
+        kinds: frozenset[str],
+    ) -> tuple[str, str]:
+        """Define in the nearest lexical frame whose kind owns the binding."""
+        for index in range(len(self._frames) - 1, -1, -1):
+            if self._frames[index].kind in kinds:
+                return self._define_in_frame(index, name, span)
+        raise ValueError(f"No enclosing scope found for kinds: {sorted(kinds)}")
 
     def resolve(self, name: str) -> str | None:
         for frame in reversed(self._frames):
@@ -51,6 +63,12 @@ class LexicalSymbolTable:
             if identity is not None:
                 return identity
         return None
+
+    def _define_in_frame(self, index: int, name: str, span: Span) -> tuple[str, str]:
+        scope = ".".join(frame.name for frame in self._frames[: index + 1])
+        identity = self._stable_id(f"symbol|{scope}|{name}|{span[0]}:{span[1]}")
+        self._frames[index].definitions[name] = identity
+        return identity, scope
 
     def _stable_id(self, payload: str) -> str:
         digest = hashlib.sha256(

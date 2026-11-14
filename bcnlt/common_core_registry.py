@@ -134,10 +134,10 @@ _NODES = {
         swift=("control_transfer_statement",), bash=("command",),
     ),
     "operator": _per_language(
-        python=("binary_operator", "unary_operator"), javascript=("binary_expression", "unary_expression"),
-        typescript=("binary_expression", "unary_expression"), c=("binary_expression", "unary_expression"),
-        cpp=("binary_expression", "unary_expression"), c_sharp=("binary_expression", "prefix_unary_expression"),
-        java=("binary_expression", "unary_expression"), go=("binary_expression", "unary_expression"),
+        python=("binary_operator", "unary_operator"), javascript=("binary_expression", "unary_expression", "update_expression"),
+        typescript=("binary_expression", "unary_expression", "update_expression"), c=("binary_expression", "unary_expression", "update_expression"),
+        cpp=("binary_expression", "unary_expression", "update_expression"), c_sharp=("binary_expression", "prefix_unary_expression", "postfix_unary_expression"),
+        java=("binary_expression", "unary_expression", "update_expression"), go=("binary_expression", "unary_expression", "inc_statement"),
         rust=("binary_expression", "unary_expression"), php=("binary_expression", "unary_op_expression"),
         ruby=("binary", "unary"), kotlin=("binary_expression", "additive_expression", "comparison_expression", "unary_expression"),
         swift=("binary_expression", "additive_expression", "comparison_expression", "prefix_expression"), bash=("binary_expression", "unary_expression"),
@@ -174,7 +174,7 @@ _NODES = {
         python=("import_statement", "import_from_statement"), javascript=("import_statement",), typescript=("import_statement",),
         c=("preproc_include",), cpp=("preproc_include", "using_declaration"), c_sharp=("using_directive",),
         java=("import_declaration",), go=("import_declaration", "package_clause"), rust=("use_declaration", "mod_item"),
-        php=("namespace_use_declaration", "include_expression"), ruby=("call",), kotlin=("import_header",),
+        php=("namespace_use_declaration", "include_expression"), ruby=(), kotlin=("import_header",),
         swift=("import_declaration",), bash=("source_command",),
     ),
 }
@@ -188,38 +188,37 @@ _EXCLUDED_NODES = _per_language(
     javascript=(
         "program", "statement_block", "formal_parameters", "arguments",
         "expression_statement", "lexical_declaration", "parenthesized_expression",
-        "update_expression",
     ),
     typescript=(
         "program", "statement_block", "formal_parameters", "arguments",
         "expression_statement", "lexical_declaration", "parenthesized_expression",
-        "predefined_type", "type_annotation", "update_expression",
+        "predefined_type", "type_annotation",
     ),
     c=(
         "translation_unit", "compound_statement", "parameter_list", "argument_list",
         "declaration", "expression_statement", "function_declarator",
-        "parenthesized_expression", "primitive_type", "update_expression",
+        "parenthesized_expression", "primitive_type",
     ),
     cpp=(
         "translation_unit", "compound_statement", "parameter_list", "argument_list",
         "condition_clause", "declaration", "expression_statement",
-        "function_declarator", "primitive_type", "update_expression",
+        "function_declarator", "primitive_type",
     ),
     c_sharp=(
         "compilation_unit", "declaration_list", "block", "parameter_list",
         "argument_list", "argument", "expression_statement",
-        "local_declaration_statement", "modifier", "postfix_unary_expression",
+        "local_declaration_statement", "modifier",
         "predefined_type", "class_declaration", "variable_declaration",
     ),
     java=(
         "program", "class_body", "block", "formal_parameters", "argument_list",
         "expression_statement", "local_variable_declaration", "modifiers",
         "dimensions", "integral_type", "parenthesized_expression", "type_identifier",
-        "update_expression", "void_type",
+        "void_type",
     ),
     go=(
         "source_file", "statement_list", "block", "parameter_list", "argument_list",
-        "expression_list", "expression_statement", "for_clause", "inc_statement",
+        "expression_list", "expression_statement", "for_clause",
         "package_identifier", "type_identifier",
     ),
     rust=(
@@ -229,7 +228,6 @@ _EXCLUDED_NODES = _per_language(
     php=(
         "program", "php_tag", "compound_statement", "formal_parameters", "arguments",
         "argument", "expression_statement", "name", "parenthesized_expression",
-        "update_expression",
     ),
     ruby=("program", "body_statement", "argument_list", "do", "in", "then", "range"),
     kotlin=(
@@ -315,12 +313,23 @@ def syntax_aliases_for(language: str) -> tuple[SyntaxAlias, ...]:
                     language=language,
                     node_type=node_type,
                     surface_field=surface_field,
-                    role=("definition" if concept_id in _DEFINITION_CONCEPTS else "reference" if concept_id == "call" else None),
+                    role=("definition" if concept_id in _DEFINITION_CONCEPTS else "reference" if concept_id in {"call", "reference"} else None),
                     scope_kind=("function" if concept_id == "function" else None),
                     surface_equals=details.get("surface_equals"),
                     surface_prefix=details.get("surface_prefix"),
                 )
             )
+    if language == "ruby":
+        aliases.extend(
+            SyntaxAlias(
+                concept_id="import",
+                language="ruby",
+                node_type="call",
+                surface_field="method",
+                surface_equals=loader,
+            )
+            for loader in ("require", "require_relative", "load")
+        )
     return tuple(aliases)
 
 
@@ -341,12 +350,14 @@ def build_semantic_spec(language: str) -> LanguageSemanticSpec:
                 alias.surface_prefix,
             )
         )
-        if alias.role is not None and alias.surface_field is not None:
+        if alias.role is not None:
             identifier_roles.append(
-                IdentifierRoleRule(alias.node_type, alias.surface_field, alias.role)
+                IdentifierRoleRule(alias.node_type, alias.surface_field or "", alias.role)
             )
         if alias.scope_kind is not None:
             scope_rules.append(ScopeRule(alias.node_type, alias.scope_kind, alias.surface_field))
+    if language in {"javascript", "typescript"}:
+        scope_rules.append(ScopeRule("statement_block", "block"))
     return LanguageSemanticSpec(
         semantic_spec_version=LANGUAGE_BY_ID[language].semantic_spec_version,
         node_rules=tuple(node_rules),

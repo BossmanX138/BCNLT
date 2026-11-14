@@ -3,6 +3,27 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from bcnlt.core import ContextualUnit, SourceDocument
+from bcnlt.ir import IRKind
+
+
+def is_unresolved_unknown(unit: ContextualUnit) -> bool:
+    """Return whether a unit is still outside both Common and Extended Core."""
+
+    if unit.event != "UNKNOWN_SEMANTIC":
+        return False
+    is_extension = unit.ir is not None and unit.ir.kind is IRKind.EXTENSION
+    has_validated_extended_identity = (
+        unit.metadata.get("extended_core_state") == "validated"
+        and isinstance(unit.metadata.get("extended_core_id"), str)
+        and bool(unit.metadata["extended_core_id"])
+    )
+    has_legacy_validated_identity = (
+        unit.metadata.get("learned_definition_state") == "validated"
+    )
+    return not (
+        is_extension
+        and (has_validated_extended_identity or has_legacy_validated_identity)
+    )
 
 
 @dataclass(frozen=True, slots=True)

@@ -86,8 +86,8 @@ def evaluate_one(
         reports.append(report)
         print(
             f"[{model_id}] {index}/{len(files)} {path.name}: "
-            f"raw={report.standard_correct_count}/{report.probe_count}, "
-            f"bcnlt={report.bcnlt_correct_count}/{report.probe_count}",
+            f"raw_extractor_hits={report.standard_correct_count}/{report.probe_count}, "
+            f"bcnlt_extractor_hits={report.bcnlt_correct_count}/{report.probe_count}",
             flush=True,
         )
     probe_count = sum(report.probe_count for report in reports)
@@ -97,6 +97,7 @@ def evaluate_one(
         "model_id": model_id,
         "readiness_answer": ready_answer,
         "readiness_correct": ready_correct,
+        "readiness_protocol_pass": ready_correct,
         "probe_count": probe_count,
         "request_count": len(timed.latencies),
         "standard_correct": standard_correct,
@@ -104,6 +105,17 @@ def evaluate_one(
         "bcnlt_correct": bcnlt_correct,
         "bcnlt_accuracy": bcnlt_correct / probe_count if probe_count else 0.0,
         "bcnlt_gain": (bcnlt_correct - standard_correct) / probe_count if probe_count else 0.0,
+        "standard_extractor_target_hit_count": standard_correct,
+        "standard_extractor_target_hit_rate": standard_correct / probe_count if probe_count else 0.0,
+        "bcnlt_extractor_target_hit_count": bcnlt_correct,
+        "bcnlt_extractor_target_hit_rate": bcnlt_correct / probe_count if probe_count else 0.0,
+        "extractor_target_hit_rate_gain": (
+            (bcnlt_correct - standard_correct) / probe_count if probe_count else 0.0
+        ),
+        "evaluation_kind": "model_answer_on_extractor_derived_retrieval",
+        "target_origin": "same_extractor_output",
+        "independent_semantic_oracle": False,
+        "promotion_eligible": False,
         "latency_seconds": {
             "total": sum(timed.latencies),
             "mean": statistics.mean(timed.latencies) if timed.latencies else 0.0,
@@ -114,7 +126,7 @@ def evaluate_one(
 
 
 def paired_outcomes(left: dict[str, Any], right: dict[str, Any]) -> dict[str, int]:
-    counts = {"both_correct": 0, "wizard_only": 0, "runeforge_only": 0, "both_wrong": 0}
+    counts = {"both_hit": 0, "wizard_only_hit": 0, "runeforge_only_hit": 0, "neither_hit": 0}
     left_results = [result for report in left["files"] for result in report["results"]]
     right_results = [result for report in right["files"] for result in report["results"]]
     if len(left_results) != len(right_results):
@@ -123,55 +135,59 @@ def paired_outcomes(left: dict[str, Any], right: dict[str, Any]) -> dict[str, in
         left_correct = bool(left_result["bcnlt_correct"])
         right_correct = bool(right_result["bcnlt_correct"])
         if left_correct and right_correct:
-            counts["both_correct"] += 1
+            counts["both_hit"] += 1
         elif left_correct:
-            counts["wizard_only"] += 1
+            counts["wizard_only_hit"] += 1
         elif right_correct:
-            counts["runeforge_only"] += 1
+            counts["runeforge_only_hit"] += 1
         else:
-            counts["both_wrong"] += 1
+            counts["neither_hit"] += 1
     return counts
 
 
 def render_markdown(payload: dict[str, Any]) -> str:
     wizard = payload["models"]["wizard_phi_v02"]
     runeforge = payload["models"]["runeforge_mk2"]
-    paired = payload["paired_bcnlt_outcomes"]
+    paired = payload["paired_extractor_target_outcomes"]
     return "\n".join(
         [
             "# BCNLT head-to-head: Wizard-Phi v0.2 vs Runeforge Mk2 7B",
             "",
             f"Files: {payload['file_count']}  ",
             f"Definition probes: {payload['probe_count']}  ",
-            f"Winner by BCNLT-context accuracy: **{payload['winner']}**",
+            "Semantic winner: **not established**  ",
+            f"Extractor-derived diagnostic leader: **{payload['diagnostic_leader']}**",
             (
                 "Readiness probe: "
-                f"Wizard-Phi **{'pass' if wizard['readiness_correct'] else 'fail'}**, "
-                f"Runeforge **{'pass' if runeforge['readiness_correct'] else 'fail'}**"
+                f"Wizard-Phi **{'pass' if wizard['readiness_protocol_pass'] else 'fail'}**, "
+                f"Runeforge **{'pass' if runeforge['readiness_protocol_pass'] else 'fail'}**"
             ),
             "",
-            "| Model | Raw context | BCNLT context | BCNLT gain | Mean request latency |",
+            "| Model | Extractor-target hit rate (raw) | Extractor-target hit rate (BCNLT) | Hit-rate gain | Mean request latency |",
             "|---|---:|---:|---:|---:|",
             (
-                f"| Wizard-Phi v0.2 | {wizard['standard_accuracy']:.1%} | "
-                f"{wizard['bcnlt_accuracy']:.1%} | {wizard['bcnlt_gain']:+.1%} | "
+                f"| Wizard-Phi v0.2 | {wizard['standard_extractor_target_hit_rate']:.1%} | "
+                f"{wizard['bcnlt_extractor_target_hit_rate']:.1%} | "
+                f"{wizard['extractor_target_hit_rate_gain']:+.1%} | "
                 f"{wizard['latency_seconds']['mean']:.3f}s |"
             ),
             (
-                f"| Runeforge Mk2 7B | {runeforge['standard_accuracy']:.1%} | "
-                f"{runeforge['bcnlt_accuracy']:.1%} | {runeforge['bcnlt_gain']:+.1%} | "
+                f"| Runeforge Mk2 7B | {runeforge['standard_extractor_target_hit_rate']:.1%} | "
+                f"{runeforge['bcnlt_extractor_target_hit_rate']:.1%} | "
+                f"{runeforge['extractor_target_hit_rate_gain']:+.1%} | "
                 f"{runeforge['latency_seconds']['mean']:.3f}s |"
             ),
             "",
-            "## Paired BCNLT outcomes",
+            "## Paired extractor-target outcomes",
             "",
-            f"- Both correct: {paired['both_correct']}",
-            f"- Wizard-Phi only: {paired['wizard_only']}",
-            f"- Runeforge only: {paired['runeforge_only']}",
-            f"- Both wrong: {paired['both_wrong']}",
+            f"- Both hit: {paired['both_hit']}",
+            f"- Wizard-Phi only hit: {paired['wizard_only_hit']}",
+            f"- Runeforge only hit: {paired['runeforge_only_hit']}",
+            f"- Neither hit: {paired['neither_hit']}",
             "",
-            "This benchmark measures definition-line extraction from raw and BCNLT semantic contexts. "
-            "It does not establish general coding quality.",
+            "This diagnostic uses probes and expected lines derived from the same extractor output searched by "
+            "BCNLT. It has no independent semantic oracle, can reward a self-consistent wrong extraction, and is "
+            "not promotion evidence. It does not establish semantic correctness or general coding quality.",
             "",
         ]
     )
@@ -203,14 +219,24 @@ def main() -> int:
     runeforge = evaluate_one(args.runeforge_model, files, args.base_url, args.max_probes_per_file)
     unload(args.base_url, args.runeforge_model)
     paired = paired_outcomes(wizard, runeforge)
-    if wizard["bcnlt_accuracy"] > runeforge["bcnlt_accuracy"]:
-        winner = "Wizard-Phi v0.2"
-    elif runeforge["bcnlt_accuracy"] > wizard["bcnlt_accuracy"]:
-        winner = "Runeforge Mk2 7B"
+    legacy_paired = {
+        "both_correct": paired["both_hit"],
+        "wizard_only": paired["wizard_only_hit"],
+        "runeforge_only": paired["runeforge_only_hit"],
+        "both_wrong": paired["neither_hit"],
+    }
+    if wizard["bcnlt_extractor_target_hit_rate"] > runeforge["bcnlt_extractor_target_hit_rate"]:
+        diagnostic_leader = "Wizard-Phi v0.2"
+    elif runeforge["bcnlt_extractor_target_hit_rate"] > wizard["bcnlt_extractor_target_hit_rate"]:
+        diagnostic_leader = "Runeforge Mk2 7B"
     else:
-        winner = "Tie"
+        diagnostic_leader = "Tie"
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "evaluation_kind": "model_answer_on_extractor_derived_retrieval",
+        "target_origin": "same_extractor_output",
+        "independent_semantic_oracle": False,
+        "promotion_eligible": False,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "elapsed_seconds": (datetime.now(timezone.utc) - started).total_seconds(),
         "input": str(args.input.resolve()),
@@ -219,8 +245,11 @@ def main() -> int:
         "max_probes_per_file": args.max_probes_per_file,
         "probe_count": wizard["probe_count"],
         "models": {"wizard_phi_v02": wizard, "runeforge_mk2": runeforge},
-        "paired_bcnlt_outcomes": paired,
-        "winner": winner,
+        "paired_extractor_target_outcomes": paired,
+        "paired_bcnlt_outcomes": legacy_paired,
+        "diagnostic_leader": diagnostic_leader,
+        "semantic_winner": None,
+        "winner": None,
     }
     (args.output / "results.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
     summary = render_markdown(payload)

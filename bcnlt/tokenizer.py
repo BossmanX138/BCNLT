@@ -7,9 +7,11 @@ from typing import Any
 
 from .adapters.python import PythonAdapter
 from .canonical import canonical_record_bytes, record_from_canonical_bytes
+from .extended_core import ExtendedCoreLibrary
 from .semantic_record import SemanticTokenRecord, records_from_assessments
 from .tokenizer_base import BaseTokenizer
 from .tokenizer_manifest import TokenizerManifest, validate_manifest_for_base
+from .wildcard import WildcardMemory
 
 
 _FIELD_ORDER = (
@@ -37,23 +39,49 @@ class BCNLTTokenizer:
         manifest: TokenizerManifest,
         *,
         learned_memory_path: str | Path | None = None,
+        learned_memory_read_only: bool = False,
     ) -> None:
         validate_manifest_for_base(manifest, base)
         self.base = base
         self.manifest = manifest
+        self.learned_memory_path = (
+            Path(learned_memory_path) if learned_memory_path is not None else None
+        )
+        self.learned_memory_read_only = learned_memory_read_only
         self._token_to_id = manifest.token_to_id
         self._id_to_token = manifest.id_to_token
         self._semantic_adapter = PythonAdapter(
-            wildcard_memory_path=learned_memory_path
+            wildcard_memory_path=self.learned_memory_path,
+            wildcard_memory_read_only=self.learned_memory_read_only,
         )
 
     def encode_text(self, text: str) -> list[int]:
         return self._encode_base_mode("text", text)
 
+    def reload_learned_state(self) -> None:
+        """Reload an externally updated JSONL learning ledger before future encodes."""
+
+        self._semantic_adapter = PythonAdapter(
+            wildcard_memory_path=self.learned_memory_path,
+            wildcard_memory_read_only=self.learned_memory_read_only,
+        )
+
+    def extended_core_library(self) -> ExtendedCoreLibrary:
+        """Return validated learned meanings without modifying Common Core IDs."""
+
+        if self.learned_memory_path is None or not self.learned_memory_path.is_file():
+            return ExtendedCoreLibrary()
+        memory = WildcardMemory(self.learned_memory_path, read_only=True)
+        return memory.validated_extended_core()
+
     def save_pretrained(self, path: str | Path) -> tuple[Path, ...]:
         from .hf_tokenizer import save_tokenizer_artifact
 
-        return save_tokenizer_artifact(path, self.manifest)
+        return save_tokenizer_artifact(
+            path,
+            self.manifest,
+            learned_memory_path=self.learned_memory_path,
+        )
 
     @classmethod
     def from_pretrained(
@@ -79,7 +107,18 @@ class BCNLTTokenizer:
         result.append(self._id("stream:end"))
         return result
 
-    def encode_source(self, source: str, path: str = "<memory>") -> list[int]:
+    def encode_source(
+        self,
+        source: str,
+        path: str = "<memory>",
+        *,
+        language: str = "python",
+        dialect: str | None = None,
+    ) -> list[int]:
+        if language != "python" or dialect not in {None, "python3"}:
+            raise ValueError(
+                "This BCNLT tokenizer revision only supports Python semantic encoding"
+            )
         document = self._semantic_adapter.parse(source, path=path)
         records = records_from_assessments(
             self._semantic_adapter.extract(document).assessments

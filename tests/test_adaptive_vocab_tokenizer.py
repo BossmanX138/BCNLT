@@ -73,6 +73,34 @@ def test_text_and_raw_code_delegate_exactly_while_semantic_payload_uses_macro(tm
     assert adaptive.decode_records(adaptive.encode_records((record,))) == (record,)
 
 
+def test_encode_source_forwards_language_and_dialect_to_v1(tmp_path: Path):
+    v1, _ = _v1(tmp_path)
+    expansion = tuple(v1.base.encode("value", add_special_tokens=False))
+    adaptive = AdaptiveBCNLTTokenizer(v1, _manifest(v1, expansion))
+    calls: list[tuple[str, str, str, str | None]] = []
+
+    def encode_source(
+        source: str,
+        path: str = "<memory>",
+        *,
+        language: str = "python",
+        dialect: str | None = None,
+    ) -> list[int]:
+        calls.append((source, path, language, dialect))
+        return v1.encode_records((_record("value"),))
+
+    v1.encode_source = encode_source  # type: ignore[method-assign]
+
+    adaptive.encode_source(
+        "const value = 1;",
+        path="fixture.js",
+        language="javascript",
+        dialect="jsx",
+    )
+
+    assert calls == [("const value = 1;", "fixture.js", "javascript", "jsx")]
+
+
 def test_macro_never_crosses_structural_field_boundary(tmp_path: Path):
     v1, _ = _v1(tmp_path)
     surface_ids = tuple(v1.base.encode("A", add_special_tokens=False))

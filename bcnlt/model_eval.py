@@ -46,6 +46,18 @@ class ModelEvalReport:
     standard_accuracy: float
     bcnlt_accuracy: float
     results: tuple[ModelAnswerResult, ...]
+    evaluation_kind: str = "model_answer_on_extractor_derived_retrieval"
+    target_origin: str = "same_extractor_output"
+    independent_semantic_oracle: bool = False
+    promotion_eligible: bool = False
+
+    @property
+    def standard_extractor_target_hit_rate(self) -> float:
+        return self.standard_accuracy
+
+    @property
+    def bcnlt_extractor_target_hit_rate(self) -> float:
+        return self.bcnlt_accuracy
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -56,6 +68,20 @@ class ModelEvalReport:
             "bcnlt_correct_count": self.bcnlt_correct_count,
             "standard_accuracy": self.standard_accuracy,
             "bcnlt_accuracy": self.bcnlt_accuracy,
+            "standard_extractor_target_hit_count": self.standard_correct_count,
+            "bcnlt_extractor_target_hit_count": self.bcnlt_correct_count,
+            "standard_extractor_target_hit_rate": self.standard_extractor_target_hit_rate,
+            "bcnlt_extractor_target_hit_rate": self.bcnlt_extractor_target_hit_rate,
+            "evaluation_kind": self.evaluation_kind,
+            "target_origin": self.target_origin,
+            "independent_semantic_oracle": self.independent_semantic_oracle,
+            "promotion_eligible": self.promotion_eligible,
+            "legacy_metric_names": [
+                "standard_correct_count",
+                "bcnlt_correct_count",
+                "standard_accuracy",
+                "bcnlt_accuracy",
+            ],
             "results": [result.to_dict() for result in self.results],
         }
 

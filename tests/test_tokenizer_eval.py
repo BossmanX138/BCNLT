@@ -11,6 +11,7 @@ from bcnlt.tokenizer_eval import (
     decode_generated_stream,
     evaluate_model,
     evaluate_promotion,
+    freeze_evaluation_artifact,
     load_evaluation_suite,
 )
 
@@ -52,6 +53,29 @@ def test_evaluator_scores_frozen_categories_deterministically():
     }
     assert not first.runtime_failures
     assert all(result.prompt == case.prompt for result, case in zip(first.results, CASES))
+
+
+def test_frozen_evaluation_artifact_records_schema_and_exact_subject_identity():
+    report = evaluate_model("base", CASES, SETTINGS, _perfect, heldout_loss=2.0)
+
+    payload = freeze_evaluation_artifact(
+        report,
+        artifact_role="base_identity",
+        artifact_sha256="a" * 64,
+    )
+
+    assert payload["schema_version"] == "bcnlt-model-evaluation-v1"
+    assert payload["evaluated_artifact"] == {
+        "role": "base_identity",
+        "sha256": "a" * 64,
+    }
+    assert payload["identity"] == "base"
+    with pytest.raises(ValueError, match="SHA-256"):
+        freeze_evaluation_artifact(
+            report,
+            artifact_role="base_identity",
+            artifact_sha256="not-a-digest",
+        )
 
 
 def test_semantic_code_requires_parseable_ast_equivalence_and_failures_are_recorded():

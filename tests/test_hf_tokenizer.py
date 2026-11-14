@@ -10,8 +10,12 @@ from bcnlt.hf_tokenizer import (
     identity_from_directory,
     resolve_tokenizer_source,
 )
+from bcnlt.adapters.python import PythonAdapter
+from bcnlt.core import ContextualUnit
+from bcnlt.ir import IRKind
 from bcnlt.tokenizer import BCNLTTokenizer
 from bcnlt.tokenizer_manifest import build_manifest
+from bcnlt.wildcard import ProvisionalMeaning, WildcardMemory
 from tests.tokenizer_fixtures import write_byte_level_tokenizer
 
 
@@ -20,6 +24,22 @@ def _build_tokenizer(tmp_path: Path) -> tuple[BCNLTTokenizer, Path]:
     base = HuggingFaceBaseTokenizer.from_pretrained(base_path)
     identity = identity_from_directory(base_path, name="fixture/base", revision="local-v1")
     return BCNLTTokenizer(base, build_manifest(base, identity)), base_path
+
+
+def _build_tokenizer_with_learning(
+    tmp_path: Path, learned_path: Path
+) -> tuple[BCNLTTokenizer, Path]:
+    base_path = write_byte_level_tokenizer(tmp_path / "base")
+    base = HuggingFaceBaseTokenizer.from_pretrained(base_path)
+    identity = identity_from_directory(base_path, name="fixture/base", revision="local-v1")
+    return (
+        BCNLTTokenizer(
+            base,
+            build_manifest(base, identity),
+            learned_memory_path=learned_path,
+        ),
+        base_path,
+    )
 
 
 def test_save_and_reload_preserve_ids_and_artifact_contract(tmp_path: Path):
@@ -38,6 +58,78 @@ def test_save_and_reload_preserve_ids_and_artifact_contract(tmp_path: Path):
     assert reloaded.manifest == tokenizer.manifest
     assert reloaded.encode_text("hello world") == tokenizer.encode_text("hello world")
     assert reloaded.decode(reloaded.encode_text("hello world")) == "hello world"
+
+
+def test_save_and_reload_freeze_learned_semantic_state(tmp_path: Path):
+    learned_path = tmp_path / "learned.jsonl"
+    unit = ContextualUnit(
+        surface="match value",
+        event="UNKNOWN_SEMANTIC",
+        scope="module",
+        span=(1, 0, 1, 11),
+        ast_relation="match_statement.self",
+        metadata={"unknown_node": "match_statement"},
+    )
+    memory = WildcardMemory(learned_path)
+    memory.remember(
+        unit,
+        ProvisionalMeaning(
+            category="control_flow",
+            hypotheses=("branch",),
+            evidence=("fixture",),
+            confidence=0.8,
+            target_event="BRANCH",
+            target_ir_kind=IRKind.BRANCH.value,
+        ),
+        document_identity="fixture.py",
+    )
+    tokenizer, base_path = _build_tokenizer_with_learning(tmp_path, learned_path)
+    artifact = tmp_path / "artifact"
+
+    files = tokenizer.save_pretrained(artifact)
+    reloaded = BCNLTTokenizer.from_pretrained(artifact, base_path)
+
+    assert {Path(path).name for path in files} >= {
+        "bcnlt_learned_definitions.jsonl",
+        "bcnlt_learned_state.json",
+    }
+    assert (
+        artifact / "bcnlt_learned_definitions.jsonl"
+    ).read_bytes() == learned_path.read_bytes()
+    assert reloaded.encode_source("match value:\n    case _: pass\n") == tokenizer.encode_source(
+        "match value:\n    case _: pass\n"
+    )
+
+
+def test_loaded_artifact_does_not_mutate_frozen_learned_state(tmp_path: Path):
+    learned_path = tmp_path / "empty-learned.jsonl"
+    learned_path.write_text("", encoding="utf-8")
+    tokenizer, base_path = _build_tokenizer_with_learning(tmp_path, learned_path)
+    artifact = tmp_path / "read-only-artifact"
+    tokenizer.save_pretrained(artifact)
+    frozen_path = artifact / "bcnlt_learned_definitions.jsonl"
+    frozen_bytes = frozen_path.read_bytes()
+
+    reloaded = BCNLTTokenizer.from_pretrained(artifact, base_path)
+    reloaded.encode_source("ready = True\nassert ready\n", path="runtime.py")
+
+    assert frozen_path.read_bytes() == frozen_bytes
+    BCNLTTokenizer.from_pretrained(artifact, base_path)
+
+
+def test_reload_rejects_tampered_learned_semantic_state(tmp_path: Path):
+    learned_path = tmp_path / "learned.jsonl"
+    learned_path.write_text("{}\n", encoding="utf-8")
+    tokenizer, base_path = _build_tokenizer_with_learning(tmp_path, learned_path)
+    artifact = tmp_path / "artifact"
+    tokenizer.save_pretrained(artifact)
+    with (artifact / "bcnlt_learned_definitions.jsonl").open(
+        "a", encoding="utf-8"
+    ) as handle:
+        handle.write("{}\n")
+
+    with pytest.raises(ValueError, match="learned semantic state hash mismatch"):
+        BCNLTTokenizer.from_pretrained(artifact, base_path)
 
 
 def test_fast_base_tokenizer_returns_exact_unicode_character_offsets(tmp_path: Path):
@@ -138,3 +230,175 @@ def test_hub_tokenizer_source_resolves_revision_to_immutable_commit(
     assert calls["model_info"] == ("organization/model", "release-v1")
     assert calls["snapshot_download"]["revision"] == "a" * 40
     assert calls["snapshot_download"]["repo_id"] == "organization/model"
+
+
+def test_scientific_learning_publishes_extended_core_without_changing_ids(tmp_path: Path):
+    from dataclasses import replace
+
+    from bcnlt.adapters.python import build_python_spec
+    from bcnlt.scientific_learning import (
+        CodingExperimentFixture,
+        HypothesisProjection,
+    )
+    from bcnlt.wildcard import DefinitionState
+
+    source = "ready = True\nassert ready\n"
+    learned_path = tmp_path / "scientific-learned.jsonl"
+    spec_sha = build_python_spec().canonical_hash
+    seed_adapter = PythonAdapter()
+    seed_document = seed_adapter.parse(source, path="seed.py")
+    seed = next(
+        unit for unit in seed_adapter.to_units(seed_document)
+        if unit.event == "UNKNOWN_SEMANTIC" and unit.ast_relation == "Assert"
+    )
+    memory = WildcardMemory(
+        learned_path,
+        language="python",
+        semantic_spec_sha256=spec_sha,
+    )
+    units = [
+        replace(
+            seed,
+            scope=f"module.case_{index}",
+            span=(index * 10 + 2, 0, index * 10 + 2, 12),
+            recent_history=(f"DEFINE:case_{index}",),
+        )
+        for index in (1, 2, 3)
+    ]
+    for index, unit in enumerate(units, start=1):
+        memory.remember(
+            unit,
+            ProvisionalMeaning(
+                category="error",
+                hypotheses=("assert may raise an assertion error",),
+                evidence=("language reference fixture",),
+                confidence=0.64,
+                target_event="RAISE",
+                target_ir_kind=IRKind.ERROR.value,
+            ),
+            document_identity=f"assert-{index}.py",
+        )
+
+    tokenizer, base_path = _build_tokenizer_with_learning(tmp_path, learned_path)
+    frozen_manifest = tokenizer.manifest.to_dict()
+    provisional = tokenizer.decode_records(
+        tokenizer.encode_source(source, path="runtime.py")
+    )
+    assert any(record.event == "UNKNOWN_SEMANTIC" for record in provisional)
+
+    for index, unit in enumerate(units, start=1):
+        record = memory.lookup(unit)
+        assert record is not None
+        control = HypothesisProjection(
+            signature=record.signature,
+            revision=record.hypothesis_revision,
+            target_event="BRANCH",
+            target_ir_kind=IRKind.BRANCH.value,
+            language=record.language,
+            semantic_spec_sha256=record.semantic_spec_sha256,
+        )
+        memory.run_scientific_experiment(
+            unit,
+            source=f"assert ready  # independent fixture {index}\n",
+            fixture=CodingExperimentFixture(
+                experiment_id=f"assert-exp-{index}",
+                fixture_id=f"trusted/assert/{index}",
+                fixture_version=1,
+                domain="python.assert.raise-category",
+                document_identity=f"assert-{index}.py",
+                oracle_id="python-language-reference-assert",
+                oracle_kind="language_spec",
+                oracle_version="3.12",
+                operation="raise_signal",
+                inputs={
+                    "category": "AssertionError",
+                    "message": f"assertion-case-{index}",
+                },
+                expected_output={
+                    "raised": "AssertionError",
+                    "message": f"assertion-case-{index}",
+                },
+            ),
+            negative_control=control,
+        )
+
+    assert memory.lookup(units[0]).definition_state is DefinitionState.VALIDATED
+    tokenizer.reload_learned_state()
+    learned_ids = tokenizer.encode_source(source, path="runtime.py")
+    learned = tokenizer.decode_records(learned_ids)
+    extended_record = next(
+        record
+        for record in learned
+        if dict(record.metadata).get("extended_core_state") == "validated"
+    )
+    learned_metadata = dict(extended_record.metadata)
+    library = tokenizer.extended_core_library()
+    entry = library.by_signature(memory.signature_for(units[0]))
+
+    assert entry is not None
+    assert extended_record.event == "UNKNOWN_SEMANTIC"
+    assert extended_record.ir is not None
+    assert extended_record.ir.kind == IRKind.EXTENSION.value
+    assert learned_metadata["extended_core_id"] == entry.extended_core_id
+    assert learned_metadata["extended_core_state"] == "validated"
+    assert entry.common_core_projection.event == "RAISE"
+    assert entry.common_core_projection.ir_kind == IRKind.ERROR.value
+    assert tokenizer.manifest.token_to_id["<|bcnlt:event:unknown_semantic|>"] in learned_ids
+    assert tokenizer.manifest.token_to_id["<|bcnlt:event:raise|>"] not in learned_ids
+    assert tokenizer.manifest.to_dict() == frozen_manifest
+
+    artifact = tmp_path / "scientific-artifact"
+    tokenizer.save_pretrained(artifact)
+    frozen_tokenizer = BCNLTTokenizer.from_pretrained(artifact, base_path)
+    frozen_records = frozen_tokenizer.decode_records(
+        frozen_tokenizer.encode_source(source, path="runtime.py")
+    )
+    assert any(
+        dict(record.metadata).get("extended_core_id") == entry.extended_core_id
+        and record.event == "UNKNOWN_SEMANTIC"
+        for record in frozen_records
+    )
+    assert tuple(frozen_tokenizer.extended_core_library()) == tuple(library)
+
+    record = memory.lookup(units[0])
+    assert record is not None
+    memory.run_scientific_experiment(
+        units[0],
+        source="assert ready  # contradictory fixture\n",
+        fixture=CodingExperimentFixture(
+            experiment_id="assert-exp-contradiction",
+            fixture_id="trusted/assert/contradiction",
+            fixture_version=1,
+            domain="python.assert.raise-category",
+            document_identity="assert-1.py",
+            oracle_id="python-language-reference-assert",
+            oracle_kind="language_spec",
+            oracle_version="3.12",
+            operation="raise_signal",
+            inputs={"category": "AssertionError"},
+            expected_output={"raised": "ValueError"},
+        ),
+        negative_control=HypothesisProjection(
+            signature=record.signature,
+            revision=record.hypothesis_revision,
+            target_event="BRANCH",
+            target_ir_kind=IRKind.BRANCH.value,
+            language=record.language,
+            semantic_spec_sha256=record.semantic_spec_sha256,
+        ),
+    )
+    tokenizer.reload_learned_state()
+    revoked = tokenizer.decode_records(tokenizer.encode_source(source, path="runtime.py"))
+
+    assert any(record.event == "UNKNOWN_SEMANTIC" for record in revoked)
+    assert all("extended_core_state" not in dict(record.metadata) for record in revoked)
+    assert len(tokenizer.extended_core_library()) == 0
+    assert tokenizer.manifest.to_dict() == frozen_manifest
+    still_frozen = frozen_tokenizer.decode_records(
+        frozen_tokenizer.encode_source(source, path="runtime.py")
+    )
+    assert any(
+        dict(record.metadata).get("extended_core_id") == entry.extended_core_id
+        and record.event == "UNKNOWN_SEMANTIC"
+        for record in still_frozen
+    )

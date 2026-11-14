@@ -71,20 +71,41 @@ def test_repetition_in_preprocessing_does_not_validate_a_wildcard(tmp_path: Path
     assert result.units[0].event == "UNKNOWN_SEMANTIC"
 
 
-def test_validated_wildcard_is_injected_before_canonical_admission(tmp_path: Path):
+def test_claimed_wildcard_outcomes_are_not_admitted_without_a_verifier(tmp_path: Path):
     unit = _unknown()
+    second = ContextualUnit(
+        surface=unit.surface,
+        event=unit.event,
+        scope="module.worker",
+        span=(12, 4, 12, 15),
+        ast_relation=unit.ast_relation,
+        metadata=unit.metadata,
+    )
     memory = WildcardMemory(
         tmp_path / "python.jsonl",
         language="python",
         semantic_spec_sha256="c" * 64,
     )
-    WildcardResolver(memory).resolve_and_remember(unit, ProjectIndex())
-    memory.validate(
-        unit,
-        target_event="BRANCH",
-        target_ir_kind=IRKind.BRANCH.value,
-        evidence=("reviewed match fixture",),
-    )
+    resolver = WildcardResolver(memory)
+    for observed, document_identity in (
+        (unit, "first.py"),
+        (second, "second.py"),
+    ):
+        resolver.resolve_and_remember(
+            observed,
+            ProjectIndex(),
+            document_identity=document_identity,
+        )
+        memory.record_coding_outcome(
+            observed,
+            target_event="BRANCH",
+            target_ir_kind=IRKind.BRANCH.value,
+            evidence=("reviewed match fixture passed",),
+            document_identity=document_identity,
+            verification_oracle=f"pytest:{document_identity}",
+            result_fingerprint=f"result:{document_identity}",
+            correct=True,
+        )
 
     result = SemanticPreprocessor(memory_root=tmp_path).process(
         _document(unit),
@@ -92,16 +113,15 @@ def test_validated_wildcard_is_injected_before_canonical_admission(tmp_path: Pat
         semantic_spec_sha256="c" * 64,
     )
 
-    assert result.assessments[0].state is KnowledgeState.RETRIEVED
-    assert result.units[0].event == "BRANCH"
-    assert result.records[0].event == "BRANCH"
-    assert result.records[0].confidence_band.value == "high"
+    assert result.assessments[0].state is KnowledgeState.PROVISIONAL
+    assert result.units[0].event == "UNKNOWN_SEMANTIC"
+    assert result.records[0].event == "UNKNOWN_SEMANTIC"
+    assert result.records[0].confidence_band.value == "medium"
     metadata = dict(result.records[0].metadata)
-    assert metadata["learned_definition_state"] == "validated"
-    assert metadata["learned_definition_signature"]
+    assert "learned_definition_state" not in metadata
 
 
-def test_preprocessing_learns_from_independent_context_and_reuses_it(tmp_path: Path):
+def test_preprocessing_does_not_reuse_unverified_independent_contexts(tmp_path: Path):
     first = _unknown()
     second = ContextualUnit(
         surface=first.surface,
@@ -125,5 +145,5 @@ def test_preprocessing_learns_from_independent_context_and_reuses_it(tmp_path: P
     )
 
     assert learned.assessments[0].state is KnowledgeState.PROVISIONAL
-    assert reused.assessments[0].state is KnowledgeState.RETRIEVED
-    assert reused.records[0].event == "BRANCH"
+    assert reused.assessments[0].state is KnowledgeState.PROVISIONAL
+    assert reused.records[0].event == "UNKNOWN_SEMANTIC"

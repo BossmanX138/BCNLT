@@ -33,11 +33,13 @@ class SemanticPreprocessor:
         *,
         memory_root: str | Path | None = None,
         memory_path: str | Path | None = None,
+        memory_read_only: bool = False,
         scorer: HeuristicUncertaintyScorer | None = None,
         uyr_config: UYRConfig | None = None,
     ) -> None:
         self.memory_root = Path(memory_root) if memory_root is not None else None
         self.memory_path = Path(memory_path) if memory_path is not None else None
+        self.memory_read_only = memory_read_only
         if self.memory_root is not None and self.memory_path is not None:
             raise ValueError("Choose either a learned-memory root or an exact memory path")
         self.scorer = scorer or HeuristicUncertaintyScorer()
@@ -66,6 +68,7 @@ class SemanticPreprocessor:
                 memory_path,
                 language=document.language,
                 semantic_spec_sha256=semantic_spec_sha256,
+                read_only=self.memory_read_only,
             )
             self._memories[memory_key] = memory
         wildcard = WildcardResolver(memory)
@@ -107,9 +110,9 @@ class SemanticPreprocessor:
                 )
             ),
         )
-        if result.learned_projection is not None:
+        if result.extended_core_resolution is not None:
             return KnowledgeBoundaryAssessment(
-                unit=result.projected_unit(),
+                unit=result.resolved_unit(),
                 initial_score=initial,
                 final_score=final,
                 state=KnowledgeState.RETRIEVED,
@@ -135,11 +138,14 @@ class SemanticPreprocessor:
                 evidence=result.retrievals,
             )
 
-        meaning = wildcard.resolve_and_remember(
-            unit,
-            document.index,
-            document_identity=document.path,
-        )
+        if self.memory_read_only:
+            meaning = wildcard.resolve(unit, document.index)
+        else:
+            meaning = wildcard.resolve_and_remember(
+                unit,
+                document.index,
+                document_identity=document.path,
+            )
         assessment = KnowledgeBoundaryAssessment.from_wildcard(
             unit=unit,
             initial=initial,

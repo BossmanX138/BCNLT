@@ -39,6 +39,13 @@ def test_model_eval_answers_definition_questions_from_contexts():
     assert report.bcnlt_accuracy == 1.0
     assert any(result.standard_correct is False for result in report.results)
 
+    payload = report.to_dict()
+    assert payload["evaluation_kind"] == "model_answer_on_extractor_derived_retrieval"
+    assert payload["target_origin"] == "same_extractor_output"
+    assert payload["independent_semantic_oracle"] is False
+    assert payload["promotion_eligible"] is False
+    assert payload["bcnlt_extractor_target_hit_rate"] == payload["bcnlt_accuracy"]
+
 
 def test_cli_writes_model_eval_report(tmp_path: Path):
     sample = tmp_path / "model_eval.py"

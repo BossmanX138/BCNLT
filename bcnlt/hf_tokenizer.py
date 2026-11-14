@@ -17,6 +17,9 @@ from .tokenizer_manifest import (
 
 MANIFEST_FILENAME = "bcnlt_tokenizer_manifest.json"
 INVENTORY_FILENAME = "bcnlt-tokenizer-v1.tokens.json"
+LEARNED_DEFINITIONS_FILENAME = "bcnlt_learned_definitions.jsonl"
+LEARNED_STATE_FILENAME = "bcnlt_learned_state.json"
+LEARNED_STATE_SCHEMA = "bcnlt-learned-state-v1"
 _TOKENIZER_FILES = (
     "config.json",
     "tokenizer.json",
@@ -171,6 +174,8 @@ def identity_from_directory(
 def save_tokenizer_artifact(
     path: str | Path,
     manifest: TokenizerManifest,
+    *,
+    learned_memory_path: str | Path | None = None,
 ) -> tuple[Path, ...]:
     destination = Path(path)
     if destination.exists() and any(destination.iterdir()):
@@ -181,7 +186,32 @@ def save_tokenizer_artifact(
     write_manifest(manifest_path, manifest)
     shutil.copyfile(DEFAULT_INVENTORY_PATH, inventory_path)
     _verify_inventory(inventory_path, manifest.structural_inventory_sha256)
-    return manifest_path, inventory_path
+    files = [manifest_path, inventory_path]
+    if learned_memory_path is not None:
+        learned_source = Path(learned_memory_path)
+        if learned_source.is_file():
+            learned_path = destination / LEARNED_DEFINITIONS_FILENAME
+            state_path = destination / LEARNED_STATE_FILENAME
+            payload = learned_source.read_bytes()
+            learned_path.write_bytes(payload)
+            state = {
+                "schema_version": LEARNED_STATE_SCHEMA,
+                "filename": LEARNED_DEFINITIONS_FILENAME,
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "byte_count": len(payload),
+            }
+            state_path.write_text(
+                json.dumps(
+                    state,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            files.extend((learned_path, state_path))
+    return tuple(files)
 
 
 def load_tokenizer_artifact(
@@ -215,10 +245,12 @@ def load_tokenizer_artifact(
     )
     manifest = load_manifest(manifest_path, base, identity)
     _verify_inventory(inventory_path, manifest.structural_inventory_sha256)
+    learned_path = _verify_learned_state(artifact)
     return BCNLTTokenizer(
         base,
         manifest,
-        learned_memory_path=artifact / "bcnlt_learned_definitions.jsonl",
+        learned_memory_path=learned_path,
+        learned_memory_read_only=True,
     )
 
 
@@ -230,3 +262,32 @@ def _verify_inventory(path: Path, expected_sha256: str) -> None:
     actual = hashlib.sha256(payload).hexdigest()
     if actual != expected_sha256:
         raise ValueError("Tokenizer artifact structural inventory hash mismatch")
+
+
+def _verify_learned_state(artifact: Path) -> Path:
+    learned_path = artifact / LEARNED_DEFINITIONS_FILENAME
+    state_path = artifact / LEARNED_STATE_FILENAME
+    if not learned_path.exists() and not state_path.exists():
+        return learned_path
+    if not learned_path.is_file() or not state_path.is_file():
+        raise ValueError("Tokenizer artifact learned semantic state is incomplete")
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Cannot read tokenizer learned semantic state: {exc}") from exc
+    if (
+        not isinstance(state, dict)
+        or state.get("schema_version") != LEARNED_STATE_SCHEMA
+        or state.get("filename") != LEARNED_DEFINITIONS_FILENAME
+        or not isinstance(state.get("sha256"), str)
+        or not isinstance(state.get("byte_count"), int)
+        or isinstance(state.get("byte_count"), bool)
+    ):
+        raise ValueError("Tokenizer artifact learned semantic state metadata is invalid")
+    payload = learned_path.read_bytes()
+    if (
+        len(payload) != state["byte_count"]
+        or hashlib.sha256(payload).hexdigest() != state["sha256"]
+    ):
+        raise ValueError("Tokenizer artifact learned semantic state hash mismatch")
+    return learned_path

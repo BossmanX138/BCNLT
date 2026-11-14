@@ -113,7 +113,7 @@ Run it with:
 python -m bcnlt.cli path\to\file.py --meaning-report meaning.json --meaning-max-probes 50
 ```
 
-This is not a full LLM comprehension benchmark yet. It is a deterministic retrieval-quality check that asks whether the context source contains the actual target definition span. It is useful because it catches cases where plain text sees the right word but lands on the wrong meaning.
+This is an extractor self-consistency retrieval diagnostic, not an independent semantic-correctness test. The same extractor output supplies the probe target and the semantic units searched by BCNLT. A fabricated but internally consistent `DEFINE` unit can therefore score as a hit. Reports expose `target_origin: same_extractor_output`, `independent_semantic_oracle: false`, and `promotion_eligible: false`; their canonical metrics are retrieval hit rates. The legacy `*_accuracy` keys remain only for compatibility.
 
 ## Model Context Answer Evaluation
 
@@ -166,13 +166,13 @@ database without deleting observations from earlier runs.
 
 The output compares:
 
-- Standard raw-text context answer accuracy.
-- BCNLT semantic context answer accuracy.
+- Standard raw-text extractor-target hit rate.
+- BCNLT semantic-context extractor-target hit rate.
 - Expected definition line.
 - Standard and BCNLT answers.
 - The exact context supplied to each side.
 
-This is still not a full human-grade comprehension benchmark. It is a controlled test of whether the retrieved context contains enough structure for a model-like answerer to produce the right fact.
+This remains useful for comparing how a model answers from two context formats, but the expected answer is derived from the same extractor output. It has no independent semantic oracle, cannot prove coding correctness, and is not promotion evidence. The head-to-head report may name a diagnostic leader, but it does not declare a semantic winner.
 
 ## Wildcard Memory
 
@@ -194,6 +194,55 @@ Each memory row records:
 - seen count
 
 This is intentionally append-only in v0.1. The latest in-memory view merges repeated sightings, while the file preserves the learning trail for later review, pruning, or training-data extraction.
+
+
+## Scientific vocabulary learning
+
+Repeated encounters add observations and refine the current wildcard hypothesis, but
+they do not validate it. The promotion path is
+`WildcardMemory.run_scientific_experiment(...)`, using an externally authored
+`CodingExperimentFixture` (or `load_experiment_fixture(path)`) and a deliberately
+wrong `HypothesisProjection` control.
+
+The built-in `BoundedProjectionVerifier` is a JSON-only state machine. It supports
+branch selection, bounded loop summation, literal return, literal assignment,
+allowlisted numeric/comparison operators, and literal error-category signaling. It
+does not run source code, `eval`, subprocesses, imports, filesystem operations, or
+network operations. Unsupported or oversized fixtures, unavailable verification,
+candidate failures, and controls that also produce the expected result fail closed.
+
+The implementation default requires three non-replayed passing experiments in
+distinct observed contexts and distinct fixtures, with no contradiction. This is a
+configurable conservative default, not a user-mandated scientific constant. Each
+proof is bound to the exact source digest, fixture/oracle digest, context,
+hypothesis revision, language/spec identity, and verifier version. The expected
+result must come from a trusted human-authored, language-spec, or trusted-test-vector
+fixture; software records that provenance but cannot prove the author was honest.
+
+A validated learned meaning enters the **Extended Core**, never the immutable Common
+Core. It receives a stable, versioned Extended Core ID and may carry an optional
+decomposition into Common Core primitives. Encoding preserves the original
+`UNKNOWN_SEMANTIC` event with `IRKind.EXTENSION`; the decomposition is provenance,
+not reclassification. Call `BCNLTTokenizer.reload_learned_state()` after an external
+ledger update and inspect `BCNLTTokenizer.extended_core_library()` for the validated
+library. No token ID is allocated or renumbered, and no model weight is trained. A
+later verified contradiction removes the entry from future encodes; frozen tokenizer
+artifacts remain immutable and reproducible under their captured learned-state hash.
+Loaded artifact ledgers are read-only; live ledgers remain writable for new observations.
+
+The native Extended Core vocabulary layer can now allocate a dedicated model-facing
+token after the frozen BCNLT v1 inventory. Allocation is append-only: revocation
+tombstones the old ID for historical decoding, and a corrected revision appends a
+new ID. Native semantic streams bind that token to the canonical Extended Core
+metadata, while text and raw-code modes remain on the unchanged v1 path. This layer
+does not authorize training or promotion by itself.
+
+See
+`docs/superpowers/specs/2026-11-07-bcnlt-scientific-vocabulary-learning-design.md`
+for the evidence contract and
+`docs/superpowers/specs/2026-11-07-bcnlt-native-extended-core-tokenizer-design.md`
+for native allocation and model-row boundaries.
+
 
 ## Parallel Compute Strategy
 
@@ -233,7 +282,7 @@ The key rule is to avoid shared mutable state during parallel work. Workers shou
 - **Common Coding Core IR**: compact representation of universal coding concepts such as values, variables, functions, calls, assignment, loops, branches, comparisons, data structures, I/O, and errors.
 - **Extension**: a language-specific construct kept outside the core IR.
 - **Wildcard**: the resolver path for unfamiliar constructs.
-- **Wildcard memory**: append-only JSONL evidence that lets BCNLT recognize and refine unknown constructs it has already encountered.
+- **Wildcard memory**: append-only evidence that lets BCNLT recognize, test, revise, validate, and revoke learned semantic-vocabulary entries.
 - **UYR**: repeated uncertainty check, targeted retrieval, and re-evaluation.
 
 ## Current Limits
@@ -242,7 +291,7 @@ The key rule is to avoid shared mutable state during parallel work. Workers shou
 - Scope and data-flow links are useful but intentionally lightweight.
 - Type inference is not implemented.
 - Model entropy is stubbed behind an interface.
-- Wildcard memory is local JSONL persistence, not a vetted global knowledge base yet.
+- Scientific learning currently covers only the bounded declarative operations documented above; it is not a universal code sandbox or global knowledge base.
 - IR rendering supports a narrow subset: modules, assignments, functions, returns, literals, variables, and calls.
 - Incremental support is an invalidation abstraction, not a full changed-AST rewriter.
 - The benchmark uses Python lexical token counts as the ordinary-token baseline, not a real BPE tokenizer yet.

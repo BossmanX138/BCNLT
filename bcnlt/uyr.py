@@ -4,6 +4,11 @@ from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from .core import ContextualUnit, SourceDocument
+from .extended_core import (
+    CommonCoreProjection,
+    extended_core_id,
+    optional_common_core_projection,
+)
 from .ir import IRKind, IRNode
 from .uncertainty import HeuristicUncertaintyScorer, UncertaintyScore
 
@@ -16,6 +21,9 @@ class LearnedDefinitionRecord(Protocol):
     evidence: tuple[str, ...]
     confidence: float
     extension_name: str | None
+    language: str
+    semantic_spec_sha256: str
+    hypothesis_revision: int
 
 
 class LearnedDefinitionStore(Protocol):
@@ -24,10 +32,11 @@ class LearnedDefinitionStore(Protocol):
 
 
 @dataclass(frozen=True)
-class LearnedProjection:
+class ExtendedCoreResolution:
+    extended_core_id: str
     signature: str
-    target_event: str
-    target_ir_kind: IRKind
+    revision: int
+    common_core_projection: CommonCoreProjection | None
     evidence: tuple[str, ...]
     extension_name: str | None = None
 
@@ -58,28 +67,40 @@ class UYRResult:
     expanded_context: tuple[ContextualUnit, ...] = field(default_factory=tuple)
     retrievals: tuple[str, ...] = field(default_factory=tuple)
     scores: tuple[UncertaintyScore, ...] = field(default_factory=tuple)
-    learned_projection: LearnedProjection | None = None
+    extended_core_resolution: ExtendedCoreResolution | None = None
 
-    def projected_unit(self) -> ContextualUnit:
-        projection = self.learned_projection
-        if projection is None:
+    def resolved_unit(self) -> ContextualUnit:
+        resolution = self.extended_core_resolution
+        if resolution is None:
             return self.unit
         metadata = dict(self.unit.metadata)
-        metadata["learned_definition_signature"] = projection.signature
-        metadata["learned_definition_state"] = "validated"
-        if projection.extension_name is not None:
-            metadata["learned_extension_name"] = projection.extension_name
+        metadata["extended_core_id"] = resolution.extended_core_id
+        metadata["extended_core_signature"] = resolution.signature
+        metadata["extended_core_revision"] = resolution.revision
+        metadata["extended_core_state"] = "validated"
+        projection = resolution.common_core_projection
+        if projection is not None:
+            metadata["extended_core_projection"] = projection.to_dict()
+        if resolution.extension_name is not None:
+            metadata["extended_core_name"] = resolution.extension_name
+        ir_metadata = {"extended_core_id": resolution.extended_core_id}
+        if projection is not None:
+            ir_metadata["common_core_projection"] = projection.to_dict()
         ir = IRNode(
-            projection.target_ir_kind,
-            name=projection.extension_name or self.unit.surface,
-            metadata={"learned_definition_signature": projection.signature},
+            IRKind.EXTENSION,
+            name=resolution.extension_name or resolution.extended_core_id,
+            metadata=ir_metadata,
         )
         return replace(
             self.unit,
-            event=projection.target_event,
             ir=ir,
             metadata=metadata,
         )
+
+    def projected_unit(self) -> ContextualUnit:
+        """Compatibility alias; Extended Core resolution never reclassifies the event."""
+
+        return self.resolved_unit()
 
 
 class UYRResolver:
@@ -104,7 +125,7 @@ class UYRResolver:
         scores = [initial]
         expanded: list[ContextualUnit] = []
         rounds = 0
-        learned_projection = None
+        extended_core_resolution = None
 
         learned = learned_definitions.lookup(unit) if learned_definitions is not None else None
         if learned is not None:
@@ -116,10 +137,18 @@ class UYRResolver:
                 and learned.target_event is not None
                 and learned.target_ir_kind is not None
             ):
-                learned_projection = LearnedProjection(
+                extended_core_resolution = ExtendedCoreResolution(
+                    extended_core_id=extended_core_id(
+                        language=learned.language,
+                        signature=learned.signature,
+                        revision=learned.hypothesis_revision,
+                    ),
                     signature=learned.signature,
-                    target_event=learned.target_event,
-                    target_ir_kind=IRKind(learned.target_ir_kind),
+                    revision=learned.hypothesis_revision,
+                    common_core_projection=optional_common_core_projection(
+                        event=learned.target_event,
+                        ir_kind=learned.target_ir_kind,
+                    ),
                     evidence=learned.evidence,
                     extension_name=learned.extension_name,
                 )
@@ -184,5 +213,5 @@ class UYRResolver:
             expanded_context=tuple(expanded[: self.config.max_context_units]),
             retrievals=tuple(retrievals),
             scores=tuple(scores),
-            learned_projection=learned_projection,
+            extended_core_resolution=extended_core_resolution,
         )

@@ -1,6 +1,9 @@
 # BCNLT Common Core Learning Implementation Plan
 
 > Supersedes Tasks 6-11 of `2026-10-28-bcnlt-multilingual-adapter-carousel.md`.
+>
+> Superseded boundary: Common Core is immutable. Validated outliers enter
+> Extended Core; any Common Core interpretation is decomposition metadata only.
 
 1. Freeze the Common Core concept catalog in one versioned registry and test
    uniqueness, stable identity, allowed events/IR kinds, and all 14 grammar
@@ -16,8 +19,8 @@
    Promote irreducible language oddities into stable named extensions while
    shared meanings project into the Common Core.
 5. Make UYR retrieve learned definitions. Provisional matches provide context;
-   validated matches project the unknown unit into its recorded Common Core
-   concept with an auditable evidence trail.
+   validated matches resolve to a stable Extended Core identity with an
+   auditable evidence trail and an optional Common Core decomposition.
 6. Consolidate parse, uncertainty ratings, UYR, wildcard learning, and final
    canonical scores in one semantic preprocessing pipeline; route the CLI,
    database, tokenizer, and corpus builder through it.
