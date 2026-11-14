@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor
 import json
-from pathlib import Path
 import statistics
 import sys
 import time
-
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Callable
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PINNED_TOKENIZERS_SITE = PROJECT_ROOT / "vendor" / "tokenizers_runtime_0_23"
@@ -20,7 +20,7 @@ from bosscrafts_model.bcnlt_source_pipeline import BCNLTSourcePipeline  # noqa: 
 from bosscrafts_model.tokenizer import NativeTokenizerBinding  # noqa: E402
 
 
-def _time(callable_, repeats: int) -> list[float]:
+def _time(callable_: Callable[[], object], repeats: int) -> list[float]:
     elapsed: list[float] = []
     for _ in range(repeats):
         started = time.perf_counter()

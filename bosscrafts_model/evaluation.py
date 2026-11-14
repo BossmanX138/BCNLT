@@ -1,15 +1,27 @@
 """Streaming masked-loss evaluation for BossCrafts task examples."""
+
 from __future__ import annotations
 
-from collections import Counter, defaultdict
-from dataclasses import dataclass
+import hashlib
+import json
 import math
-from typing import Iterable
+from collections import Counter, defaultdict
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Protocol, TypeGuard, cast
 
 import torch
 from torch import nn
 
+from .artifact_schemas import CHECKPOINT_EVALUATION_SCHEMA
 from .model import masked_next_token_loss
+
+MAX_EVALUATION_BASELINE_BYTES = 16 * 1024 * 1024
+
+
+class _TargetProjection(Protocol):
+    def __call__(self, ids: torch.Tensor, loss_start: int) -> torch.Tensor: ...
 
 
 @dataclass(frozen=True)
@@ -30,6 +42,193 @@ class EvaluationResult:
     cell_mean_loss: dict[str, float]
 
 
+@dataclass(frozen=True)
+class EvaluationBaseline:
+    artifact_sha256: str
+    checkpoint_task_database_identity_sha256: str
+    evaluation_task_database_identity_sha256: str
+    heldout_suite_manifest_sha256: str
+    mean_loss: float
+    perplexity: float
+    target_token_accuracy: float
+    target_token_count: int
+    correct_target_token_count: int
+    exact_match_count: int
+    exact_match_rate: float
+    language_mean_loss: dict[str, float]
+    family_mean_loss: dict[str, float]
+    cell_mean_loss: dict[str, float]
+
+
+def _finite_number(value: object) -> TypeGuard[int | float]:
+    if type(value) is not int and type(value) is not float:
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    payload: dict[str, object] = {}
+    for key, value in pairs:
+        if key in payload:
+            raise ValueError(f"duplicate baseline evaluation key: {key}")
+        payload[key] = value
+    return payload
+
+
+def _reject_nonstandard_number(value: str) -> object:
+    raise ValueError(f"nonstandard baseline evaluation number: {value}")
+
+
+def _is_sha256(value: object) -> TypeGuard[str]:
+    return (
+        type(value) is str
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _loss_breakdown(value: object) -> TypeGuard[dict[str, float]]:
+    return (
+        type(value) is dict
+        and bool(value)
+        and all(
+            type(key) is str and bool(key) and _finite_number(item) and item >= 0
+            for key, item in value.items()
+        )
+    )
+
+
+def load_evaluation_baseline(
+    path: str | Path,
+    *,
+    expected_split: str,
+    expected_example_count: int,
+    expected_task_database_identity_sha256: str,
+    expected_model_fingerprint: str,
+    expected_heldout_suite_manifest_sha256: str | None = None,
+) -> EvaluationBaseline:
+    baseline_path = Path(path).resolve()
+    try:
+        content = baseline_path.read_bytes()
+        if len(content) > MAX_EVALUATION_BASELINE_BYTES:
+            raise ValueError("baseline evaluation exceeds size limit")
+        payload = json.loads(
+            content.decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_keys,
+            parse_constant=_reject_nonstandard_number,
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("baseline evaluation is unreadable") from error
+    if (
+        type(payload) is not dict
+        or payload.get("schema_version") != CHECKPOINT_EVALUATION_SCHEMA
+        or payload.get("split") != expected_split
+        or payload.get("evaluation_complete") is not True
+        or payload.get("evaluated_fraction") != 1.0
+        or payload.get("checkpoint_lineage_verified") is not True
+        or payload.get("full_model") is not True
+        or not _is_sha256(payload.get("checkpoint_sha256"))
+        or payload.get("example_count") != expected_example_count
+        or payload.get("split_example_count") != expected_example_count
+        or payload.get("task_database_identity_sha256")
+        != expected_task_database_identity_sha256
+        or not _is_sha256(payload.get("checkpoint_task_database_identity_sha256"))
+        or payload.get("checkpoint_evaluation_task_database_identity_sha256")
+        != expected_task_database_identity_sha256
+        or not _is_sha256(payload.get("checkpoint_heldout_suite_manifest_sha256"))
+        or payload.get("evaluation_task_database_identity_sha256")
+        != expected_task_database_identity_sha256
+        or payload.get("model_fingerprint") != expected_model_fingerprint
+    ):
+        raise ValueError("baseline evaluation lineage mismatch")
+    if expected_heldout_suite_manifest_sha256 is not None and (
+        not _is_sha256(expected_heldout_suite_manifest_sha256)
+        or payload.get("checkpoint_heldout_suite_manifest_sha256")
+        != expected_heldout_suite_manifest_sha256
+    ):
+        raise ValueError("baseline evaluation held-out suite lineage mismatch")
+    mean_loss = payload.get("mean_loss")
+    perplexity = payload.get("perplexity")
+    target_accuracy = payload.get("target_token_accuracy")
+    target_count = payload.get("target_token_count")
+    correct_count = payload.get("correct_target_token_count")
+    exact_count = payload.get("exact_match_count")
+    exact_rate = payload.get("exact_match_rate")
+    if (
+        not _finite_number(mean_loss)
+        or mean_loss <= 0
+        or not _finite_number(perplexity)
+        or perplexity <= 0
+        or not _finite_number(target_accuracy)
+        or not 0 <= target_accuracy <= 1
+        or type(correct_count) is not int
+        or correct_count < 0
+        or type(exact_count) is not int
+        or not 0 <= exact_count <= expected_example_count
+        or not _finite_number(exact_rate)
+        or not 0 <= exact_rate <= 1
+    ):
+        raise ValueError("baseline evaluation metrics are invalid")
+    if (
+        type(target_count) is not int
+        or target_count < 1
+        or correct_count > target_count
+        or not math.isclose(
+            float(target_accuracy),
+            correct_count / target_count,
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        )
+        or not math.isclose(
+            float(perplexity),
+            math.exp(float(mean_loss)),
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        )
+        or not math.isclose(
+            float(exact_rate),
+            exact_count / expected_example_count,
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        )
+    ):
+        raise ValueError("baseline evaluation consistency is invalid")
+    language_loss = payload.get("language_mean_loss")
+    family_loss = payload.get("family_mean_loss")
+    cell_loss = payload.get("cell_mean_loss")
+    if (
+        not _loss_breakdown(language_loss)
+        or not _loss_breakdown(family_loss)
+        or not _loss_breakdown(cell_loss)
+    ):
+        raise ValueError("baseline evaluation breakdown is invalid")
+    return EvaluationBaseline(
+        artifact_sha256=hashlib.sha256(content).hexdigest(),
+        checkpoint_task_database_identity_sha256=str(
+            payload["checkpoint_task_database_identity_sha256"]
+        ),
+        evaluation_task_database_identity_sha256=str(
+            payload["checkpoint_evaluation_task_database_identity_sha256"]
+        ),
+        heldout_suite_manifest_sha256=str(
+            payload["checkpoint_heldout_suite_manifest_sha256"]
+        ),
+        mean_loss=float(mean_loss),
+        perplexity=float(perplexity),
+        target_token_accuracy=float(target_accuracy),
+        target_token_count=target_count,
+        correct_target_token_count=correct_count,
+        exact_match_count=exact_count,
+        exact_match_rate=float(exact_rate),
+        language_mean_loss=language_loss,
+        family_mean_loss=family_loss,
+        cell_mean_loss=cell_loss,
+    )
+
+
 def _device_matches(actual: torch.device, requested: torch.device) -> bool:
     return actual.type == requested.type and (
         requested.index is None or actual.index == requested.index
@@ -38,7 +237,7 @@ def _device_matches(actual: torch.device, requested: torch.device) -> bool:
 
 def evaluate_model(
     model: nn.Module,
-    examples: Iterable[dict[str, object]],
+    examples: Iterable[Mapping[str, object]],
     *,
     device: torch.device,
     max_examples: int | None = None,
@@ -47,9 +246,7 @@ def evaluate_model(
         raise TypeError("model must be a torch module")
     if type(device) is not torch.device:
         raise TypeError("device must be a torch.device")
-    if max_examples is not None and (
-        type(max_examples) is not int or max_examples < 1
-    ):
+    if max_examples is not None and (type(max_examples) is not int or max_examples < 1):
         raise ValueError("max_examples must be a positive integer or None")
     parameter = next(model.parameters(), None)
     if parameter is None or not _device_matches(parameter.device, device):
@@ -73,15 +270,15 @@ def evaluate_model(
             for example in examples:
                 if max_examples is not None and example_count >= max_examples:
                     break
-                if type(example) is not dict:
-                    raise TypeError("evaluation examples must be dictionaries")
                 input_ids = example.get("input_ids")
                 loss_start = example.get("loss_start_index")
                 sampling_weight = example.get("sampling_weight")
                 language = example.get("language")
                 family = example.get("family")
-                if type(input_ids) is not list or len(input_ids) < 2 or any(
-                    type(token_id) is not int for token_id in input_ids
+                if (
+                    type(input_ids) is not list
+                    or len(input_ids) < 2
+                    or any(type(token_id) is not int for token_id in input_ids)
                 ):
                     raise ValueError("evaluation input_ids are invalid")
                 if type(loss_start) is not int or not 0 < loss_start < len(input_ids):
@@ -92,12 +289,21 @@ def evaluate_model(
                     raise ValueError("evaluation sampling_weight is invalid")
                 if not math.isfinite(weight) or weight <= 0:
                     raise ValueError("evaluation sampling_weight is invalid")
-                if type(language) is not str or not language or type(family) is not str or not family:
+                if (
+                    type(language) is not str
+                    or not language
+                    or type(family) is not str
+                    or not family
+                ):
                     raise ValueError("evaluation language and family are required")
                 ids = torch.tensor([input_ids], dtype=torch.long, device=device)
                 target_projection = getattr(model, "forward_target_logits", None)
                 if callable(target_projection):
-                    target_logits = target_projection(ids, loss_start)
+                    target_logits = cast(_TargetProjection, target_projection)(
+                        ids, loss_start
+                    )
+                    if not isinstance(target_logits, torch.Tensor):
+                        raise TypeError("forward_target_logits must return a tensor")
                     expected_ids = ids[0, loss_start:]
                     loss = nn.functional.cross_entropy(
                         target_logits.reshape(-1, target_logits.shape[-1]),

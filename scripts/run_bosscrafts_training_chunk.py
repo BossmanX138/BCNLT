@@ -3,11 +3,10 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sqlite3
 import subprocess
 import sys
-
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -20,7 +19,6 @@ from bosscrafts_model.balanced_curriculum import (
 )
 from bosscrafts_model.bcnlt_source_pipeline import CURRENT_RUNTIME_SPEC_SHA256
 from bosscrafts_model.resumable_task_packing import TASK_DATABASE_SCHEMA
-
 
 DEFAULT_DATABASE = (
     PROJECT_ROOT

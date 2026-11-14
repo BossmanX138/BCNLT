@@ -1,18 +1,22 @@
 """Held-out-safe Python instruction-to-code curriculum derived from admitted sources."""
+
 from __future__ import annotations
 
 import ast
-from collections import Counter
-from dataclasses import dataclass
+import builtins
 import gzip
 import hashlib
 import json
-from pathlib import Path
+import os
 import re
 import sqlite3
+import symtable
+import tempfile
 import textwrap
-from typing import cast
 import zlib
+from collections import Counter
+from dataclasses import dataclass
+from pathlib import Path
 
 from .bcnlt_source_pipeline import (
     CURRENT_RUNTIME_SPEC_SHA256,
@@ -28,12 +32,23 @@ from .resumable_task_packing import (
 )
 from .tokenizer import NativeTokenizerBinding
 
-
 INSTRUCTION_CURRICULUM_SCHEMA = "bosscrafts-instruction-curriculum-v1"
 INSTRUCTION_FAMILY = "instruction_to_code"
 SPLITS = ("train", "validation", "test")
 DEFAULT_QUOTAS = {"train": 4096, "validation": 256, "test": 256}
 _WORD = re.compile(r"[A-Za-z0-9_]+")
+_MODULE_RUNTIME_GLOBALS = frozenset(
+    {
+        "__builtins__",
+        "__cached__",
+        "__doc__",
+        "__file__",
+        "__loader__",
+        "__name__",
+        "__package__",
+        "__spec__",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -47,6 +62,37 @@ class PythonInstructionCandidate:
     prompt: str
     target: str
     docstring: str
+
+
+@dataclass(frozen=True)
+class _EncodedInstructionCandidate:
+    example_id: str
+    candidate: PythonInstructionCandidate
+    input_ids: tuple[int, ...]
+    loss_start_index: int
+    split: str
+    prompt_sha256: str
+    target_sha256: str
+
+    @classmethod
+    def from_candidate(
+        cls,
+        *,
+        example_id: str,
+        candidate: PythonInstructionCandidate,
+        input_ids: tuple[int, ...],
+        loss_start_index: int,
+        split: str,
+    ) -> _EncodedInstructionCandidate:
+        return cls(
+            example_id=example_id,
+            candidate=candidate,
+            input_ids=input_ids,
+            loss_start_index=loss_start_index,
+            split=split,
+            prompt_sha256=hashlib.sha256(candidate.prompt.encode("utf-8")).hexdigest(),
+            target_sha256=hashlib.sha256(candidate.target.encode("utf-8")).hexdigest(),
+        )
 
 
 @dataclass(frozen=True)
@@ -140,6 +186,32 @@ def _module_import_prefix(source: str, module: ast.Module) -> str:
     return "".join(segments)
 
 
+def _has_unresolved_globals(source: str) -> bool:
+    """Return whether an extracted standalone function needs omitted module state."""
+    try:
+        module_table = symtable.symtable(source, "<instruction-candidate>", "exec")
+    except SyntaxError:
+        return True
+    allowed_globals = set(vars(builtins)) | set(_MODULE_RUNTIME_GLOBALS)
+    allowed_globals.update(
+        symbol.get_name()
+        for symbol in module_table.get_symbols()
+        if symbol.is_imported() or symbol.is_namespace()
+    )
+    pending = list(module_table.get_children())
+    while pending:
+        table = pending.pop()
+        pending.extend(table.get_children())
+        for symbol in table.get_symbols():
+            if (
+                symbol.is_referenced()
+                and symbol.is_global()
+                and symbol.get_name() not in allowed_globals
+            ):
+                return True
+    return False
+
+
 def extract_python_instruction_candidates(
     *,
     document_id: str,
@@ -177,9 +249,9 @@ def extract_python_instruction_candidates(
         # ast.get_source_segment removes indentation from the first line only.
         # Restore that prefix before dedenting so method bodies retain exactly
         # one function-body indentation level in the standalone example.
-        function_text = textwrap.dedent(
-            (" " * node.col_offset) + segment
-        ).replace("\r\n", "\n")
+        function_text = textwrap.dedent((" " * node.col_offset) + segment).replace(
+            "\r\n", "\n"
+        )
         try:
             parsed = ast.parse(function_text)
         except SyntaxError:
@@ -204,9 +276,12 @@ def extract_python_instruction_candidates(
         if len(target.splitlines()) > 160:
             continue
         prompt = imports + ("\n" if imports else "") + prompt_function
+        standalone_source = prompt + target
         try:
-            ast.parse(prompt + target)
+            ast.parse(standalone_source)
         except SyntaxError:
+            continue
+        if _has_unresolved_globals(standalone_source):
             continue
         candidates.append(
             PythonInstructionCandidate(
@@ -231,10 +306,15 @@ def _ro_connect(path: Path) -> sqlite3.Connection:
 
 
 def _fallback_split(document_id: str) -> str:
-    bucket = int(
-        hashlib.sha256(f"instruction-split-v1:{document_id}".encode("utf-8")).hexdigest()[:8],
-        16,
-    ) % 100
+    bucket = (
+        int(
+            hashlib.sha256(f"instruction-split-v1:{document_id}".encode()).hexdigest()[
+                :8
+            ],
+            16,
+        )
+        % 100
+    )
     if bucket < 5:
         return "test"
     if bucket < 10:
@@ -259,6 +339,38 @@ def _example_identity(
     ).hexdigest()
 
 
+def _exclude_unsafe_prompt_groups(
+    rows_by_split: dict[str, list[_EncodedInstructionCandidate]],
+    rejection_counts: Counter[str],
+) -> dict[str, list[_EncodedInstructionCandidate]]:
+    """Remove contradictions, held-out leakage, and same-split prompt duplicates."""
+    prompt_groups: dict[str, list[_EncodedInstructionCandidate]] = {}
+    for split in SPLITS:
+        for row in rows_by_split[split]:
+            if row.split != split:
+                raise ValueError("instruction candidate split key mismatch")
+            prompt_groups.setdefault(row.prompt_sha256, []).append(row)
+
+    filtered: dict[str, list[_EncodedInstructionCandidate]] = {
+        split: [] for split in SPLITS
+    }
+    for group in prompt_groups.values():
+        targets = {row.target_sha256 for row in group}
+        splits = {row.split for row in group}
+        if len(targets) > 1:
+            rejection_counts["conflicting_prompt"] += len(group)
+            continue
+        if len(splits) > 1:
+            rejection_counts["cross_split_prompt"] += len(group)
+            continue
+        chosen = min(group, key=lambda row: row.example_id)
+        filtered[chosen.split].append(chosen)
+        rejection_counts["duplicate_prompt"] += len(group) - 1
+    for split in SPLITS:
+        filtered[split].sort(key=lambda row: row.example_id)
+    return filtered
+
+
 def build_instruction_curriculum(
     binding: NativeTokenizerBinding,
     *,
@@ -276,7 +388,9 @@ def build_instruction_curriculum(
     if set(quotas) != set(SPLITS) or any(
         type(value) is not int or value < 1 for value in quotas.values()
     ):
-        raise ValueError("quotas must define positive train, validation and test limits")
+        raise ValueError(
+            "quotas must define positive train, validation and test limits"
+        )
     if type(max_sequence) is not int or max_sequence < 256:
         raise ValueError("max_sequence must be at least 256")
 
@@ -294,15 +408,22 @@ def build_instruction_curriculum(
         if not path.is_file():
             raise ValueError(f"{name} does not exist")
 
+    catalog_sha256 = _sha256_file(catalog_path)
+    admission_sha256 = _sha256_file(admission_path)
     exclusion = HumanEvalExclusion(humaneval_dataset)
     split_audit = audit_task_database(binding, split_path)
     split_connection = _ro_connect(split_path)
     try:
+        split_metadata = dict(
+            split_connection.execute("SELECT key,value FROM metadata")
+        )
         split_rows = split_connection.execute(
             "SELECT document_id,MIN(split),COUNT(DISTINCT split) FROM tasks GROUP BY document_id"
         ).fetchall()
     finally:
         split_connection.close()
+    if split_metadata.get("source_catalog_sha256") != catalog_sha256:
+        raise ValueError("split database source catalog lineage mismatch")
     if any(int(row[2]) != 1 for row in split_rows):
         raise ValueError("split database violates document isolation")
     preserved_splits = {str(row[0]): str(row[1]) for row in split_rows}
@@ -320,11 +441,18 @@ def build_instruction_curriculum(
         admission.close()
     if admission_metadata.get("catalog_exhausted") != "true":
         raise ValueError("source admission is incomplete")
-    if admission_metadata.get("binding_sha256") != binding.binding_sha256:
-        raise ValueError("source admission binding mismatch")
-    catalog_sha256 = _sha256_file(catalog_path)
+    if (
+        admission_metadata.get("binding_sha256") != binding.binding_sha256
+        or admission_metadata.get("tokenizer_sha256") != binding.tokenizer_sha256
+        or admission_metadata.get("vocabulary_size") != str(binding.vocab_size)
+        or admission_metadata.get("parser_runtime_identity_sha256")
+        != PARSER_RUNTIME_IDENTITY_SHA256
+        or admission_metadata.get("semantic_spec_sha256")
+        != _canonical_json(CURRENT_RUNTIME_SPEC_SHA256)
+    ):
+        raise ValueError("source admission tokenizer or semantic lineage mismatch")
     if admission_metadata.get("source_catalog_sha256") != catalog_sha256:
-        raise ValueError("source catalog lineage mismatch")
+        raise ValueError("source admission catalog lineage mismatch")
 
     task_token = binding.structural_token_ids["<|bcnlt:task:mixed_instruction|>"]
     stream_begin = binding.structural_token_ids["<|bcnlt:stream:begin|>"]
@@ -332,7 +460,9 @@ def build_instruction_curriculum(
     raw_mode = binding.structural_token_ids["<|bcnlt:mode:raw_code|>"]
     task_end = binding.structural_token_ids["<|bcnlt:task:end|>"]
 
-    rows_by_split: dict[str, list[dict[str, object]]] = {split: [] for split in SPLITS}
+    rows_by_split: dict[str, list[_EncodedInstructionCandidate]] = {
+        split: [] for split in SPLITS
+    }
     rejection_counts: Counter[str] = Counter()
     candidate_counts: Counter[str] = Counter()
     catalog = _ro_connect(catalog_path)
@@ -360,7 +490,9 @@ def build_instruction_curriculum(
                 source=source,
             ):
                 candidate_counts[split] += 1
-                if exclusion.overlaps(docstring=candidate.docstring, target=candidate.target):
+                if exclusion.overlaps(
+                    docstring=candidate.docstring, target=candidate.target
+                ):
                     rejection_counts["humaneval_overlap"] += 1
                     continue
                 try:
@@ -369,8 +501,20 @@ def build_instruction_curriculum(
                 except ValueError:
                     rejection_counts["reserved_protocol_token"] += 1
                     continue
-                prompt_ids = [task_token, stream_begin, raw_mode, *prompt_payload, stream_end]
-                target_ids = [stream_begin, raw_mode, *target_payload, stream_end, task_end]
+                prompt_ids = [
+                    task_token,
+                    stream_begin,
+                    raw_mode,
+                    *prompt_payload,
+                    stream_end,
+                ]
+                target_ids = [
+                    stream_begin,
+                    raw_mode,
+                    *target_payload,
+                    stream_end,
+                    task_end,
+                ]
                 input_ids = prompt_ids + target_ids
                 if len(input_ids) > max_sequence:
                     rejection_counts["sequence_too_long"] += 1
@@ -380,18 +524,19 @@ def build_instruction_curriculum(
                     continue
                 example_id = _example_identity(candidate, input_ids)
                 rows_by_split[split].append(
-                    {
-                        "example_id": example_id,
-                        "candidate": candidate,
-                        "input_ids": input_ids,
-                        "loss_start_index": len(prompt_ids),
-                    }
+                    _EncodedInstructionCandidate.from_candidate(
+                        example_id=example_id,
+                        candidate=candidate,
+                        input_ids=tuple(input_ids),
+                        loss_start_index=len(prompt_ids),
+                        split=split,
+                    )
                 )
     finally:
         catalog.close()
 
+    rows_by_split = _exclude_unsafe_prompt_groups(rows_by_split, rejection_counts)
     for split in SPLITS:
-        rows_by_split[split].sort(key=lambda item: str(item["example_id"]))
         if len(rows_by_split[split]) < quotas[split]:
             raise ValueError(
                 f"instruction curriculum has only {len(rows_by_split[split])} "
@@ -409,9 +554,7 @@ def build_instruction_curriculum(
         "prompt_protocol": "mixed_instruction + raw_code_stream -> raw_code_stream + task_end",
         "humaneval_exclusion_sha256": exclusion.sha256,
     }
-    policy_sha256 = hashlib.sha256(
-        _canonical_json(policy).encode("utf-8")
-    ).hexdigest()
+    policy_sha256 = hashlib.sha256(_canonical_json(policy).encode("utf-8")).hexdigest()
     metadata = {
         "schema_version": TASK_DATABASE_SCHEMA,
         "binding_sha256": binding.binding_sha256,
@@ -423,7 +566,7 @@ def build_instruction_curriculum(
         "curriculum_schema": INSTRUCTION_CURRICULUM_SCHEMA,
         "curriculum_policy_sha256": policy_sha256,
         "source_catalog_sha256": catalog_sha256,
-        "source_admission_sha256": _sha256_file(admission_path),
+        "source_admission_sha256": admission_sha256,
         "split_database_identity_sha256": split_audit.database_identity_sha256,
         "humaneval_exclusion_sha256": exclusion.sha256,
         "instruction_family": INSTRUCTION_FAMILY,
@@ -432,93 +575,124 @@ def build_instruction_curriculum(
     }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = output_path.with_name(f".{output_path.name}.tmp")
-    if temporary.exists():
-        temporary.unlink()
-    connection = sqlite3.connect(temporary)
+    temporary_handle = tempfile.NamedTemporaryFile(
+        dir=output_path.parent,
+        prefix=f".{output_path.name}.",
+        suffix=".tmp",
+        delete=False,
+    )
+    temporary = Path(temporary_handle.name)
+    temporary_handle.close()
     license_counts: Counter[str] = Counter()
     try:
-        connection.execute("PRAGMA journal_mode=DELETE")
-        connection.execute("PRAGMA synchronous=FULL")
-        connection.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY,value TEXT NOT NULL)")
-        connection.execute(
-            """CREATE TABLE tasks (
-                   example_id TEXT PRIMARY KEY,
-                   document_id TEXT NOT NULL,
-                   language TEXT NOT NULL,
-                   family TEXT NOT NULL,
-                   record_index INTEGER NOT NULL,
-                   split TEXT NOT NULL,
-                   input_ids_zlib BLOB NOT NULL,
-                   token_count INTEGER NOT NULL,
-                   loss_start_index INTEGER NOT NULL,
-                   semantic_spec_sha256 TEXT NOT NULL,
-                   parser_runtime_identity_sha256 TEXT NOT NULL,
-                   source_sha256 TEXT NOT NULL
-               )"""
-        )
-        connection.execute("CREATE INDEX tasks_cell ON tasks(split,language,family)")
-        connection.execute(
-            """CREATE TABLE instruction_provenance (
-                   example_id TEXT PRIMARY KEY,
-                   relative_path TEXT NOT NULL,
-                   repository_identity TEXT NOT NULL,
-                   license_spdx TEXT NOT NULL,
-                   prompt_sha256 TEXT NOT NULL,
-                   target_sha256 TEXT NOT NULL
-               )"""
-        )
-        connection.executemany(
-            "INSERT INTO metadata(key,value) VALUES(?,?)", sorted(metadata.items())
-        )
-        for split in SPLITS:
-            for item in rows_by_split[split]:
-                raw_candidate = item["candidate"]
-                raw_input_ids = item["input_ids"]
-                if not isinstance(raw_candidate, PythonInstructionCandidate):
-                    raise ValueError("instruction task candidate type is invalid")
-                if type(raw_input_ids) is not list:
-                    raise ValueError("instruction task input IDs are invalid")
-                candidate = raw_candidate
-                input_ids = cast(list[int], raw_input_ids)
-                license_counts[candidate.license_spdx] += 1
-                connection.execute(
-                    "INSERT INTO tasks VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (
-                        item["example_id"],
-                        candidate.document_id,
-                        "python",
-                        INSTRUCTION_FAMILY,
-                        candidate.record_index,
-                        split,
-                        zlib.compress(_encode_u16(input_ids), 6),
-                        len(input_ids),
-                        item["loss_start_index"],
-                        CURRENT_RUNTIME_SPEC_SHA256["python"],
-                        PARSER_RUNTIME_NOT_APPLICABLE,
-                        candidate.source_sha256,
-                    ),
-                )
-                connection.execute(
-                    "INSERT INTO instruction_provenance VALUES(?,?,?,?,?,?)",
-                    (
-                        item["example_id"],
-                        candidate.relative_path,
-                        candidate.repository_identity,
-                        candidate.license_spdx,
-                        hashlib.sha256(candidate.prompt.encode("utf-8")).hexdigest(),
-                        hashlib.sha256(candidate.target.encode("utf-8")).hexdigest(),
-                    ),
-                )
-        connection.commit()
-        connection.execute("VACUUM")
-    finally:
-        connection.close()
-    temporary.replace(output_path)
-    audit = audit_task_database(binding, output_path)
+        connection = sqlite3.connect(temporary)
+        try:
+            connection.execute("PRAGMA journal_mode=DELETE")
+            connection.execute("PRAGMA synchronous=FULL")
+            connection.execute(
+                "CREATE TABLE metadata (key TEXT PRIMARY KEY,value TEXT NOT NULL)"
+            )
+            connection.execute(
+                """CREATE TABLE tasks (
+                       example_id TEXT PRIMARY KEY,
+                       document_id TEXT NOT NULL,
+                       language TEXT NOT NULL,
+                       family TEXT NOT NULL,
+                       record_index INTEGER NOT NULL,
+                       split TEXT NOT NULL,
+                       input_ids_zlib BLOB NOT NULL,
+                       token_count INTEGER NOT NULL,
+                       loss_start_index INTEGER NOT NULL,
+                       semantic_spec_sha256 TEXT NOT NULL,
+                       parser_runtime_identity_sha256 TEXT NOT NULL,
+                       source_sha256 TEXT NOT NULL
+                   )"""
+            )
+            connection.execute(
+                "CREATE INDEX tasks_cell ON tasks(split,language,family)"
+            )
+            connection.execute(
+                """CREATE TABLE instruction_provenance (
+                       example_id TEXT PRIMARY KEY,
+                       relative_path TEXT NOT NULL,
+                       repository_identity TEXT NOT NULL,
+                       license_spdx TEXT NOT NULL,
+                       prompt_sha256 TEXT NOT NULL,
+                       target_sha256 TEXT NOT NULL
+                   )"""
+            )
+            connection.executemany(
+                "INSERT INTO metadata(key,value) VALUES(?,?)", sorted(metadata.items())
+            )
+            for split in SPLITS:
+                for item in rows_by_split[split]:
+                    candidate = item.candidate
+                    input_ids = list(item.input_ids)
+                    license_counts[candidate.license_spdx] += 1
+                    connection.execute(
+                        "INSERT INTO tasks VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (
+                            item.example_id,
+                            candidate.document_id,
+                            "python",
+                            INSTRUCTION_FAMILY,
+                            candidate.record_index,
+                            split,
+                            zlib.compress(_encode_u16(input_ids), 6),
+                            len(input_ids),
+                            item.loss_start_index,
+                            CURRENT_RUNTIME_SPEC_SHA256["python"],
+                            PARSER_RUNTIME_NOT_APPLICABLE,
+                            candidate.source_sha256,
+                        ),
+                    )
+                    connection.execute(
+                        "INSERT INTO instruction_provenance VALUES(?,?,?,?,?,?)",
+                        (
+                            item.example_id,
+                            candidate.relative_path,
+                            candidate.repository_identity,
+                            candidate.license_spdx,
+                            item.prompt_sha256,
+                            item.target_sha256,
+                        ),
+                    )
+            connection.commit()
+            connection.execute("VACUUM")
+        finally:
+            connection.close()
+        audit = audit_task_database(binding, temporary)
+    except BaseException:
+        if temporary.exists():
+            temporary.unlink()
+        raise
     expected_total = sum(quotas.values())
     if audit.example_count != expected_total or audit.split_counts != quotas:
+        temporary.unlink()
         raise ValueError("written instruction curriculum failed its count audit")
+    try:
+        final_split_audit = audit_task_database(binding, split_path)
+        if (
+            final_split_audit.database_identity_sha256
+            != split_audit.database_identity_sha256
+            or _sha256_file(catalog_path) != catalog_sha256
+            or _sha256_file(admission_path) != admission_sha256
+            or _sha256_file(exclusion.path) != exclusion.sha256
+        ):
+            raise ValueError("instruction curriculum source changed during build")
+        with temporary.open("r+b") as stream:
+            os.fsync(stream.fileno())
+        if output_path.exists():
+            raise ValueError("instruction curriculum output already exists")
+        try:
+            os.link(temporary, output_path)
+        except FileExistsError as error:
+            raise ValueError("instruction curriculum output already exists") from error
+    except BaseException:
+        if temporary.exists():
+            temporary.unlink()
+        raise
+    temporary.unlink()
     return InstructionCurriculumStatus(
         database_path=output_path,
         database_identity_sha256=audit.database_identity_sha256,

@@ -1,8 +1,8 @@
 """Select one contained BCNLT runtime for test-module collection."""
 from __future__ import annotations
 
-from pathlib import Path
 import sys
+from pathlib import Path
 
 
 def select_bcnlt_runtime(source: Path) -> None:

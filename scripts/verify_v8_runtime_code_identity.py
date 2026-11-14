@@ -5,7 +5,6 @@ import hashlib
 import json
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = PROJECT_ROOT / "candidate-manifest.json"
 

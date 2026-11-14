@@ -1,23 +1,21 @@
 """Fail-closed, no-optimizer audit of packed causal loss boundaries."""
 from __future__ import annotations
 
-from collections import Counter
-from dataclasses import dataclass
 import hashlib
 import json
-import os
+from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
-import tempfile
 from typing import Mapping
 
 from .bcnlt_source_pipeline import CURRENT_RUNTIME_SPEC_SHA256
 from .current_task_packing import FAMILIES
+from .immutable_artifacts import publish_new_files
 from .resumable_task_packing import (
     ResumableTaskDataset,
     audit_task_database,
 )
 from .tokenizer import NativeTokenizerBinding
-
 
 LOSS_MASK_AUDIT_SCHEMA = "bosscrafts-task-loss-mask-audit-v1"
 
@@ -30,23 +28,6 @@ def _canonical(value: object) -> str:
         separators=(",", ":"),
         allow_nan=False,
     )
-
-
-def _atomic_write(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,7 +183,10 @@ class TaskLossMaskAuditor:
         }
         receipt_sha = hashlib.sha256(_canonical(unsigned).encode("utf-8")).hexdigest()
         receipt = {**unsigned, "receipt_sha256": receipt_sha}
-        _atomic_write(output, f"{_canonical(receipt)}\n".encode("utf-8"))
+        publish_new_files(
+            ((output, f"{_canonical(receipt)}\n".encode("utf-8")),),
+            artifact_label="loss-mask audit",
+        )
         return TaskLossMaskAuditResult(
             output_path=output,
             split_example_counts=split_example_counts,

@@ -2,12 +2,11 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict
 import hashlib
 import json
-from pathlib import Path
 import sys
-
+from dataclasses import asdict
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -18,10 +17,11 @@ from bosscrafts_model.resumable_training_semantic_audit import (
 )
 from scripts.run_v10_frozen_evaluation_admission import (
     FREEZE_MANIFEST_SHA256,
+)
+from scripts.run_v10_frozen_evaluation_admission import (
     _host_code_identity as evaluation_admission_host_code_identity,
 )
 from scripts.run_v10_training_semantic_audit import _freeze_code_manifest
-
 
 DEFAULT_CATALOG = (
     PROJECT_ROOT

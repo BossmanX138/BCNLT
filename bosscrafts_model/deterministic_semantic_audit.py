@@ -3,12 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeGuard
 
+from .immutable_artifacts import publish_new_files
 from .jsonl import split_jsonl_records
 from .local_semantic_review import _SEMANTIC_CONTRACT, DualLocalSemanticReviewer
 
@@ -16,6 +15,7 @@ _SOURCE_MANIFEST_SCHEMA = "bosscrafts-heldout-semantic-review-manifest-v2"
 _SOURCE_ITEM_SCHEMA = "bosscrafts-heldout-semantic-review-item-v2"
 _FINDING_SCHEMA = "bosscrafts-deterministic-semantic-finding-v1"
 _REPORT_SCHEMA = "bosscrafts-deterministic-semantic-audit-manifest-v1"
+_MAX_SEMANTIC_SURFACE_CHARS = 4096
 
 
 def _canonical(value: object) -> str:
@@ -38,23 +38,6 @@ def _is_sha256(value: object) -> TypeGuard[str]:
         and len(value) == 64
         and all(character in "0123456789abcdef" for character in value)
     )
-
-
-def _atomic_write(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,7 +112,8 @@ class DeterministicSemanticAuditor:
             target_source = "\n".join(
                 line.split("| ", 1)[1]
                 for line in str(source_excerpt).splitlines()
-                if line.startswith(">") and "| " in line
+                if (line.startswith(">") or line.startswith(" "))
+                and "| " in line
             )
             node_kind = (
                 ast_relation[: -len(".scope")]
@@ -150,7 +134,14 @@ class DeterministicSemanticAuditor:
                         "scope boundary surface must name the target source, scope, or structural node",
                     )
                 )
-        elif surface != extracted:
+        elif not (
+            surface == extracted
+            or (
+                metadata.get("surface_truncated") is True
+                and len(surface) == _MAX_SEMANTIC_SURFACE_CHARS
+                and extracted.startswith(surface)
+            )
+        ):
             findings.append(
                 DeterministicSemanticFinding(
                     "surface_span_mismatch",
@@ -169,10 +160,18 @@ class DeterministicSemanticAuditor:
                 )
             )
         ir_name = ir.get("name")
+        truncated_ir_prefix = (
+            metadata.get("surface_truncated") is True
+            and len(surface) == _MAX_SEMANTIC_SURFACE_CHARS
+            and isinstance(ir_name, str)
+            and extracted.startswith(ir_name)
+            and ir_name.startswith(surface)
+        )
         if (
             ir.get("kind") != "extension"
             and ir_name is not None
             and ir_name != surface
+            and not truncated_ir_prefix
         ):
             findings.append(
                 DeterministicSemanticFinding(
@@ -219,9 +218,15 @@ class DeterministicSemanticAuditReport:
     ) -> DeterministicSemanticAuditReportResult:
         output = Path(output_root).resolve()
         findings_text, manifest = self._evaluate(Path(source_root).resolve())
-        _atomic_write(output / "findings.jsonl", findings_text.encode("utf-8"))
-        _atomic_write(
-            output / "manifest.json", f"{_canonical(manifest)}\n".encode()
+        publish_new_files(
+            (
+                (output / "findings.jsonl", findings_text.encode("utf-8")),
+                (
+                    output / "manifest.json",
+                    f"{_canonical(manifest)}\n".encode("utf-8"),
+                ),
+            ),
+            artifact_label="deterministic semantic audit",
         )
         return self._result(output, manifest)
 

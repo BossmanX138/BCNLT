@@ -4,14 +4,15 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-from dataclasses import dataclass
-from pathlib import Path
 import subprocess
 import threading
 import time
 import uuid
+from collections.abc import Mapping
+from contextlib import suppress
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, TypedDict
-
 
 PROTOCOL = "bosscrafts-bcnlt-sandbox-v1"
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -216,7 +217,7 @@ class DockerScientificSandbox:
                 )
             response_bytes = completed["stdout"]
             response = self._parse_response(response_bytes, language=language)
-            return SandboxExecutionResult(
+            result = SandboxExecutionResult(
                 protocol=PROTOCOL,
                 language=language,
                 status=response["status"],
@@ -232,17 +233,32 @@ class DockerScientificSandbox:
                 response_sha256=hashlib.sha256(response_bytes).hexdigest(),
                 attestation=attestation,
             )
+            validate_sandbox_execution_result(
+                result,
+                language=language,
+                source=source,
+                stdin_text=stdin_text,
+            )
+            return result
         finally:
             if container_id is not None:
-                removed = subprocess.run(
-                    [self._docker, "rm", "--force", container_id],
-                    capture_output=True,
-                    timeout=10,
-                    check=False,
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                )
-                if removed.returncode != 0:
-                    cleanup_error = removed.stderr.decode("utf-8", errors="replace").strip()
+                try:
+                    removed = subprocess.run(
+                        [self._docker, "rm", "--force", container_id],
+                        capture_output=True,
+                        timeout=10,
+                        check=False,
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    )
+                except subprocess.TimeoutExpired:
+                    cleanup_error = "docker rm timed out"
+                except OSError as exc:
+                    cleanup_error = f"docker rm could not start: {exc}"
+                else:
+                    if removed.returncode != 0:
+                        cleanup_error = removed.stderr.decode(
+                            "utf-8", errors="replace"
+                        ).strip()
             if cleanup_error is not None:
                 raise SandboxExecutionError(
                     "sandbox container cleanup failed" +
@@ -541,6 +557,11 @@ def _run_bounded_process(
     )
     if process.stdin is None or process.stdout is None or process.stderr is None:
         process.kill()
+        process.wait(timeout=2)
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream is not None:
+                with suppress(OSError):
+                    stream.close()
         raise SandboxExecutionError("docker transport pipes are unavailable")
     stdout = bytearray()
     stderr = bytearray()
@@ -561,38 +582,53 @@ def _run_bounded_process(
         threading.Thread(target=drain, args=(process.stdout, stdout, max_stdout_bytes), daemon=True),
         threading.Thread(target=drain, args=(process.stderr, stderr, max_stderr_bytes), daemon=True),
     )
-    for reader in readers:
-        reader.start()
     try:
-        process.stdin.write(input_bytes)
-        process.stdin.close()
-    except (BrokenPipeError, OSError):
-        pass
-    deadline = time.monotonic() + timeout_seconds
-    timed_out = False
-    while process.poll() is None:
-        if limited.is_set():
+        for reader in readers:
+            reader.start()
+        try:
+            process.stdin.write(input_bytes)
+            process.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
+        deadline = time.monotonic() + timeout_seconds
+        timed_out = False
+        while process.poll() is None:
+            if limited.is_set():
+                process.kill()
+                break
+            if time.monotonic() >= deadline:
+                timed_out = True
+                process.kill()
+                break
+            time.sleep(0.01)
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
             process.kill()
-            break
-        if time.monotonic() >= deadline:
-            timed_out = True
-            process.kill()
-            break
-        time.sleep(0.01)
-    try:
-        process.wait(timeout=2)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=2)
-    for reader in readers:
-        reader.join(timeout=2)
-    return {
-        "returncode": process.returncode,
-        "stdout": bytes(stdout),
-        "stderr": bytes(stderr),
-        "timed_out": timed_out,
-        "output_limited": limited.is_set(),
-    }
+            process.wait(timeout=2)
+        for reader in readers:
+            reader.join(timeout=2)
+        if any(reader.is_alive() for reader in readers):
+            raise SandboxExecutionError("docker transport readers did not terminate")
+        return {
+            "returncode": process.returncode,
+            "stdout": bytes(stdout),
+            "stderr": bytes(stderr),
+            "timed_out": timed_out,
+            "output_limited": limited.is_set(),
+        }
+    finally:
+        if process.poll() is None:
+            with suppress(OSError):
+                process.kill()
+            with suppress(OSError, subprocess.TimeoutExpired):
+                process.wait(timeout=2)
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream is not None:
+                with suppress(OSError):
+                    stream.close()
+        for reader in readers:
+            reader.join(timeout=2)
 
 
 def _canonical_json(value: object) -> bytes:
@@ -600,6 +636,248 @@ def _canonical_json(value: object) -> bytes:
         json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         + "\n"
     ).encode("utf-8")
+
+
+_SANDBOX_RESULT_FIELDS = {
+    "protocol",
+    "language",
+    "status",
+    "phase",
+    "exit_code",
+    "stdout_b64",
+    "stderr_b64",
+    "timed_out",
+    "output_limited",
+    "duration_ms",
+    "container_name",
+    "request_sha256",
+    "response_sha256",
+    "attestation",
+}
+_SANDBOX_ATTESTATION_FIELDS = {
+    "image_id",
+    "image_manifest_sha256",
+    "policy_sha256",
+    "container_id",
+    "network_mode",
+    "read_only_rootfs",
+    "user",
+    "cap_drop",
+    "no_new_privileges",
+    "privileged",
+    "pids_limit",
+    "memory_bytes",
+    "memory_swap_bytes",
+    "nano_cpus",
+    "ipc_mode",
+    "cgroupns_mode",
+    "mount_count",
+    "tmpfs",
+    "log_driver",
+}
+
+
+def _is_sha256(value: object) -> bool:
+    return (
+        type(value) is str
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def validate_sandbox_execution_payload(
+    payload: Mapping[str, object],
+    *,
+    language: str,
+    source: str,
+    stdin_text: str,
+) -> tuple[bytes, bytes]:
+    """Revalidate a serialized sandbox result against its exact request."""
+    if (
+        not isinstance(payload, Mapping)
+        or set(payload) != _SANDBOX_RESULT_FIELDS
+        or type(language) is not str
+        or not language
+        or type(source) is not str
+        or len(source.encode("utf-8")) > _MAX_SOURCE_BYTES
+        or type(stdin_text) is not str
+        or len(stdin_text.encode("utf-8")) > _MAX_STDIN_BYTES
+    ):
+        raise ValueError("sandbox execution payload contract is invalid")
+    status = payload.get("status")
+    phase = payload.get("phase")
+    exit_code = payload.get("exit_code")
+    timed_out = payload.get("timed_out")
+    output_limited = payload.get("output_limited")
+    duration_ms = payload.get("duration_ms")
+    if (
+        payload.get("protocol") != PROTOCOL
+        or payload.get("language") != language
+        or status
+        not in {
+            "passed",
+            "compile_failed",
+            "runtime_failed",
+            "timed_out",
+            "output_limited",
+        }
+        or phase not in {"compile", "run"}
+        or (exit_code is not None and type(exit_code) is not int)
+        or type(timed_out) is not bool
+        or type(output_limited) is not bool
+        or type(duration_ms) is not int
+        or int(duration_ms) < 0
+        or type(payload.get("container_name")) is not str
+        or not str(payload["container_name"]).startswith("bcnlt-science-")
+    ):
+        raise ValueError("sandbox execution result is invalid")
+    if (
+        (status == "passed")
+        != (
+            phase == "run"
+            and exit_code == 0
+            and timed_out is False
+            and output_limited is False
+        )
+        or (status == "compile_failed" and phase != "compile")
+        or (status == "timed_out") != (timed_out is True)
+        or (status == "output_limited") != (output_limited is True)
+        or (timed_out is True and output_limited is True)
+    ):
+        raise ValueError("sandbox execution status is inconsistent")
+    decoded: list[bytes] = []
+    for field in ("stdout_b64", "stderr_b64"):
+        encoded = payload.get(field)
+        if type(encoded) is not str:
+            raise ValueError("sandbox execution output encoding is invalid")
+        try:
+            content = base64.b64decode(encoded, validate=True)
+        except (TypeError, ValueError) as error:
+            raise ValueError("sandbox execution output encoding is invalid") from error
+        if len(content) > 64 * 1024:
+            raise ValueError("sandbox execution output exceeds its bound")
+        decoded.append(content)
+    request = {
+        "protocol": PROTOCOL,
+        "language": language,
+        "source": source,
+        "stdin": stdin_text,
+    }
+    request_sha256 = hashlib.sha256(_canonical_json(request)).hexdigest()
+    response = {
+        key: payload[key]
+        for key in (
+            "protocol",
+            "language",
+            "status",
+            "phase",
+            "exit_code",
+            "stdout_b64",
+            "stderr_b64",
+            "timed_out",
+            "output_limited",
+            "duration_ms",
+        )
+    }
+    if (
+        payload.get("request_sha256") != request_sha256
+        or payload.get("response_sha256")
+        != hashlib.sha256(_canonical_json(response)).hexdigest()
+    ):
+        raise ValueError("sandbox execution request or response identity mismatch")
+    attestation = payload.get("attestation")
+    if not isinstance(attestation, Mapping) or set(attestation) != _SANDBOX_ATTESTATION_FIELDS:
+        raise ValueError("sandbox execution attestation fields are invalid")
+    image_id = attestation.get("image_id")
+    container_id = attestation.get("container_id")
+    cap_drop = attestation.get("cap_drop")
+    if (
+        type(image_id) is not str
+        or not image_id.startswith("sha256:")
+        or not _is_sha256(image_id[7:])
+        or not _is_sha256(attestation.get("image_manifest_sha256"))
+        or not _is_sha256(container_id)
+        or cap_drop != ["ALL"]
+    ):
+        raise ValueError("sandbox execution attestation identity is invalid")
+    policy: dict[str, object] = {
+        "image_id": image_id,
+        "network_mode": attestation.get("network_mode"),
+        "read_only_rootfs": attestation.get("read_only_rootfs"),
+        "user": attestation.get("user"),
+        "cap_drop": tuple(cap_drop),
+        "no_new_privileges": attestation.get("no_new_privileges"),
+        "privileged": attestation.get("privileged"),
+        "pids_limit": attestation.get("pids_limit"),
+        "memory_bytes": attestation.get("memory_bytes"),
+        "memory_swap_bytes": attestation.get("memory_swap_bytes"),
+        "nano_cpus": attestation.get("nano_cpus"),
+        "ipc_mode": attestation.get("ipc_mode"),
+        "cgroupns_mode": attestation.get("cgroupns_mode"),
+        "mount_count": attestation.get("mount_count"),
+        "tmpfs": attestation.get("tmpfs"),
+        "log_driver": attestation.get("log_driver"),
+        "attach_stdin": True,
+        "open_stdin": True,
+        "device_count": 0,
+        "device_request_count": 0,
+        "port_binding_count": 0,
+        "restart_policy": "no",
+        "sandbox_label": "true",
+        "request_label": request_sha256,
+    }
+    expected_policy = {
+        "image_id": image_id,
+        "network_mode": "none",
+        "read_only_rootfs": True,
+        "user": "65532:65532",
+        "cap_drop": ("ALL",),
+        "no_new_privileges": True,
+        "privileged": False,
+        "pids_limit": _PIDS_LIMIT,
+        "memory_bytes": _MEMORY_BYTES,
+        "memory_swap_bytes": _MEMORY_BYTES,
+        "nano_cpus": _NANO_CPUS,
+        "ipc_mode": "none",
+        "cgroupns_mode": "private",
+        "mount_count": 0,
+        "tmpfs": _TMPFS,
+        "log_driver": "none",
+        "attach_stdin": True,
+        "open_stdin": True,
+        "device_count": 0,
+        "device_request_count": 0,
+        "port_binding_count": 0,
+        "restart_policy": "no",
+        "sandbox_label": "true",
+        "request_label": request_sha256,
+    }
+    if (
+        policy != expected_policy
+        or attestation.get("policy_sha256")
+        != hashlib.sha256(_canonical_json(policy)).hexdigest()
+    ):
+        raise ValueError("sandbox execution isolation policy is invalid")
+    return decoded[0], decoded[1]
+
+
+def validate_sandbox_execution_result(
+    result: SandboxExecutionResult,
+    *,
+    language: str,
+    source: str,
+    stdin_text: str,
+) -> None:
+    if type(result) is not SandboxExecutionResult:
+        raise TypeError("result must be a SandboxExecutionResult")
+    stdout, stderr = validate_sandbox_execution_payload(
+        result.to_dict(),
+        language=language,
+        source=source,
+        stdin_text=stdin_text,
+    )
+    if stdout != result.stdout_bytes or stderr != result.stderr_bytes:
+        raise ValueError("sandbox execution decoded output is inconsistent")
 
 
 def _required_string(payload: dict[str, Any], key: str) -> str:

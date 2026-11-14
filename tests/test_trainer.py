@@ -1,24 +1,31 @@
 from __future__ import annotations
 
-from array import array
 import hashlib
 import importlib
 import importlib.util
 import json
 import math
-from pathlib import Path
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
 import zlib
+from array import array
+from pathlib import Path
 
 import torch
 
-from bosscrafts_model.config import ModelConfig
+from bosscrafts_model.artifact_schemas import MODEL_HELDOUT_SUITE_SCHEMA
 from bosscrafts_model.bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
+from bosscrafts_model.config import ModelConfig
 from bosscrafts_model.model import EngineeringModel
+from bosscrafts_model.model_acceptance import (
+    ACCEPTANCE_CATEGORIES,
+    EXPECTED_LANGUAGES,
+    MINIMUM_CATEGORY_EXAMPLES,
+    STRUCTURED_TASKS,
+)
 from bosscrafts_model.resumable_task_packing import (
     TASK_DATABASE_SCHEMA,
     audit_task_database,
@@ -27,6 +34,92 @@ from bosscrafts_model.tokenizer import NativeTokenizerBinding
 
 
 class TrainerTests(unittest.TestCase):
+    def test_full_model_training_requires_a_frozen_evaluation_contract(self):
+        project_root = Path(__file__).resolve().parents[1]
+        script = project_root / "scripts" / "run_bounded_training_trial.py"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / "tasks.sqlite"
+            database.write_bytes(b"not-reached")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--database",
+                    str(database),
+                    "--checkpoint",
+                    str(root / "checkpoint.pt"),
+                    "--full-model",
+                    "--max-steps",
+                    "1",
+                ],
+                cwd=project_root,
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=False,
+            )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn(
+            "full-model training requires a frozen evaluation contract",
+            completed.stderr,
+        )
+
+    def test_bounded_training_script_rejects_output_path_aliases(self):
+        project_root = Path(__file__).resolve().parents[1]
+        script = project_root / "scripts" / "run_bounded_training_trial.py"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / "tasks.sqlite"
+            database.write_bytes(b"preserve-source-database")
+            checkpoint = root / "checkpoint.pt"
+
+            cases = (
+                (
+                    ["--checkpoint", str(database)],
+                    "checkpoint and training database must differ",
+                ),
+                (
+                    [
+                        "--checkpoint",
+                        str(checkpoint),
+                        "--status-output",
+                        str(database),
+                    ],
+                    "status output and training database must differ",
+                ),
+                (
+                    [
+                        "--checkpoint",
+                        str(checkpoint),
+                        "--status-output",
+                        str(checkpoint),
+                    ],
+                    "status output and checkpoint must differ",
+                ),
+            )
+            for extra_arguments, expected_error in cases:
+                with self.subTest(expected_error=expected_error):
+                    completed = subprocess.run(
+                        [
+                            sys.executable,
+                            str(script),
+                            "--database",
+                            str(database),
+                            *extra_arguments,
+                            "--max-steps",
+                            "1",
+                        ],
+                        cwd=project_root,
+                        text=True,
+                        encoding="utf-8",
+                        capture_output=True,
+                        check=False,
+                    )
+                    self.assertNotEqual(completed.returncode, 0)
+                    self.assertIn(expected_error, completed.stderr)
+                    self.assertEqual(database.read_bytes(), b"preserve-source-database")
+
     def test_unspecified_cuda_index_matches_the_active_cuda_device(self):
         module = importlib.import_module("bosscrafts_model.trainer")
         self.assertTrue(
@@ -122,6 +215,57 @@ class TrainerTests(unittest.TestCase):
         ):
             self.assertTrue(torch.allclose(expected, actual, atol=1e-7, rtol=1e-6))
 
+    def test_rejects_optimizer_bound_to_a_different_model(self):
+        module = importlib.import_module("bosscrafts_model.trainer")
+        model = EngineeringModel(ModelConfig.tiny())
+        other_model = EngineeringModel(ModelConfig.tiny())
+        optimizer = torch.optim.SGD(other_model.parameters(), lr=0.01)
+        example = {
+            "example_id": "a" * 64,
+            "input_ids": [1, 2, 3],
+            "loss_start_index": 1,
+            "sampling_weight": 1.0,
+        }
+
+        with self.assertRaisesRegex(ValueError, "optimizer.*model"):
+            module.run_training_steps(
+                model,
+                optimizer,
+                [example],
+                device=torch.device("cpu"),
+                max_steps=1,
+            )
+
+    def test_rejects_nonfinite_parameters_created_by_optimizer_step(self):
+        module = importlib.import_module("bosscrafts_model.trainer")
+        model = EngineeringModel(ModelConfig.tiny())
+
+        class PoisonOptimizer(torch.optim.Optimizer):
+            def __init__(self, parameters):
+                super().__init__(parameters, {"lr": 0.01})
+
+            def step(self, closure=None):
+                del closure
+                with torch.no_grad():
+                    self.param_groups[0]["params"][0].fill_(float("inf"))
+
+        optimizer = PoisonOptimizer(model.parameters())
+        example = {
+            "example_id": "b" * 64,
+            "input_ids": [1, 2, 3],
+            "loss_start_index": 1,
+            "sampling_weight": 1.0,
+        }
+
+        with self.assertRaisesRegex(RuntimeError, "non-finite model parameter"):
+            module.run_training_steps(
+                model,
+                optimizer,
+                [example],
+                device=torch.device("cpu"),
+                max_steps=1,
+            )
+
     def test_bounded_training_script_checkpoints_and_resumes_after_cursor(self):
         binding = NativeTokenizerBinding.load()
         project_root = Path(__file__).resolve().parents[1]
@@ -131,6 +275,7 @@ class TrainerTests(unittest.TestCase):
             database = root / "tasks.sqlite"
             checkpoint = root / "checkpoint.pt"
             status_output = root / "training-progress.json"
+            heldout_manifest = root / "heldout-suite-manifest.json"
             inference_output = root / "inference.json"
             heldout_inference_output = root / "heldout-inference.json"
             evaluation_output = root / "evaluation.json"
@@ -245,11 +390,59 @@ class TrainerTests(unittest.TestCase):
             audited_identity = audit_task_database(
                 binding, database
             ).database_identity_sha256
+            categories: dict[str, object] = {}
+            for category in ACCEPTANCE_CATEGORIES:
+                example_ids = sorted(
+                    hashlib.sha256(f"{category}:{index}".encode("utf-8")).hexdigest()
+                    for index in range(MINIMUM_CATEGORY_EXAMPLES[category])
+                )
+                categories[category] = {
+                    "example_ids": example_ids,
+                    "example_ids_sha256": hashlib.sha256(
+                        json.dumps(
+                            example_ids,
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        ).encode("utf-8")
+                    ).hexdigest(),
+                }
+            heldout_unsigned = {
+                "categories": categories,
+                "expected_languages": list(EXPECTED_LANGUAGES),
+                "heldout_split": "test",
+                "parser_runtime_identity_sha256": PARSER_RUNTIME_IDENTITY_SHA256,
+                "schema_version": MODEL_HELDOUT_SUITE_SCHEMA,
+                "structured_tasks": list(STRUCTURED_TASKS),
+                "task_database_identity_sha256": audited_identity,
+                "tokenizer_sha256": binding.tokenizer_sha256,
+            }
+            heldout_manifest_sha256 = hashlib.sha256(
+                json.dumps(
+                    heldout_unsigned,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).hexdigest()
+            heldout_manifest.write_text(
+                json.dumps(
+                    {
+                        **heldout_unsigned,
+                        "manifest_sha256": heldout_manifest_sha256,
+                    },
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
             command = [
                 sys.executable,
                 str(script),
                 "--database",
                 str(database),
+                "--evaluation-database",
+                str(database),
+                "--heldout-suite-manifest",
+                str(heldout_manifest),
                 "--checkpoint",
                 str(checkpoint),
                 "--status-output",
@@ -273,7 +466,11 @@ class TrainerTests(unittest.TestCase):
             first_payload = json.loads(first.stdout)
             self.assertEqual(first_payload["total_optimizer_steps"], 1)
             self.assertEqual(
-                first_payload["schema_version"], "bosscrafts-training-progress-v1"
+                first_payload["schema_version"], "bosscrafts-training-progress-v2"
+            )
+            self.assertEqual(
+                first_payload["checkpoint_sha256"],
+                hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
             )
             self.assertEqual(first_payload["planned_optimizer_steps"], 4)
             self.assertEqual(first_payload["optimizer_steps_remaining"], 3)
@@ -289,7 +486,30 @@ class TrainerTests(unittest.TestCase):
             self.assertEqual(
                 first_payload["task_database_identity_sha256"], audited_identity
             )
+            self.assertEqual(
+                first_payload["evaluation_task_database_identity_sha256"],
+                audited_identity,
+            )
+            self.assertEqual(
+                first_payload["heldout_suite_manifest_sha256"],
+                heldout_manifest_sha256,
+            )
             self.assertTrue(checkpoint.is_file())
+            checkpoint_payload = torch.load(
+                checkpoint, map_location="cpu", weights_only=True
+            )
+            self.assertEqual(
+                checkpoint_payload["schema_version"],
+                "bosscrafts-training-checkpoint-v5",
+            )
+            self.assertEqual(
+                checkpoint_payload["evaluation_task_database_identity_sha256"],
+                audited_identity,
+            )
+            self.assertEqual(
+                checkpoint_payload["heldout_suite_manifest_sha256"],
+                heldout_manifest_sha256,
+            )
             self.assertEqual(json.loads(status_output.read_text()), first_payload)
             self.assertEqual(list(root.glob(".training-progress.json.*.tmp")), [])
 
@@ -354,23 +574,24 @@ class TrainerTests(unittest.TestCase):
             self.assertAlmostEqual(completed_payload["learning_rate"], 0.00002)
             self.assertEqual(json.loads(status_output.read_text()), completed_payload)
 
+            inference_command = [
+                sys.executable,
+                str(project_root / "scripts" / "run_checkpoint_inference.py"),
+                "--database",
+                str(database),
+                "--checkpoint",
+                str(checkpoint),
+                "--device",
+                "cpu",
+                "--prompt",
+                "x = 1",
+                "--max-new-tokens",
+                "2",
+                "--output",
+                str(inference_output),
+            ]
             inference = subprocess.run(
-                [
-                    sys.executable,
-                    str(project_root / "scripts" / "run_checkpoint_inference.py"),
-                    "--database",
-                    str(database),
-                    "--checkpoint",
-                    str(checkpoint),
-                    "--device",
-                    "cpu",
-                    "--prompt",
-                    "x = 1",
-                    "--max-new-tokens",
-                    "2",
-                    "--output",
-                    str(inference_output),
-                ],
+                inference_command,
                 cwd=project_root,
                 text=True,
                 encoding="utf-8",
@@ -382,8 +603,34 @@ class TrainerTests(unittest.TestCase):
             self.assertEqual(inference_payload["new_token_count"], 2)
             self.assertEqual(inference_payload["device"], "cpu")
             self.assertTrue(inference_payload["checkpoint_lineage_verified"])
+            self.assertEqual(
+                inference_payload["checkpoint_sha256"],
+                hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
+            )
             self.assertTrue(inference_payload["checkpoint_training_complete"])
+            self.assertEqual(
+                inference_payload[
+                    "checkpoint_evaluation_task_database_identity_sha256"
+                ],
+                audited_identity,
+            )
+            self.assertEqual(
+                inference_payload["checkpoint_heldout_suite_manifest_sha256"],
+                heldout_manifest_sha256,
+            )
             self.assertEqual(json.loads(inference_output.read_text()), inference_payload)
+            original_inference = inference_output.read_bytes()
+            repeated_inference = subprocess.run(
+                inference_command,
+                cwd=project_root,
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(repeated_inference.returncode, 0)
+            self.assertIn("already exists", repeated_inference.stderr)
+            self.assertEqual(inference_output.read_bytes(), original_inference)
 
             heldout_inference = subprocess.run(
                 [
@@ -418,26 +665,37 @@ class TrainerTests(unittest.TestCase):
             self.assertEqual(heldout_payload["heldout_expected_target_token_count"], 2)
             self.assertEqual(heldout_payload["heldout_expected_token_ids"], [11, 12])
             self.assertEqual(
+                heldout_payload[
+                    "checkpoint_evaluation_task_database_identity_sha256"
+                ],
+                audited_identity,
+            )
+            self.assertEqual(
+                heldout_payload["checkpoint_heldout_suite_manifest_sha256"],
+                heldout_manifest_sha256,
+            )
+            self.assertEqual(
                 json.loads(heldout_inference_output.read_text()), heldout_payload
             )
 
+            evaluation_command = [
+                sys.executable,
+                str(project_root / "scripts" / "evaluate_checkpoint.py"),
+                "--database",
+                str(database),
+                "--checkpoint",
+                str(checkpoint),
+                "--device",
+                "cpu",
+                "--split",
+                "train",
+                "--max-examples",
+                "2",
+                "--output",
+                str(evaluation_output),
+            ]
             evaluation = subprocess.run(
-                [
-                    sys.executable,
-                    str(project_root / "scripts" / "evaluate_checkpoint.py"),
-                    "--database",
-                    str(database),
-                    "--checkpoint",
-                    str(checkpoint),
-                    "--device",
-                    "cpu",
-                    "--split",
-                    "train",
-                    "--max-examples",
-                    "2",
-                    "--output",
-                    str(evaluation_output),
-                ],
+                evaluation_command,
                 cwd=project_root,
                 text=True,
                 encoding="utf-8",
@@ -449,7 +707,21 @@ class TrainerTests(unittest.TestCase):
             self.assertEqual(evaluation_payload["example_count"], 2)
             self.assertTrue(math.isfinite(evaluation_payload["mean_loss"]))
             self.assertTrue(evaluation_payload["checkpoint_lineage_verified"])
+            self.assertEqual(
+                evaluation_payload["checkpoint_sha256"],
+                hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
+            )
             self.assertTrue(evaluation_payload["checkpoint_training_complete"])
+            self.assertEqual(
+                evaluation_payload[
+                    "checkpoint_evaluation_task_database_identity_sha256"
+                ],
+                audited_identity,
+            )
+            self.assertEqual(
+                evaluation_payload["checkpoint_heldout_suite_manifest_sha256"],
+                heldout_manifest_sha256,
+            )
             self.assertTrue(evaluation_payload["evaluation_complete"])
             self.assertIn("target_token_accuracy", evaluation_payload)
             self.assertIn("baseline_target_token_accuracy", evaluation_payload)
@@ -460,6 +732,23 @@ class TrainerTests(unittest.TestCase):
             self.assertTrue(math.isfinite(evaluation_payload["relative_loss_improvement"]))
             self.assertEqual(evaluation_payload["promotion_threshold"], 0.02)
             self.assertIn("promotion_gate_passed", evaluation_payload)
+            self.assertFalse(evaluation_payload["promotion_gate_passed"])
+            self.assertIn(
+                "full production model was not evaluated",
+                evaluation_payload["promotion_blockers"],
+            )
+            original_evaluation = evaluation_output.read_bytes()
+            repeated_evaluation = subprocess.run(
+                evaluation_command,
+                cwd=project_root,
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(repeated_evaluation.returncode, 0)
+            self.assertIn("already exists", repeated_evaluation.stderr)
+            self.assertEqual(evaluation_output.read_bytes(), original_evaluation)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,736 @@
+"""Validate content-addressed acceptance cases and freeze their ID inventory."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import re
+from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
+
+from .heldout_suite_builder import (
+    CATEGORY_CASE_INVENTORY_SCHEMA,
+    PACKED_ACCEPTANCE_CATEGORIES,
+    CategoryCaseInventory,
+    load_category_case_inventory,
+)
+from .immutable_artifacts import publish_new_files
+from .model_acceptance import (
+    ACCEPTANCE_CATEGORIES,
+    EXPECTED_LANGUAGES,
+    MAXIMUM_CATEGORY_EXAMPLES,
+    MINIMUM_CATEGORY_EXAMPLES,
+)
+
+CATEGORY_CASE_SCHEMA = "bosscrafts-model-category-case-v3"
+CATEGORY_CASE_BUNDLE_SCHEMA = "bosscrafts-model-category-case-bundle-v1"
+MAX_CATEGORY_CASE_FILE_BYTES = 128 * 1024 * 1024
+MAX_CATEGORY_CASE_BUNDLE_MANIFEST_BYTES = 16 * 1024 * 1024
+MAX_EXECUTION_STDIN_BYTES = 16 * 1024
+MAX_EXECUTION_STDOUT_BYTES = 64 * 1024
+_BUNDLE_INVENTORY_FILE = "inventory.json"
+_BUNDLE_MANIFEST_FILE = "manifest.json"
+_PACKED_CATEGORIES = {
+    "tokenizer_fidelity",
+    "semantic_fidelity",
+    "raw_code",
+    "execution_correctness",
+}
+_IFEVAL_INSTRUCTION_IDS = {
+    "change_case:capital_word_frequency",
+    "change_case:english_capital",
+    "change_case:english_lowercase",
+    "combination:repeat_prompt",
+    "combination:two_responses",
+    "detectable_content:number_placeholders",
+    "detectable_content:postscript",
+    "detectable_format:constrained_response",
+    "detectable_format:json_format",
+    "detectable_format:multiple_sections",
+    "detectable_format:number_bullet_lists",
+    "detectable_format:number_highlighted_sections",
+    "detectable_format:title",
+    "keywords:existence",
+    "keywords:forbidden_words",
+    "keywords:frequency",
+    "keywords:letter_frequency",
+    "language:response_language",
+    "length_constraints:nth_paragraph_first_word",
+    "length_constraints:number_paragraphs",
+    "length_constraints:number_sentences",
+    "length_constraints:number_words",
+    "punctuation:no_comma",
+    "startend:end_checker",
+    "startend:quotation",
+}
+_AEGIS_SOURCE_ID = re.compile(r"^[0-9a-f]{32}$")
+_SOURCE_REVISION = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+_AEGIS_VIOLATION_CATEGORIES = {
+    "Hate/Identity Hate",
+    "Sexual",
+    "Suicide and Self Harm",
+    "Violence",
+    "Guns and Illegal Weapons",
+    "Threat",
+    "PII/Privacy",
+    "Sexual (minor)",
+    "Criminal Planning/Confessions",
+    "Harassment",
+    "Controlled/Regulated Substances",
+    "Profanity",
+    "Illegal Activity",
+    "Immoral/Unethical",
+    "Unauthorized Advice",
+    "Political/Misinformation/Conspiracy",
+    "Fraud/Deception",
+    "Copyright/Trademark/Plagiarism",
+    "High Risk Gov Decision Making",
+    "Malware",
+    "Manipulation",
+    "Needs Caution",
+    "Other",
+}
+_REGRESSION_SUITE_ID = "bosscrafts-pre-model-full-regression-v1"
+
+
+@dataclass(frozen=True)
+class CategoryCaseBundle:
+    bundle_root: Path
+    manifest_sha256: str
+    inventory: CategoryCaseInventory
+    case_files: dict[str, Path]
+
+
+def _canonical(value: object) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def _sha256(value: object) -> str:
+    return hashlib.sha256(_canonical(value)).hexdigest()
+
+
+def _is_sha256(value: object) -> bool:
+    return (
+        type(value) is str
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    payload: dict[str, object] = {}
+    for key, value in pairs:
+        if key in payload:
+            raise ValueError(f"duplicate category case key: {key}")
+        payload[key] = value
+    return payload
+
+
+def _read_case_content(path: Path, category: str) -> bytes:
+    try:
+        content = path.resolve().read_bytes()
+        if not content or len(content) > MAX_CATEGORY_CASE_FILE_BYTES:
+            raise ValueError(f"{category} category case file size is invalid")
+    except OSError as error:
+        raise ValueError(f"{category} category case file is unreadable") from error
+    return content
+
+
+def _parse_case_records(
+    content: bytes,
+    category: str,
+) -> list[dict[str, object]]:
+    if not content or len(content) > MAX_CATEGORY_CASE_FILE_BYTES:
+        raise ValueError(f"{category} category case file size is invalid")
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError(f"{category} category case file is unreadable") from error
+    lines = text.splitlines()
+    if not lines or any(not line for line in lines):
+        raise ValueError(f"{category} category cases must be non-empty JSONL")
+    records: list[dict[str, object]] = []
+    for line_number, line in enumerate(lines, start=1):
+        try:
+            payload = json.loads(line, object_pairs_hook=_reject_duplicate_keys)
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f"{category} category case line {line_number} is invalid JSON"
+            ) from error
+        if type(payload) is not dict:
+            raise ValueError(f"{category} category case must be an object")
+        records.append(payload)
+    return records
+
+
+def _validate_packed_case(category: str, case: dict[str, object]) -> str:
+    required = {
+        "task_database_identity_sha256",
+        "task_example_id",
+        "split",
+        "language",
+    }
+    if category != "tokenizer_fidelity":
+        required.add("family")
+    if category == "execution_correctness":
+        required.update({"stdin", "expected_stdout"})
+    if set(case) != required:
+        raise ValueError(f"{category} packed case fields are invalid")
+    if (
+        not _is_sha256(case.get("task_database_identity_sha256"))
+        or not _is_sha256(case.get("task_example_id"))
+        or case.get("split") != "test"
+        or case.get("language") not in EXPECTED_LANGUAGES
+    ):
+        raise ValueError(f"{category} packed case lineage is invalid")
+    expected_family = {
+        "semantic_fidelity": "code_to_semantic",
+        "raw_code": "semantic_to_code",
+        "execution_correctness": "semantic_to_code",
+    }.get(category)
+    if expected_family is not None and case.get("family") != expected_family:
+        raise ValueError(f"{category} packed case family is invalid")
+    if category == "execution_correctness":
+        stdin = case.get("stdin")
+        expected_stdout = case.get("expected_stdout")
+        if (
+            type(stdin) is not str
+            or len(stdin.encode("utf-8")) > MAX_EXECUTION_STDIN_BYTES
+            or type(expected_stdout) is not str
+            or len(expected_stdout.encode("utf-8")) > MAX_EXECUTION_STDOUT_BYTES
+        ):
+            raise ValueError("execution_correctness oracle is invalid")
+    return str(case["language"])
+
+
+def _valid_bounded_json_value(value: object, *, depth: int = 0) -> bool:
+    """Accept the bounded JSON subset used by the upstream IFEval kwargs."""
+    if depth > 4:
+        return False
+    if value is None or type(value) is bool:
+        return True
+    if type(value) is int:
+        return -(2**63) <= value < 2**63
+    if type(value) is float:
+        return math.isfinite(value)
+    if type(value) is str:
+        return len(value) <= 16_384
+    if type(value) is list:
+        return len(value) <= 128 and all(
+            _valid_bounded_json_value(item, depth=depth + 1) for item in value
+        )
+    if type(value) is dict:
+        return len(value) <= 64 and all(
+            type(key) is str
+            and bool(key)
+            and len(key) <= 256
+            and _valid_bounded_json_value(item, depth=depth + 1)
+            for key, item in value.items()
+        )
+    return False
+
+
+def _valid_provenance(value: object) -> bool:
+    if type(value) is not dict or set(value) != {
+        "source",
+        "revision",
+        "source_sha256",
+        "license",
+        "attribution",
+    }:
+        return False
+    source = value.get("source")
+    revision = value.get("revision")
+    license_name = value.get("license")
+    attribution = value.get("attribution")
+    return (
+        type(source) is str
+        and bool(source.strip())
+        and len(source) <= 2_048
+        and type(revision) is str
+        and _SOURCE_REVISION.fullmatch(revision) is not None
+        and _is_sha256(value.get("source_sha256"))
+        and type(license_name) is str
+        and bool(license_name.strip())
+        and len(license_name) <= 256
+        and type(attribution) is str
+        and bool(attribution.strip())
+        and len(attribution) <= 2_048
+    )
+
+
+def _valid_ifeval_case(case: dict[str, object]) -> bool:
+    source_key = case.get("source_key")
+    instruction_ids = case.get("instruction_id_list")
+    kwargs = case.get("kwargs")
+    if (
+        set(case)
+        != {"source_key", "prompt", "instruction_id_list", "kwargs"}
+        or type(source_key) is not int
+        or source_key < 0
+        or type(case.get("prompt")) is not str
+        or not str(case["prompt"]).strip()
+        or len(str(case["prompt"])) > 16_384
+        or type(instruction_ids) is not list
+        or not 1 <= len(instruction_ids) <= 16
+        or type(kwargs) is not list
+        or len(kwargs) != len(instruction_ids)
+    ):
+        return False
+    if any(
+        type(instruction_id) is not str
+        or instruction_id not in _IFEVAL_INSTRUCTION_IDS
+        for instruction_id in instruction_ids
+    ):
+        return False
+    return all(
+        type(item) is dict and _valid_bounded_json_value(item) for item in kwargs
+    )
+
+
+def _valid_aegis_case(case: dict[str, object]) -> bool:
+    violated_categories = case.get("violated_categories")
+    prompt_label = case.get("prompt_label")
+    if (
+        set(case)
+        != {
+            "source_id",
+            "split",
+            "prompt",
+            "prompt_label",
+            "prompt_label_source",
+            "violated_categories",
+        }
+        or type(case.get("source_id")) is not str
+        or _AEGIS_SOURCE_ID.fullmatch(str(case["source_id"])) is None
+        or case.get("split") != "test"
+        or type(case.get("prompt")) is not str
+        or not str(case["prompt"]).strip()
+        or len(str(case["prompt"])) > 16_384
+        or prompt_label not in {"safe", "unsafe"}
+        or case.get("prompt_label_source") != "human"
+        or type(violated_categories) is not list
+        or len(violated_categories) > len(_AEGIS_VIOLATION_CATEGORIES)
+        or any(
+            type(category) is not str
+            or category not in _AEGIS_VIOLATION_CATEGORIES
+            for category in violated_categories
+        )
+        or len(set(violated_categories)) != len(violated_categories)
+    ):
+        return False
+    return prompt_label == "safe" or bool(violated_categories)
+
+
+def _validate_case_payload(
+    category: str,
+    case_kind: object,
+    case: object,
+) -> str | None:
+    if type(case) is not dict:
+        raise ValueError(f"{category} case payload is invalid")
+    if category in _PACKED_CATEGORIES:
+        expected_kind = (
+            "packed_tokenizer_roundtrip"
+            if category == "tokenizer_fidelity"
+            else "packed_model_task"
+        )
+        if case_kind != expected_kind:
+            raise ValueError(f"{category} case kind is invalid")
+        return _validate_packed_case(category, case)
+    if category == "ordinary_instruction":
+        if case_kind != "ifeval_instruction" or not _valid_ifeval_case(case):
+            raise ValueError("ordinary_instruction case payload is invalid")
+        return None
+    if category == "safety":
+        if case_kind != "aegis_prompt_moderation" or not _valid_aegis_case(case):
+            raise ValueError("safety case payload is invalid")
+        return None
+    if category == "regression":
+        if (
+            case_kind != "regression_suite"
+            or set(case)
+            != {"suite_id", "minimum_test_count", "minimum_subtest_count"}
+            or case.get("suite_id") != _REGRESSION_SUITE_ID
+            or type(case.get("minimum_test_count")) is not int
+            or int(case["minimum_test_count"]) < 1
+            or type(case.get("minimum_subtest_count")) is not int
+            or int(case["minimum_subtest_count"]) < 0
+        ):
+            raise ValueError("regression case payload is invalid")
+        return None
+    if category == "resources":
+        if (
+            case_kind != "resource_budget"
+            or set(case)
+            != {
+                "vram_limit_bytes",
+                "ram_limit_bytes",
+                "minimum_tokens_per_second",
+            }
+            or type(case.get("vram_limit_bytes")) is not int
+            or int(case["vram_limit_bytes"]) < 1
+            or type(case.get("ram_limit_bytes")) is not int
+            or int(case["ram_limit_bytes"]) < 1
+            or type(case.get("minimum_tokens_per_second")) not in {int, float}
+            or float(case["minimum_tokens_per_second"]) <= 0
+        ):
+            raise ValueError("resources case payload is invalid")
+        return None
+    raise AssertionError(f"unhandled acceptance category: {category}")
+
+
+def _build_category_case_inventory_from_contents(
+    case_contents: Mapping[str, bytes],
+) -> dict[str, object]:
+    if not isinstance(case_contents, Mapping) or set(case_contents) != set(
+        ACCEPTANCE_CATEGORIES
+    ):
+        raise ValueError("category case contents are incomplete")
+    global_ids: set[str] = set()
+    packed_database_identities: set[str] = set()
+    categories: dict[str, object] = {}
+    packed_task_references: dict[str, object] = {}
+    for category in ACCEPTANCE_CATEGORIES:
+        content = case_contents[category]
+        if type(content) is not bytes:
+            raise ValueError(f"{category} category case content is invalid")
+        records = _parse_case_records(content, category)
+        if not MINIMUM_CATEGORY_EXAMPLES[category] <= len(
+            records
+        ) <= MAXIMUM_CATEGORY_EXAMPLES:
+            raise ValueError(f"{category} category case count is invalid")
+        example_ids: list[str] = []
+        observed_languages: set[str] = set()
+        packed_task_ids: set[str] = set()
+        category_task_references: list[dict[str, object]] = []
+        for record in records:
+            if set(record) != {
+                "schema_version",
+                "category",
+                "case_kind",
+                "case",
+                "provenance",
+                "example_id",
+            }:
+                raise ValueError(f"{category} category case fields are invalid")
+            provenance = record.get("provenance")
+            if (
+                record.get("schema_version") != CATEGORY_CASE_SCHEMA
+                or record.get("category") != category
+                or not _valid_provenance(provenance)
+            ):
+                raise ValueError(f"{category} category case provenance is invalid")
+            body = {key: value for key, value in record.items() if key != "example_id"}
+            example_id = record.get("example_id")
+            if not _is_sha256(example_id) or example_id != _sha256(body):
+                raise ValueError(f"{category} category case content identity is invalid")
+            language = _validate_case_payload(
+                category,
+                record.get("case_kind"),
+                record.get("case"),
+            )
+            if language is not None:
+                observed_languages.add(language)
+                packed_case = record["case"]
+                if type(packed_case) is not dict:
+                    raise AssertionError("validated packed case is not an object")
+                database_identity = str(
+                    packed_case["task_database_identity_sha256"]
+                )
+                task_example_id = str(packed_case["task_example_id"])
+                packed_database_identities.add(database_identity)
+                if task_example_id in packed_task_ids:
+                    raise ValueError(f"{category} category repeats a packed task")
+                packed_task_ids.add(task_example_id)
+                category_task_references.append(
+                    {
+                        "category_example_id": str(example_id),
+                        "task_example_id": task_example_id,
+                        "language": language,
+                        "family": packed_case.get("family"),
+                    }
+                )
+            if example_id in global_ids:
+                raise ValueError("category case identity is duplicated")
+            global_ids.add(example_id)
+            example_ids.append(example_id)
+        if example_ids != sorted(example_ids):
+            raise ValueError(f"{category} category cases are not sorted by identity")
+        if category in _PACKED_CATEGORIES and observed_languages != set(
+            EXPECTED_LANGUAGES
+        ):
+            raise ValueError(f"{category} category cases do not cover every language")
+        categories[category] = {
+            "example_ids": example_ids,
+            "example_ids_sha256": _sha256(example_ids),
+        }
+        if category in PACKED_ACCEPTANCE_CATEGORIES:
+            packed_task_references[category] = {
+                "references": category_task_references,
+                "references_sha256": _sha256(category_task_references),
+            }
+    if len(packed_database_identities) != 1:
+        raise ValueError("packed category cases must use one test task database")
+    unsigned: dict[str, object] = {
+        "schema_version": CATEGORY_CASE_INVENTORY_SCHEMA,
+        "test_task_database_identity_sha256": next(
+            iter(packed_database_identities)
+        ),
+        "categories": categories,
+        "packed_task_references": packed_task_references,
+    }
+    return {**unsigned, "inventory_sha256": _sha256(unsigned)}
+
+
+def build_category_case_inventory(
+    case_files: Mapping[str, str | Path],
+) -> dict[str, object]:
+    """Validate every frozen case and return the self-hashed ID inventory."""
+    if not isinstance(case_files, Mapping) or set(case_files) != set(
+        ACCEPTANCE_CATEGORIES
+    ):
+        raise ValueError("category case files are incomplete")
+    contents = {
+        category: _read_case_content(Path(case_files[category]), category)
+        for category in ACCEPTANCE_CATEGORIES
+    }
+    return _build_category_case_inventory_from_contents(contents)
+
+
+def publish_category_case_inventory(
+    output: str | Path,
+    inventory: dict[str, object],
+) -> Path:
+    destination = Path(output).resolve()
+    rendered = json.dumps(
+        inventory,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+        allow_nan=False,
+    ) + "\n"
+    publish_new_files(
+        ((destination, rendered.encode("utf-8")),),
+        artifact_label="category case inventory",
+    )
+    return destination
+
+
+def _sha256_bytes(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+def _inventory_example_count(payload: dict[str, object], category: str) -> int:
+    categories = payload.get("categories")
+    entry = categories.get(category) if type(categories) is dict else None
+    example_ids = entry.get("example_ids") if type(entry) is dict else None
+    if type(example_ids) is not list:
+        raise ValueError(f"{category} category inventory count is invalid")
+    return len(example_ids)
+
+
+def publish_category_case_bundle(
+    output_root: str | Path,
+    case_files: Mapping[str, str | Path],
+) -> CategoryCaseBundle:
+    """Publish every case catalog and its inventory as one immutable generation."""
+    if not isinstance(case_files, Mapping) or set(case_files) != set(
+        ACCEPTANCE_CATEGORIES
+    ):
+        raise ValueError("category case files are incomplete")
+    contents = {
+        category: _read_case_content(Path(case_files[category]), category)
+        for category in ACCEPTANCE_CATEGORIES
+    }
+    inventory_payload = _build_category_case_inventory_from_contents(contents)
+    inventory_content = (
+        json.dumps(
+            inventory_payload,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+    case_contracts = {
+        category: {
+            "file": f"{category}.jsonl",
+            "bytes": len(contents[category]),
+            "sha256": _sha256_bytes(contents[category]),
+            "record_count": _inventory_example_count(
+                inventory_payload,
+                category,
+            ),
+        }
+        for category in ACCEPTANCE_CATEGORIES
+    }
+    unsigned_manifest: dict[str, object] = {
+        "schema_version": CATEGORY_CASE_BUNDLE_SCHEMA,
+        "inventory_file": _BUNDLE_INVENTORY_FILE,
+        "inventory_file_sha256": _sha256_bytes(inventory_content),
+        "inventory_sha256": inventory_payload["inventory_sha256"],
+        "case_files": case_contracts,
+    }
+    manifest = {
+        **unsigned_manifest,
+        "manifest_sha256": _sha256(unsigned_manifest),
+    }
+    manifest_content = (
+        json.dumps(
+            manifest,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+    root = Path(output_root).resolve()
+    publication = tuple(
+        (root / str(case_contracts[category]["file"]), contents[category])
+        for category in ACCEPTANCE_CATEGORIES
+    ) + (
+        (root / _BUNDLE_INVENTORY_FILE, inventory_content),
+        (root / _BUNDLE_MANIFEST_FILE, manifest_content),
+    )
+    publish_new_files(publication, artifact_label="category case bundle")
+    return load_category_case_bundle(root)
+
+
+def _read_bundle_json(path: Path, label: str) -> dict[str, object]:
+    try:
+        content = path.read_bytes()
+        if not content or len(content) > MAX_CATEGORY_CASE_BUNDLE_MANIFEST_BYTES:
+            raise ValueError(f"{label} size is invalid")
+        payload = json.loads(
+            content.decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_keys,
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"{label} is unreadable") from error
+    if type(payload) is not dict:
+        raise ValueError(f"{label} must be an object")
+    return payload
+
+
+def load_category_case_bundle(output_root: str | Path) -> CategoryCaseBundle:
+    """Load and independently revalidate a complete category case bundle."""
+    root = Path(output_root).resolve()
+    expected_names = {
+        *(f"{category}.jsonl" for category in ACCEPTANCE_CATEGORIES),
+        _BUNDLE_INVENTORY_FILE,
+        _BUNDLE_MANIFEST_FILE,
+    }
+    if not root.is_dir() or {path.name for path in root.iterdir()} != expected_names:
+        raise ValueError("category case bundle file inventory is invalid")
+    manifest = _read_bundle_json(
+        root / _BUNDLE_MANIFEST_FILE,
+        "category case bundle manifest",
+    )
+    if set(manifest) != {
+        "schema_version",
+        "inventory_file",
+        "inventory_file_sha256",
+        "inventory_sha256",
+        "case_files",
+        "manifest_sha256",
+    }:
+        raise ValueError("category case bundle manifest fields are invalid")
+    unsigned = {key: value for key, value in manifest.items() if key != "manifest_sha256"}
+    if (
+        manifest.get("schema_version") != CATEGORY_CASE_BUNDLE_SCHEMA
+        or manifest.get("inventory_file") != _BUNDLE_INVENTORY_FILE
+        or not _is_sha256(manifest.get("inventory_file_sha256"))
+        or not _is_sha256(manifest.get("inventory_sha256"))
+        or manifest.get("manifest_sha256") != _sha256(unsigned)
+    ):
+        raise ValueError("category case bundle manifest integrity mismatch")
+    case_contracts = manifest.get("case_files")
+    if type(case_contracts) is not dict or set(case_contracts) != set(
+        ACCEPTANCE_CATEGORIES
+    ):
+        raise ValueError("category case bundle contracts are incomplete")
+    resolved_case_files: dict[str, Path] = {}
+    for category in ACCEPTANCE_CATEGORIES:
+        contract = case_contracts.get(category)
+        expected_name = f"{category}.jsonl"
+        path = root / expected_name
+        if (
+            type(contract) is not dict
+            or set(contract) != {"file", "bytes", "sha256", "record_count"}
+            or contract.get("file") != expected_name
+            or type(contract.get("bytes")) is not int
+            or int(contract["bytes"]) < 1
+            or not _is_sha256(contract.get("sha256"))
+            or type(contract.get("record_count")) is not int
+            or not path.is_file()
+            or path.stat().st_size != contract["bytes"]
+            or _sha256_bytes(path.read_bytes()) != contract["sha256"]
+        ):
+            raise ValueError(f"{category} category case bundle SHA-256 mismatch")
+        resolved_case_files[category] = path
+    inventory_path = root / _BUNDLE_INVENTORY_FILE
+    inventory_content = inventory_path.read_bytes()
+    if _sha256_bytes(inventory_content) != manifest["inventory_file_sha256"]:
+        raise ValueError("category case bundle inventory file SHA-256 mismatch")
+    inventory_payload = _read_bundle_json(
+        inventory_path,
+        "category case bundle inventory",
+    )
+    rebuilt_inventory = build_category_case_inventory(resolved_case_files)
+    if (
+        inventory_payload != rebuilt_inventory
+        or inventory_payload.get("inventory_sha256") != manifest["inventory_sha256"]
+    ):
+        raise ValueError("category case bundle inventory mismatch")
+    for category in ACCEPTANCE_CATEGORIES:
+        contract = case_contracts[category]
+        if contract["record_count"] != _inventory_example_count(
+            rebuilt_inventory,
+            category,
+        ):
+            raise ValueError(f"{category} category case bundle count mismatch")
+    inventory = load_category_case_inventory(inventory_path)
+    return CategoryCaseBundle(
+        bundle_root=root,
+        manifest_sha256=str(manifest["manifest_sha256"]),
+        inventory=inventory,
+        case_files=resolved_case_files,
+    )
+
+
+def load_category_case_records(
+    bundle: CategoryCaseBundle,
+    category: str,
+) -> tuple[dict[str, object], ...]:
+    """Reload a bundle and return one category's verified case records."""
+    if type(bundle) is not CategoryCaseBundle:
+        raise TypeError("bundle must be a CategoryCaseBundle")
+    if category not in ACCEPTANCE_CATEGORIES:
+        raise ValueError("category is invalid")
+    reloaded = load_category_case_bundle(bundle.bundle_root)
+    if (
+        reloaded.manifest_sha256 != bundle.manifest_sha256
+        or reloaded.inventory.inventory_sha256
+        != bundle.inventory.inventory_sha256
+    ):
+        raise ValueError("category case bundle changed during use")
+    records = _parse_case_records(
+        _read_case_content(reloaded.case_files[category], category),
+        category,
+    )
+    if tuple(str(record["example_id"]) for record in records) != (
+        reloaded.inventory.category_example_ids[category]
+    ):
+        raise ValueError("category case record inventory mismatch")
+    return tuple(records)

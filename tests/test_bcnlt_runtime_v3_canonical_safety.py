@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 from runtime_import import select_bcnlt_runtime
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_SOURCE = (
-    PROJECT_ROOT / "vendor" / "bcnlt_runtime_v3_candidate" / "source"
+    PROJECT_ROOT / "vendor" / "bcnlt_runtime_v10_learning_candidate" / "source"
 )
+# These cases originated during the V3 audit, but they are current-runtime
+# regressions. Binding them to an ignored historical checkout made a fresh
+# clone silently test different code from the candidate under review.
 select_bcnlt_runtime(RUNTIME_SOURCE)
 
 from bcnlt.canonical import (  # noqa: E402
@@ -21,10 +23,33 @@ from bcnlt.canonical import (  # noqa: E402
 from bcnlt.full_run_gate import _load_object, prepare_full_run  # noqa: E402
 from bcnlt.hf_tokenizer import HuggingFaceBaseTokenizer  # noqa: E402
 from bcnlt.model_eval import _urlopen_transport  # noqa: E402
+from bcnlt.parsers.bundle import _validate_provenance_url  # noqa: E402
 from bcnlt.wildcard import WildcardMemory  # noqa: E402
 
 
 class BCNLTRuntimeV3CanonicalSafetyTests(unittest.TestCase):
+    def test_parser_provenance_urls_are_restricted_to_pinned_https_hosts(self):
+        _validate_provenance_url(
+            "https://github.com/xberg-io/tree-sitter-language-pack/"
+            "releases/download/v1/provenance.json",
+            release_origin=True,
+        )
+        _validate_provenance_url(
+            "https://release-assets.githubusercontent.com/github-production-release-asset/"
+            "artifact",
+            release_origin=False,
+        )
+        rejected = (
+            "http://github.com/xberg-io/tree-sitter-language-pack/releases/download/v1/x",
+            "https://user@github.com/xberg-io/tree-sitter-language-pack/releases/download/v1/x",
+            "https://github.com:444/xberg-io/tree-sitter-language-pack/releases/download/v1/x",
+            "https://127.0.0.1/provenance.json",
+            "https://example.com/provenance.json",
+        )
+        for url in rejected:
+            with self.subTest(url=url), self.assertRaisesRegex(ValueError, "pinned HTTPS"):
+                _validate_provenance_url(url, release_origin=False)
+
     def test_duplicate_json_keys_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
             record_from_canonical_bytes(

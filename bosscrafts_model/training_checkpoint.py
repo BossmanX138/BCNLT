@@ -1,6 +1,12 @@
 """Atomic, lineage-bound checkpoints for BossCrafts model training."""
+
 from __future__ import annotations
 
+import hashlib
+import math
+import os
+import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeGuard, cast
@@ -8,8 +14,42 @@ from typing import Any, TypeGuard, cast
 import torch
 from torch import nn
 
-
-CHECKPOINT_SCHEMA = "bosscrafts-training-checkpoint-v4"
+LEGACY_CHECKPOINT_SCHEMA = "bosscrafts-training-checkpoint-v4"
+SINGULAR_CHECKPOINT_SCHEMA = "bosscrafts-training-checkpoint-v5"
+CHECKPOINT_SCHEMA = "bosscrafts-training-checkpoint-v6"
+_LEGACY_CHECKPOINT_FIELDS = frozenset(
+    {
+        "binding_sha256",
+        "cpu_rng_state",
+        "cuda_rng_state_all",
+        "cursor_after_example_id",
+        "epoch_index",
+        "examples_seen",
+        "last_example_id",
+        "model_fingerprint",
+        "model_state_dict",
+        "optimizer_state_dict",
+        "schema_version",
+        "step",
+        "target_epochs",
+        "task_database_identity_sha256",
+        "training_plan_sha256",
+    }
+)
+_SINGULAR_CHECKPOINT_FIELDS = frozenset(
+    {
+        *_LEGACY_CHECKPOINT_FIELDS,
+        "evaluation_task_database_identity_sha256",
+        "heldout_suite_manifest_sha256",
+    }
+)
+_CHECKPOINT_FIELDS = frozenset(
+    {
+        *_LEGACY_CHECKPOINT_FIELDS,
+        "evaluation_task_database_identities_sha256",
+        "heldout_suite_manifest_sha256",
+    }
+)
 
 
 def _is_sha256(value: object) -> TypeGuard[str]:
@@ -20,8 +60,140 @@ def _is_sha256(value: object) -> TypeGuard[str]:
     )
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _state_values_are_finite(value: object) -> bool:
+    """Reject non-finite scalar or tensor values in nested checkpoint state."""
+    pending = [value]
+    seen_containers: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if isinstance(current, torch.Tensor):
+            if (current.is_floating_point() or current.is_complex()) and not bool(
+                torch.isfinite(current).all()
+            ):
+                return False
+        elif type(current) is float:
+            if not math.isfinite(current):
+                return False
+        elif type(current) is complex:
+            if not math.isfinite(current.real) or not math.isfinite(current.imag):
+                return False
+        elif isinstance(current, dict):
+            identity = id(current)
+            if identity not in seen_containers:
+                seen_containers.add(identity)
+                pending.extend(current.values())
+        elif isinstance(current, (list, tuple)):
+            identity = id(current)
+            if identity not in seen_containers:
+                seen_containers.add(identity)
+                pending.extend(current)
+    return True
+
+
+def _validated_model_state(
+    model: nn.Module,
+    payload: dict[str, object],
+    *,
+    require_dtype: bool,
+) -> dict[str, Any]:
+    model_state = cast(dict[str, Any], payload["model_state_dict"])
+    current_state = model.state_dict()
+    if set(model_state) != set(current_state):
+        raise ValueError("training checkpoint model state is incompatible")
+    for name, current in current_state.items():
+        incoming = model_state[name]
+        if (
+            not isinstance(incoming, torch.Tensor)
+            or not isinstance(current, torch.Tensor)
+            or incoming.shape != current.shape
+            or (require_dtype and incoming.dtype != current.dtype)
+            or incoming.layout != current.layout
+        ):
+            raise ValueError("training checkpoint model state is incompatible")
+    return model_state
+
+
+def _validated_optimizer_state(
+    optimizer: torch.optim.Optimizer, payload: dict[str, object]
+) -> dict[str, Any]:
+    optimizer_state = cast(dict[str, Any], payload["optimizer_state_dict"])
+    saved_groups = optimizer_state["param_groups"]
+    saved_states = optimizer_state["state"]
+    current_groups = optimizer.state_dict()["param_groups"]
+    actual_groups = optimizer.param_groups
+    if (
+        len(saved_groups) != len(current_groups)
+        or len(saved_groups) != len(actual_groups)
+    ):
+        raise ValueError("training checkpoint optimizer state is incompatible")
+    parameter_by_saved_id: dict[int, torch.Tensor] = {}
+    for saved_group, current_group, actual_group in zip(
+        saved_groups, current_groups, actual_groups, strict=True
+    ):
+        if (
+            type(saved_group) is not dict
+            or set(saved_group) != set(current_group)
+            or type(saved_group.get("params")) is not list
+            or type(actual_group.get("params")) is not list
+            or len(saved_group["params"]) != len(actual_group["params"])
+        ):
+            raise ValueError("training checkpoint optimizer state is incompatible")
+        for saved_id, parameter in zip(
+            saved_group["params"], actual_group["params"], strict=True
+        ):
+            if (
+                type(saved_id) is not int
+                or saved_id in parameter_by_saved_id
+                or not isinstance(parameter, torch.Tensor)
+            ):
+                raise ValueError("training checkpoint optimizer state is incompatible")
+            parameter_by_saved_id[saved_id] = parameter
+    if any(
+        type(saved_id) is not int
+        or saved_id not in parameter_by_saved_id
+        or type(state) is not dict
+        for saved_id, state in saved_states.items()
+    ):
+        raise ValueError("training checkpoint optimizer state is incompatible")
+    for saved_id, state in saved_states.items():
+        parameter = parameter_by_saved_id[saved_id]
+        if any(
+            isinstance(value, torch.Tensor)
+            and value.numel() != 1
+            and value.shape != parameter.shape
+            for value in state.values()
+        ):
+            raise ValueError("training checkpoint optimizer state is incompatible")
+    return optimizer_state
+
+
+def _validate_rng_state_compatibility(payload: dict[str, object]) -> None:
+    cpu_state = cast(torch.Tensor, payload["cpu_rng_state"])
+    if cpu_state.shape != torch.get_rng_state().shape:
+        raise ValueError("training checkpoint CPU RNG state is incompatible")
+    cuda_states = payload.get("cuda_rng_state_all")
+    if cuda_states is None or not torch.cuda.is_available():
+        return
+    saved_cuda_states = cast(list[torch.Tensor], cuda_states)
+    current_cuda_states = torch.cuda.get_rng_state_all()
+    if len(saved_cuda_states) != len(current_cuda_states) or any(
+        saved.shape != current.shape
+        for saved, current in zip(saved_cuda_states, current_cuda_states, strict=True)
+    ):
+        raise ValueError("training checkpoint CUDA RNG state is incompatible")
+
+
 @dataclass(frozen=True)
 class TrainingCheckpointState:
+    checkpoint_sha256: str
     step: int
     examples_seen: int
     epoch_index: int
@@ -29,6 +201,9 @@ class TrainingCheckpointState:
     last_example_id: str
     cursor_after_example_id: str | None
     task_database_identity_sha256: str
+    evaluation_task_database_identity_sha256: str | None
+    evaluation_task_database_identities_sha256: dict[str, str] | None
+    heldout_suite_manifest_sha256: str | None
     binding_sha256: str
     model_fingerprint: str
     training_plan_sha256: str
@@ -49,15 +224,18 @@ def save_training_checkpoint(
     binding_sha256: str,
     model_fingerprint: str,
     training_plan_sha256: str,
+    evaluation_task_database_identity_sha256: str | None = None,
+    evaluation_task_database_identities_sha256: Mapping[str, str] | None = None,
+    heldout_suite_manifest_sha256: str | None = None,
 ) -> None:
     if not isinstance(model, nn.Module):
         raise TypeError("model must be a torch module")
     if not isinstance(optimizer, torch.optim.Optimizer):
         raise TypeError("optimizer must be a torch optimizer")
-    if type(step) is not int or step < 0:
-        raise ValueError("step must be a nonnegative integer")
-    if type(examples_seen) is not int or examples_seen < 0:
-        raise ValueError("examples_seen must be a nonnegative integer")
+    if type(step) is not int or step < 1:
+        raise ValueError("step must be a positive integer")
+    if type(examples_seen) is not int or examples_seen < step:
+        raise ValueError("examples_seen must be an integer at least as large as step")
     if type(target_epochs) is not int or target_epochs < 1:
         raise ValueError("target_epochs must be a positive integer")
     if type(epoch_index) is not int or not 0 <= epoch_index <= target_epochs:
@@ -71,13 +249,65 @@ def save_training_checkpoint(
     ):
         if not _is_sha256(value):
             raise ValueError(f"{name} must be a lowercase SHA-256 digest")
+    if (
+        evaluation_task_database_identity_sha256 is not None
+        and evaluation_task_database_identities_sha256 is not None
+    ):
+        raise ValueError("singular and plural evaluation lineage are mutually exclusive")
+    plural_evaluation_lineage = (
+        dict(evaluation_task_database_identities_sha256)
+        if evaluation_task_database_identities_sha256 is not None
+        else None
+    )
+    if plural_evaluation_lineage is not None and (
+        set(plural_evaluation_lineage) != {"validation", "test"}
+        or any(not _is_sha256(value) for value in plural_evaluation_lineage.values())
+    ):
+        raise ValueError("evaluation lineage must contain both split SHA-256 digests")
+    has_evaluation_lineage = (
+        evaluation_task_database_identity_sha256 is not None
+        or plural_evaluation_lineage is not None
+    )
+    if has_evaluation_lineage != (heldout_suite_manifest_sha256 is not None):
+        raise ValueError(
+            "evaluation database and held-out suite identities must be supplied together"
+        )
+    if (
+        evaluation_task_database_identity_sha256 is not None
+        and not _is_sha256(evaluation_task_database_identity_sha256)
+    ) or (
+        heldout_suite_manifest_sha256 is not None
+        and not _is_sha256(heldout_suite_manifest_sha256)
+    ):
+        raise ValueError("evaluation lineage must contain lowercase SHA-256 digests")
     if cursor_after_example_id is not None and not _is_sha256(cursor_after_example_id):
         raise ValueError("cursor_after_example_id must be a lowercase SHA-256 or None")
+    if (
+        cursor_after_example_id is not None
+        and cursor_after_example_id != last_example_id
+    ):
+        raise ValueError("checkpoint cursor must match the last trained example")
+    if epoch_index == target_epochs and cursor_after_example_id is not None:
+        raise ValueError("completed checkpoint cursor must be None")
     destination = Path(path).resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f".{destination.name}.tmp")
-    payload = {
-        "schema_version": CHECKPOINT_SCHEMA,
+    temporary: Path | None = None
+    model_state = model.state_dict()
+    optimizer_state = optimizer.state_dict()
+    if not _state_values_are_finite(model_state):
+        raise ValueError("training checkpoint contains non-finite model state")
+    if not _state_values_are_finite(optimizer_state):
+        raise ValueError("training checkpoint contains non-finite optimizer state")
+    payload: dict[str, object] = {
+        "schema_version": (
+            CHECKPOINT_SCHEMA
+            if plural_evaluation_lineage is not None
+            else (
+                SINGULAR_CHECKPOINT_SCHEMA
+                if evaluation_task_database_identity_sha256 is not None
+                else LEGACY_CHECKPOINT_SCHEMA
+            )
+        ),
         "step": step,
         "examples_seen": examples_seen,
         "epoch_index": epoch_index,
@@ -88,16 +318,37 @@ def save_training_checkpoint(
         "binding_sha256": binding_sha256,
         "model_fingerprint": model_fingerprint,
         "training_plan_sha256": training_plan_sha256,
-        "model_state_dict": model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
+        "model_state_dict": model_state,
+        "optimizer_state_dict": optimizer_state,
         "cpu_rng_state": torch.get_rng_state(),
-        "cuda_rng_state_all": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+        "cuda_rng_state_all": torch.cuda.get_rng_state_all()
+        if torch.cuda.is_available()
+        else None,
     }
+    if evaluation_task_database_identity_sha256 is not None:
+        payload["evaluation_task_database_identity_sha256"] = (
+            evaluation_task_database_identity_sha256
+        )
+        payload["heldout_suite_manifest_sha256"] = heldout_suite_manifest_sha256
+    elif plural_evaluation_lineage is not None:
+        payload["evaluation_task_database_identities_sha256"] = (
+            plural_evaluation_lineage
+        )
+        payload["heldout_suite_manifest_sha256"] = heldout_suite_manifest_sha256
     try:
+        with tempfile.NamedTemporaryFile(
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
         torch.save(payload, temporary)
-        temporary.replace(destination)
+        with temporary.open("r+b") as handle:
+            os.fsync(handle.fileno())
+        os.replace(temporary, destination)
     finally:
-        if temporary.exists():
+        if temporary is not None and temporary.exists():
             temporary.unlink()
 
 
@@ -111,23 +362,38 @@ def load_training_checkpoint(
     expected_model_fingerprint: str,
     expected_target_epochs: int,
     expected_training_plan_sha256: str,
+    expected_evaluation_task_database_identity_sha256: str | None = None,
+    expected_evaluation_task_database_identities_sha256: Mapping[str, str]
+    | None = None,
+    expected_heldout_suite_manifest_sha256: str | None = None,
 ) -> TrainingCheckpointState:
     payload, state = _load_verified_payload(
         path,
         expected_task_database_identity_sha256=expected_task_database_identity_sha256,
         expected_binding_sha256=expected_binding_sha256,
         expected_model_fingerprint=expected_model_fingerprint,
+        expected_evaluation_task_database_identity_sha256=(
+            expected_evaluation_task_database_identity_sha256
+        ),
+        expected_evaluation_task_database_identities_sha256=(
+            expected_evaluation_task_database_identities_sha256
+        ),
+        expected_heldout_suite_manifest_sha256=(
+            expected_heldout_suite_manifest_sha256
+        ),
     )
     if state.target_epochs != expected_target_epochs:
         raise ValueError("training checkpoint epoch plan mismatch")
     if state.training_plan_sha256 != expected_training_plan_sha256:
         raise ValueError("training checkpoint training plan mismatch")
-    model.load_state_dict(
-        cast(dict[str, Any], payload["model_state_dict"]), strict=True
-    )
-    optimizer.load_state_dict(
-        cast(dict[str, Any], payload["optimizer_state_dict"])
-    )
+    model_state = _validated_model_state(model, payload, require_dtype=True)
+    optimizer_state = _validated_optimizer_state(optimizer, payload)
+    _validate_rng_state_compatibility(payload)
+    try:
+        optimizer.load_state_dict(optimizer_state)
+        model.load_state_dict(model_state, strict=True)
+    except Exception as error:
+        raise ValueError("training checkpoint state could not be restored") from error
     torch.set_rng_state(cast(torch.Tensor, payload["cpu_rng_state"]))
     cuda_states = payload.get("cuda_rng_state_all")
     if cuda_states is not None and torch.cuda.is_available():
@@ -142,16 +408,31 @@ def load_model_checkpoint_for_inference(
     expected_task_database_identity_sha256: str,
     expected_binding_sha256: str,
     expected_model_fingerprint: str,
+    expected_evaluation_task_database_identity_sha256: str | None = None,
+    expected_evaluation_task_database_identities_sha256: Mapping[str, str]
+    | None = None,
+    expected_heldout_suite_manifest_sha256: str | None = None,
 ) -> TrainingCheckpointState:
     payload, state = _load_verified_payload(
         path,
         expected_task_database_identity_sha256=expected_task_database_identity_sha256,
         expected_binding_sha256=expected_binding_sha256,
         expected_model_fingerprint=expected_model_fingerprint,
+        expected_evaluation_task_database_identity_sha256=(
+            expected_evaluation_task_database_identity_sha256
+        ),
+        expected_evaluation_task_database_identities_sha256=(
+            expected_evaluation_task_database_identities_sha256
+        ),
+        expected_heldout_suite_manifest_sha256=(
+            expected_heldout_suite_manifest_sha256
+        ),
     )
-    model.load_state_dict(
-        cast(dict[str, Any], payload["model_state_dict"]), strict=True
-    )
+    model_state = _validated_model_state(model, payload, require_dtype=False)
+    try:
+        model.load_state_dict(model_state, strict=True)
+    except Exception as error:
+        raise ValueError("training checkpoint model state could not be restored") from error
     return state
 
 
@@ -161,13 +442,13 @@ def _load_verified_payload(
     expected_task_database_identity_sha256: str,
     expected_binding_sha256: str,
     expected_model_fingerprint: str,
+    expected_evaluation_task_database_identity_sha256: str | None,
+    expected_evaluation_task_database_identities_sha256: Mapping[str, str] | None,
+    expected_heldout_suite_manifest_sha256: str | None,
 ) -> tuple[dict[str, object], TrainingCheckpointState]:
     checkpoint_path = Path(path).resolve()
     if not checkpoint_path.is_file():
         raise ValueError("training checkpoint does not exist")
-    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-    if type(payload) is not dict or payload.get("schema_version") != CHECKPOINT_SCHEMA:
-        raise ValueError("training checkpoint schema mismatch")
     expected = {
         "task_database_identity_sha256": expected_task_database_identity_sha256,
         "binding_sha256": expected_binding_sha256,
@@ -175,23 +456,129 @@ def _load_verified_payload(
     }
     if any(not _is_sha256(value) for value in expected.values()):
         raise ValueError("expected training lineage contains an invalid SHA-256")
+    if (
+        expected_evaluation_task_database_identity_sha256 is not None
+        and expected_evaluation_task_database_identities_sha256 is not None
+    ):
+        raise ValueError("expected evaluation lineage is invalid")
+    expected_plural_lineage = (
+        dict(expected_evaluation_task_database_identities_sha256)
+        if expected_evaluation_task_database_identities_sha256 is not None
+        else None
+    )
+    expected_has_lineage = (
+        expected_evaluation_task_database_identity_sha256 is not None
+        or expected_plural_lineage is not None
+    )
+    if (
+        expected_has_lineage
+        != (expected_heldout_suite_manifest_sha256 is not None)
+        or (
+            expected_evaluation_task_database_identity_sha256 is not None
+            and not _is_sha256(expected_evaluation_task_database_identity_sha256)
+        )
+        or (
+            expected_plural_lineage is not None
+            and (
+                set(expected_plural_lineage) != {"validation", "test"}
+                or any(
+                    not _is_sha256(value)
+                    for value in expected_plural_lineage.values()
+                )
+            )
+        )
+        or (
+            expected_heldout_suite_manifest_sha256 is not None
+            and not _is_sha256(expected_heldout_suite_manifest_sha256)
+        )
+    ):
+        raise ValueError("expected evaluation lineage is invalid")
+    try:
+        checkpoint_sha256 = _sha256_file(checkpoint_path)
+    except OSError as error:
+        raise ValueError("training checkpoint is unreadable") from error
+    try:
+        payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    except Exception as error:
+        raise ValueError("training checkpoint is unreadable") from error
+    try:
+        checkpoint_sha256_after_load = _sha256_file(checkpoint_path)
+    except OSError as error:
+        raise ValueError("training checkpoint is unreadable") from error
+    if checkpoint_sha256_after_load != checkpoint_sha256:
+        raise ValueError("training checkpoint changed while loading")
+    if type(payload) is not dict:
+        raise ValueError("training checkpoint fields or schema mismatch")
+    schema_version = payload.get("schema_version")
+    if schema_version == LEGACY_CHECKPOINT_SCHEMA:
+        expected_fields = _LEGACY_CHECKPOINT_FIELDS
+    elif schema_version == SINGULAR_CHECKPOINT_SCHEMA:
+        expected_fields = _SINGULAR_CHECKPOINT_FIELDS
+    elif schema_version == CHECKPOINT_SCHEMA:
+        expected_fields = _CHECKPOINT_FIELDS
+    else:
+        raise ValueError("training checkpoint fields or schema mismatch")
+    if set(payload) != expected_fields:
+        raise ValueError("training checkpoint fields or schema mismatch")
     if any(payload.get(key) != value for key, value in expected.items()):
         raise ValueError("training checkpoint lineage mismatch")
+    evaluation_database_identity = payload.get(
+        "evaluation_task_database_identity_sha256"
+    )
+    evaluation_database_identities = payload.get(
+        "evaluation_task_database_identities_sha256"
+    )
+    heldout_suite_identity = payload.get("heldout_suite_manifest_sha256")
+    if schema_version == SINGULAR_CHECKPOINT_SCHEMA and (
+        not _is_sha256(evaluation_database_identity)
+        or not _is_sha256(heldout_suite_identity)
+    ):
+        raise ValueError("training checkpoint evaluation lineage is invalid")
+    if schema_version == CHECKPOINT_SCHEMA and (
+        type(evaluation_database_identities) is not dict
+        or set(evaluation_database_identities) != {"validation", "test"}
+        or any(
+            not _is_sha256(value) for value in evaluation_database_identities.values()
+        )
+        or not _is_sha256(heldout_suite_identity)
+    ):
+        raise ValueError("training checkpoint evaluation lineage is invalid")
+    if expected_evaluation_task_database_identity_sha256 is not None and (
+        evaluation_database_identity
+        != expected_evaluation_task_database_identity_sha256
+        or heldout_suite_identity != expected_heldout_suite_manifest_sha256
+    ):
+        raise ValueError("training checkpoint evaluation lineage mismatch")
+    if expected_plural_lineage is not None and (
+        evaluation_database_identities != expected_plural_lineage
+        or heldout_suite_identity != expected_heldout_suite_manifest_sha256
+    ):
+        raise ValueError("training checkpoint evaluation lineage mismatch")
     model_state = payload.get("model_state_dict")
     optimizer_state = payload.get("optimizer_state_dict")
     cpu_rng_state = payload.get("cpu_rng_state")
     cuda_rng_states = payload.get("cuda_rng_state_all")
-    if not isinstance(model_state, dict) or any(
-        type(key) is not str for key in model_state
+    if (
+        not isinstance(model_state, dict)
+        or not model_state
+        or any(type(key) is not str for key in model_state)
+        or any(not isinstance(value, torch.Tensor) for value in model_state.values())
     ):
         raise ValueError("training checkpoint model state is invalid")
-    if not isinstance(optimizer_state, dict) or any(
-        type(key) is not str for key in optimizer_state
+    if not _state_values_are_finite(model_state):
+        raise ValueError("training checkpoint contains non-finite model state")
+    if (
+        not isinstance(optimizer_state, dict)
+        or set(optimizer_state) != {"state", "param_groups"}
+        or not isinstance(optimizer_state.get("state"), dict)
+        or not isinstance(optimizer_state.get("param_groups"), list)
     ):
         raise ValueError("training checkpoint optimizer state is invalid")
-    if not isinstance(cpu_rng_state, torch.Tensor) or (
-        cpu_rng_state.dtype != torch.uint8 or cpu_rng_state.device.type != "cpu"
-    ):
+    if not _state_values_are_finite(optimizer_state):
+        raise ValueError("training checkpoint contains non-finite optimizer state")
+    if not isinstance(cpu_rng_state, torch.Tensor):
+        raise ValueError("training checkpoint CPU RNG state is invalid")
+    if cpu_rng_state.dtype != torch.uint8 or cpu_rng_state.device.type != "cpu":
         raise ValueError("training checkpoint CPU RNG state is invalid")
     if cuda_rng_states is not None and (
         type(cuda_rng_states) is not list
@@ -212,9 +599,9 @@ def _load_verified_payload(
     training_plan_sha256 = payload.get("training_plan_sha256")
     if (
         type(step) is not int
-        or step < 0
+        or step < 1
         or type(examples_seen) is not int
-        or examples_seen < 0
+        or examples_seen < step
         or type(target_epochs) is not int
         or target_epochs < 1
         or type(epoch_index) is not int
@@ -226,8 +613,16 @@ def _load_verified_payload(
             and not _is_sha256(cursor_after_example_id)
         )
     ):
-        raise ValueError("training checkpoint cursor is invalid")
+        raise ValueError("training checkpoint progress is invalid")
+    if (
+        cursor_after_example_id is not None
+        and cursor_after_example_id != last_example_id
+    ):
+        raise ValueError("training checkpoint cursor does not match the last example")
+    if epoch_index == target_epochs and cursor_after_example_id is not None:
+        raise ValueError("training checkpoint cursor at completion is invalid")
     state = TrainingCheckpointState(
+        checkpoint_sha256=checkpoint_sha256,
         step=step,
         examples_seen=examples_seen,
         epoch_index=epoch_index,
@@ -235,6 +630,19 @@ def _load_verified_payload(
         last_example_id=last_example_id,
         cursor_after_example_id=cursor_after_example_id,
         task_database_identity_sha256=expected_task_database_identity_sha256,
+        evaluation_task_database_identity_sha256=(
+            evaluation_database_identity
+            if isinstance(evaluation_database_identity, str)
+            else None
+        ),
+        evaluation_task_database_identities_sha256=(
+            dict(evaluation_database_identities)
+            if isinstance(evaluation_database_identities, dict)
+            else None
+        ),
+        heldout_suite_manifest_sha256=(
+            heldout_suite_identity if isinstance(heldout_suite_identity, str) else None
+        ),
         binding_sha256=expected_binding_sha256,
         model_fingerprint=expected_model_fingerprint,
         training_plan_sha256=training_plan_sha256,

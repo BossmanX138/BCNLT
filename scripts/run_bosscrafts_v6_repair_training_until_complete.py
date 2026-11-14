@@ -3,15 +3,18 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import subprocess
 import sys
-
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from bosscrafts_model.training_progress import (
+    TrainingProgress,
+    load_training_progress,
+)
 from scripts.run_bosscrafts_v6_repair_training_chunk import (
     EXPECTED_DATABASE_IDENTITY,
     EXPECTED_MODEL_FINGERPRINT,
@@ -20,32 +23,25 @@ from scripts.run_bosscrafts_v6_repair_training_chunk import (
     expected_training_plan_sha256,
 )
 
-
 CHECKPOINT_DIR = (
     PROJECT_ROOT / "artifacts" / "checkpoints" / "bosscrafts-engineering-v6-repair"
 )
 DEFAULT_STATUS = CHECKPOINT_DIR / "training-progress.json"
+DEFAULT_CHECKPOINT = CHECKPOINT_DIR / "checkpoint.pt"
 
 
-def _load_status(path: Path) -> dict[str, object]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if type(payload) is not dict:
-        raise ValueError("training status must be a JSON object")
-    if not (
-        payload.get("checkpoint_written") is True
-        and payload.get("gradients_finite") is True
-        and payload.get("full_model") is True
-        and payload.get("task_database_identity_sha256")
-        == EXPECTED_DATABASE_IDENTITY
-        and payload.get("model_fingerprint") == EXPECTED_MODEL_FINGERPRINT
-        and payload.get("training_plan_sha256") == expected_training_plan_sha256()
-        and payload.get("planned_optimizer_steps") == PLANNED_OPTIMIZER_STEPS
-        and payload.get("initialization") == expected_initialization()
-        and type(payload.get("total_optimizer_steps")) is int
-        and type(payload.get("optimizer_steps_remaining")) is int
-    ):
-        raise ValueError("training status failed the frozen v6 repair contract")
-    return payload
+def _load_status(path: Path) -> TrainingProgress:
+    return load_training_progress(
+        path,
+        expected_fields={
+            "task_database_identity_sha256": EXPECTED_DATABASE_IDENTITY,
+            "model_fingerprint": EXPECTED_MODEL_FINGERPRINT,
+            "training_plan_sha256": expected_training_plan_sha256(),
+            "planned_optimizer_steps": PLANNED_OPTIMIZER_STEPS,
+            "initialization": expected_initialization(),
+        },
+        checkpoint_path=DEFAULT_CHECKPOINT,
+    )
 
 
 def main() -> int:

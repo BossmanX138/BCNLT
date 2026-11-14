@@ -1,4 +1,5 @@
 """Crash-resumable current-lineage task packing backed by committed SQLite rows."""
+
 from __future__ import annotations
 
 import hashlib
@@ -9,13 +10,14 @@ import sys
 import zlib
 from array import array
 from collections import Counter, defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypedDict, cast
 
 from .bcnlt_adapter import MAX_CANONICAL_OUTPUT_BYTES
 from .bcnlt_source_pipeline import (
+    CURRENT_RUNTIME_SPEC_SHA256,
     PARSER_RUNTIME_IDENTITY_SHA256,
     PARSER_RUNTIME_NOT_APPLICABLE,
 )
@@ -36,6 +38,14 @@ TASK_DATABASE_SCHEMA = "bosscrafts-current-task-resumable-v3"
 FULL_SEMANTIC_WIRE_SCHEMA = "bosscrafts-full-semantic-wire-v3"
 CELL_WEIGHT_MULTIPLIERS_METADATA_KEY = "training_cell_weight_multipliers_v1_json"
 SALTED_SOURCE_EXAMPLE_ID_POLICY = "bosscrafts-v11-salted-source-example-id-v1"
+_TASK_FAMILIES = frozenset(
+    {
+        "instruction_to_code",
+        "code_to_semantic",
+        "semantic_continuation",
+        "semantic_to_code",
+    }
+)
 
 
 class TaskExample(TypedDict):
@@ -151,6 +161,19 @@ class ResumableTaskDataset:
                 raise ValueError("task database tokenizer lineage mismatch")
             if self.metadata.get("packing_complete") != "true":
                 raise ValueError("task database packing is incomplete")
+            raw_maximum_sequence = self.metadata.get("maximum_sequence_tokens")
+            try:
+                maximum_sequence = int(raw_maximum_sequence or "")
+            except ValueError as error:
+                raise ValueError(
+                    "task database maximum sequence metadata is invalid"
+                ) from error
+            if (
+                raw_maximum_sequence != str(maximum_sequence)
+                or not 2 <= maximum_sequence <= 1_000_000
+            ):
+                raise ValueError("task database maximum sequence metadata is invalid")
+            self._maximum_sequence_tokens = maximum_sequence
             self.identity_sha256 = hashlib.sha256(
                 _canonical_json(self.metadata).encode("utf-8")
             ).hexdigest()
@@ -164,16 +187,27 @@ class ResumableTaskDataset:
             raise ValueError("completed task database is empty")
         by_split: dict[str, list[tuple[str, str, str, int]]] = {}
         for split, language, family, count in counts:
-            by_split.setdefault(str(split), []).append(
-                (str(split), str(language), str(family), int(count))
-            )
+            if (
+                type(split) is not str
+                or split not in {"train", "validation", "test"}
+                or type(language) is not str
+                or language not in CURRENT_RUNTIME_SPEC_SHA256
+                or type(family) is not str
+                or family not in _TASK_FAMILIES
+                or type(count) is not int
+                or count < 1
+            ):
+                raise ValueError("task database split, language, or family is invalid")
+            by_split.setdefault(split, []).append((split, language, family, count))
         raw_multipliers = self.metadata.get(CELL_WEIGHT_MULTIPLIERS_METADATA_KEY)
         multipliers: dict[tuple[str, str, str], float] = {}
         if raw_multipliers is not None:
             try:
                 parsed_multipliers = json.loads(raw_multipliers)
             except json.JSONDecodeError as error:
-                raise ValueError("task database cell weight multipliers are invalid") from error
+                raise ValueError(
+                    "task database cell weight multipliers are invalid"
+                ) from error
             if type(parsed_multipliers) is not dict:
                 raise ValueError("task database cell weight multipliers are invalid")
             for key, value in parsed_multipliers.items():
@@ -185,7 +219,9 @@ class ResumableTaskDataset:
                     or not math.isfinite(float(value))
                     or float(value) <= 0
                 ):
-                    raise ValueError("task database cell weight multipliers are invalid")
+                    raise ValueError(
+                        "task database cell weight multipliers are invalid"
+                    )
                 multipliers[(parts[0], parts[1], parts[2])] = float(value)
         observed_cells = {
             (split, language, family)
@@ -193,7 +229,9 @@ class ResumableTaskDataset:
             for split, language, family, _ in rows
         }
         if not set(multipliers).issubset(observed_cells):
-            raise ValueError("task database cell weight multiplier names an absent cell")
+            raise ValueError(
+                "task database cell weight multiplier names an absent cell"
+            )
 
         self._weights: dict[tuple[str, str, str], float] = {}
         self._split_counts: Counter[str] = Counter()
@@ -202,9 +240,7 @@ class ResumableTaskDataset:
             unnormalized: dict[tuple[str, str, str], float] = {}
             for split, language, family, count in split_rows:
                 cell = (split, language, family)
-                unnormalized[cell] = (
-                    mean_count / count * multipliers.get(cell, 1.0)
-                )
+                unnormalized[cell] = mean_count / count * multipliers.get(cell, 1.0)
                 self._split_counts[split] += count
             total_examples = sum(row[3] for row in split_rows)
             total_weight = sum(
@@ -232,7 +268,9 @@ class ResumableTaskDataset:
             raise ValueError("split must be train, validation, test or None")
         if after_example_id is not None and (
             len(after_example_id) != 64
-            or any(character not in "0123456789abcdef" for character in after_example_id)
+            or any(
+                character not in "0123456789abcdef" for character in after_example_id
+            )
         ):
             raise ValueError("after_example_id must be a lowercase SHA-256 or None")
         connection = ResumableCurrentTaskPacking._ro_connect(self.database_path)
@@ -254,53 +292,192 @@ class ResumableTaskDataset:
                 query += " WHERE " + " AND ".join(conditions)
             query += " ORDER BY example_id"
             for row in connection.execute(query, tuple(parameters)):
-                family = str(row[3])
-                expected_runtime = (
-                    PARSER_RUNTIME_NOT_APPLICABLE
-                    if family == "instruction_to_code"
-                    else PARSER_RUNTIME_IDENTITY_SHA256
-                )
-                if family not in {
-                    "instruction_to_code",
-                    "code_to_semantic",
-                    "semantic_continuation",
-                    "semantic_to_code",
-                } or str(row[10]) != expected_runtime:
-                    raise ValueError("task row parser runtime lineage mismatch")
-                expected_input_bytes = int(row[7]) * 2
-                input_ids = _decode_u16(
-                    decompress_bounded(
-                        row[6],
-                        maximum_output_bytes=expected_input_bytes,
-                    )
-                )
-                if len(input_ids) != int(row[7]):
-                    raise ValueError("task token count mismatch")
-                if any(token_id >= self._binding.vocab_size for token_id in input_ids):
-                    raise ValueError("task token exceeds frozen vocabulary")
-                loss_start = int(row[8])
-                if not 0 < loss_start < len(input_ids):
-                    raise ValueError("task loss boundary is invalid")
-                record_index = int(row[4])
-                if record_index < 0:
-                    raise ValueError("task record index is invalid")
-                cell = (str(row[5]), str(row[2]), family)
-                yield {
-                    "example_id": str(row[0]),
-                    "document_id": str(row[1]),
-                    "language": cell[1],
-                    "family": cell[2],
-                    "record_index": record_index,
-                    "split": cell[0],
-                    "input_ids": input_ids,
-                    "loss_start_index": loss_start,
-                    "sampling_weight": self._weights[cell],
-                    "semantic_spec_sha256": str(row[9]),
-                    "parser_runtime_identity_sha256": str(row[10]),
-                    "source_sha256": str(row[11]),
-                }
+                yield self._decode_task_row(row)
         finally:
             connection.close()
+
+    def iter_examples_by_id(
+        self,
+        example_ids: Sequence[str],
+        *,
+        split: str,
+    ) -> Iterator[TaskExample]:
+        """Read an exact, bounded frozen subset without scanning the task table."""
+        if split not in {"train", "validation", "test"}:
+            raise ValueError("split must be train, validation or test")
+        if isinstance(example_ids, (str, bytes)) or not isinstance(
+            example_ids, Sequence
+        ):
+            raise TypeError("example_ids must be a sequence of lowercase SHA-256 IDs")
+        requested = list(example_ids)
+        if not requested or len(requested) > 100_000:
+            raise ValueError("example_ids must contain between 1 and 100000 IDs")
+        if any(
+            type(example_id) is not str
+            or len(example_id) != 64
+            or any(character not in "0123456789abcdef" for character in example_id)
+            for example_id in requested
+        ):
+            raise ValueError("example_ids must contain only lowercase SHA-256 IDs")
+        if len(set(requested)) != len(requested):
+            raise ValueError("example_ids must not contain duplicate IDs")
+
+        selected: dict[str, TaskExample] = {}
+        connection = ResumableCurrentTaskPacking._ro_connect(self.database_path)
+        try:
+            for offset in range(0, len(requested), 500):
+                batch = requested[offset : offset + 500]
+                placeholders = ",".join("?" for _ in batch)
+                query = (
+                    "SELECT example_id, document_id, language, family, record_index, split, "  # nosec B608  # noqa: S608
+                    "input_ids_zlib, token_count, loss_start_index, "
+                    "semantic_spec_sha256, parser_runtime_identity_sha256, source_sha256 "
+                    # Only a bounded count of literal '?' placeholders is
+                    # interpolated; every example ID remains a bound value.
+                    f"FROM tasks WHERE example_id IN ({placeholders})"
+                )
+                for row in connection.execute(query, batch):
+                    decoded = self._decode_task_row(row)
+                    example_id = decoded["example_id"]
+                    if example_id in selected:
+                        raise ValueError("task database returned a duplicate example ID")
+                    selected[example_id] = decoded
+        finally:
+            connection.close()
+
+        missing = [example_id for example_id in requested if example_id not in selected]
+        if missing:
+            raise ValueError("one or more requested example IDs are missing")
+        wrong_split = [
+            example_id
+            for example_id in requested
+            if selected[example_id]["split"] != split
+        ]
+        if wrong_split:
+            raise ValueError("one or more requested example IDs belong to another split")
+        for example_id in requested:
+            yield selected[example_id]
+
+    def select_frozen_example_ids_by_cell(
+        self,
+        *,
+        split: str,
+        expected_cells: Mapping[str, int],
+    ) -> dict[str, tuple[str, ...]]:
+        """Select the first deterministic IDs per cell without decoding token blobs."""
+        if split not in {"validation", "test"}:
+            raise ValueError("frozen selection split must be validation or test")
+        if not isinstance(expected_cells, Mapping) or not expected_cells:
+            raise ValueError("frozen selection cells must be a non-empty mapping")
+        if len(expected_cells) > 1_000:
+            raise ValueError("frozen selection names too many cells")
+        requested: dict[str, int] = {}
+        for cell, count in expected_cells.items():
+            language, separator, family = (
+                cell.partition("|") if type(cell) is str else ("", "", "")
+            )
+            if (
+                not separator
+                or language not in CURRENT_RUNTIME_SPEC_SHA256
+                or family not in _TASK_FAMILIES
+                or type(count) is not int
+                or not 1 <= count <= 100_000
+            ):
+                raise ValueError("frozen selection cell contract is invalid")
+            requested[cell] = count
+
+        selected: dict[str, list[str]] = {cell: [] for cell in requested}
+        remaining = set(requested)
+        connection = ResumableCurrentTaskPacking._ro_connect(self.database_path)
+        try:
+            rows = connection.execute(
+                "SELECT example_id,language,family FROM tasks "
+                "WHERE split=? ORDER BY example_id",
+                (split,),
+            )
+            for example_id, language, family in rows:
+                cell = f"{language}|{family}"
+                if cell not in remaining:
+                    continue
+                if (
+                    type(example_id) is not str
+                    or len(example_id) != 64
+                    or any(
+                        character not in "0123456789abcdef"
+                        for character in example_id
+                    )
+                ):
+                    raise ValueError("frozen selection encountered an invalid example ID")
+                selected[cell].append(example_id)
+                if len(selected[cell]) == requested[cell]:
+                    remaining.remove(cell)
+                    if not remaining:
+                        break
+        finally:
+            connection.close()
+        if remaining:
+            raise ValueError("task database cannot complete the frozen cell inventory")
+        return {cell: tuple(example_ids) for cell, example_ids in selected.items()}
+
+    def _decode_task_row(self, row: Sequence[object]) -> TaskExample:
+        family = row[3]
+        split_value = row[5]
+        language = row[2]
+        expected_runtime = (
+            PARSER_RUNTIME_NOT_APPLICABLE
+            if family == "instruction_to_code"
+            else PARSER_RUNTIME_IDENTITY_SHA256
+        )
+        if (
+            type(family) is not str
+            or family not in _TASK_FAMILIES
+            or type(split_value) is not str
+            or split_value not in {"train", "validation", "test"}
+            or type(language) is not str
+            or language not in CURRENT_RUNTIME_SPEC_SHA256
+            or str(row[10]) != expected_runtime
+        ):
+            raise ValueError("task row parser runtime lineage mismatch")
+        token_count = row[7]
+        if (
+            type(token_count) is not int
+            or not 2 <= token_count <= self._maximum_sequence_tokens
+        ):
+            raise ValueError("task token count exceeds configured maximum")
+        if type(row[6]) is not bytes:
+            raise ValueError("task token blob is invalid")
+        expected_input_bytes = token_count * 2
+        input_ids = _decode_u16(
+            decompress_bounded(
+                row[6],
+                maximum_output_bytes=expected_input_bytes,
+            )
+        )
+        if len(input_ids) != token_count:
+            raise ValueError("task token count mismatch")
+        if any(token_id >= self._binding.vocab_size for token_id in input_ids):
+            raise ValueError("task token exceeds frozen vocabulary")
+        loss_start = row[8]
+        if type(loss_start) is not int or not 0 < loss_start < len(input_ids):
+            raise ValueError("task loss boundary is invalid")
+        record_index = row[4]
+        if type(record_index) is not int or record_index < 0:
+            raise ValueError("task record index is invalid")
+        cell = (split_value, language, family)
+        return {
+            "example_id": str(row[0]),
+            "document_id": str(row[1]),
+            "language": cell[1],
+            "family": cell[2],
+            "record_index": record_index,
+            "split": cell[0],
+            "input_ids": input_ids,
+            "loss_start_index": loss_start,
+            "sampling_weight": self._weights[cell],
+            "semantic_spec_sha256": str(row[9]),
+            "parser_runtime_identity_sha256": str(row[10]),
+            "source_sha256": str(row[11]),
+        }
 
 
 def audit_task_database(
@@ -310,7 +487,9 @@ def audit_task_database(
     try:
         maximum_allowed = int(dataset.metadata["maximum_sequence_tokens"])
     except (KeyError, ValueError) as error:
-        raise ValueError("task database maximum sequence metadata is invalid") from error
+        raise ValueError(
+            "task database maximum sequence metadata is invalid"
+        ) from error
     example_id_policy = dataset.metadata.get("training_example_id_policy")
     source_identities: dict[str, tuple[str, str]] | None = None
     if example_id_policy is not None:
@@ -349,10 +528,8 @@ def audit_task_database(
                     }
                 ).encode("utf-8")
             )
-        if (
-            not source_identities
-            or mapping_digest.hexdigest()
-            != dataset.metadata.get("source_example_identity_map_sha256")
+        if not source_identities or mapping_digest.hexdigest() != dataset.metadata.get(
+            "source_example_identity_map_sha256"
         ):
             raise ValueError("task database source identity map hash mismatch")
     split_counts: Counter[str] = Counter()
@@ -364,7 +541,7 @@ def audit_task_database(
     total_sequence_tokens = 0
     maximum_sequence_tokens = 0
     for row in dataset.iter_examples():
-        input_ids = cast(list[int], row["input_ids"])
+        input_ids = row["input_ids"]
         input_ids_sha256 = hashlib.sha256(
             _canonical_json(input_ids).encode("utf-8")
         ).hexdigest()
@@ -383,9 +560,7 @@ def audit_task_database(
         else:
             mapped = source_identities.get(str(row["example_id"]))
             expected_kind = (
-                "instruction"
-                if row["family"] == "instruction_to_code"
-                else "replay"
+                "instruction" if row["family"] == "instruction_to_code" else "replay"
             )
             if mapped != (expected_id, expected_kind):
                 raise ValueError("task source example identity mismatch")
@@ -474,9 +649,7 @@ class ResumableCurrentTaskPacking:
             raise ValueError("semantic_wire must be full_v3 or compact_v2")
         if forced_split not in {None, "train", "validation", "test"}:
             raise ValueError("forced_split must be train, validation, test or None")
-        if (eligibility_root is None) != (
-            expected_eligibility_manifest_sha256 is None
-        ):
+        if (eligibility_root is None) != (expected_eligibility_manifest_sha256 is None):
             raise ValueError(
                 "eligibility_root and expected eligibility manifest SHA-256 must be supplied together"
             )
@@ -503,7 +676,9 @@ class ResumableCurrentTaskPacking:
             if semantic_wire == "compact_v2"
             else CurrentCorpusTaskPacker(binding, max_sequence=max_sequence)
         )
-        self._admission_metadata, admitted_count, rejected_count = self._admission_identity()
+        self._admission_metadata, admitted_count, rejected_count = (
+            self._admission_identity()
+        )
         if self._admission_metadata.get("catalog_exhausted") != "true":
             raise ValueError("full admission is not complete")
         expected_catalog_sha256 = self._admission_metadata.get("source_catalog_sha256")
@@ -518,14 +693,12 @@ class ResumableCurrentTaskPacking:
                 str(expected_catalog_sha256),
             )
             eligibility_source_split = str(eligibility_manifest["source_split"])
-            if (
-                forced_split is None
-                and eligibility_source_split != "train"
-            ) or (
-                forced_split is not None
-                and eligibility_source_split == "train"
+            if (forced_split is None and eligibility_source_split != "train") or (
+                forced_split is not None and eligibility_source_split == "train"
             ):
-                raise ValueError("eligibility source split and task split policy mismatch")
+                raise ValueError(
+                    "eligibility source split and task split policy mismatch"
+                )
         identity_payload = {
             "metadata": self._admission_metadata,
             "admitted_count": admitted_count,
@@ -542,7 +715,9 @@ class ResumableCurrentTaskPacking:
             "maximum_sequence_tokens": str(max_sequence),
             "source_admission_identity_sha256": admission_identity,
             "source_catalog_sha256": str(expected_catalog_sha256),
-            "review_manifest_sha256": self._admission_metadata["review_manifest_sha256"],
+            "review_manifest_sha256": self._admission_metadata[
+                "review_manifest_sha256"
+            ],
             "semantic_spec_sha256": self._admission_metadata["semantic_spec_sha256"],
             "parser_runtime_identity_sha256": self._admission_metadata[
                 "parser_runtime_identity_sha256"
@@ -659,10 +834,9 @@ class ResumableCurrentTaskPacking:
             }
         finally:
             admission.close()
-        if (
-            manifest.get("source_admission_identity_sha256") != identity
-            or not eligible_ids.issubset(admitted_ids)
-        ):
+        if manifest.get(
+            "source_admission_identity_sha256"
+        ) != identity or not eligible_ids.issubset(admitted_ids):
             raise ValueError("training eligibility admission lineage mismatch")
         return eligible_ids, manifest
 
@@ -802,7 +976,8 @@ class ResumableCurrentTaskPacking:
         processed = 0
         try:
             completed_ids = {
-                row[0] for row in task_connection.execute("SELECT document_id FROM documents")
+                row[0]
+                for row in task_connection.execute("SELECT document_id FROM documents")
             }
             rows = admission.execute(
                 """SELECT document_id, content_sha256, language, relative_path,
@@ -837,7 +1012,8 @@ class ResumableCurrentTaskPacking:
                     language != admission_row[2]
                     or relative_path != admission_row[3]
                     or source_sha256 != admission_row[1]
-                    or hashlib.sha256(source.encode("utf-8")).hexdigest() != source_sha256
+                    or hashlib.sha256(source.encode("utf-8")).hexdigest()
+                    != source_sha256
                 ):
                     raise ValueError("source catalog document identity mismatch")
                 if str(admission_row[5]) != PARSER_RUNTIME_IDENTITY_SHA256:
@@ -846,7 +1022,10 @@ class ResumableCurrentTaskPacking:
                     admission_row[7],
                     maximum_output_bytes=MAX_CANONICAL_OUTPUT_BYTES,
                 ).decode("utf-8")
-                if hashlib.sha256(canonical_jsonl.encode("utf-8")).hexdigest() != admission_row[6]:
+                if (
+                    hashlib.sha256(canonical_jsonl.encode("utf-8")).hexdigest()
+                    != admission_row[6]
+                ):
                     raise ValueError("admission canonical JSONL SHA-256 mismatch")
                 expected_semantic_bytes = int(admission_row[10]) * 2
                 semantic_ids = _decode_u16(

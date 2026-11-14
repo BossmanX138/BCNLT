@@ -6,55 +6,36 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Output,
 
-    [string]$Image = 'bosscrafts-humaneval:openai-b9453e8'
+    [string]$Dataset
 )
 
 $ErrorActionPreference = 'Stop'
-$samplesPath = (Resolve-Path -LiteralPath $Samples).Path
-if ([System.IO.Path]::GetExtension($samplesPath) -ne '.jsonl') {
-    throw 'Samples must be a JSONL file.'
+$project = Split-Path -Parent $PSScriptRoot
+$python = Join-Path $project '.venv\Scripts\python.exe'
+$evaluator = Join-Path $PSScriptRoot 'evaluate_humaneval_sandboxed.py'
+if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
+    throw "Locked project interpreter is missing: $python"
 }
-$outputPath = [System.IO.Path]::GetFullPath($Output)
-[System.IO.Directory]::CreateDirectory($outputPath) | Out-Null
-
-$dockerInfo = & docker info --format '{{.ServerVersion}}' 2>&1
-if ($LASTEXITCODE -ne 0) {
-    throw "Docker is not ready: $dockerInfo"
+if (-not (Test-Path -LiteralPath $evaluator -PathType Leaf)) {
+    throw "Sandboxed HumanEval evaluator is missing: $evaluator"
 }
 
 $arguments = @(
-    'run', '--rm',
-    '--network', 'none',
-    '--read-only',
-    '--tmpfs', '/tmp:rw,noexec,nosuid,size=512m',
-    '--cap-drop', 'ALL',
-    '--security-opt', 'no-new-privileges',
-    '--pids-limit', '512',
-    '--memory', '3g',
-    '--cpus', '6',
-    '--mount', "type=bind,source=$samplesPath,target=/input/samples.jsonl,readonly",
-    '--mount', "type=bind,source=$outputPath,target=/output",
-    $Image
+    $evaluator,
+    '--samples', (Resolve-Path -LiteralPath $Samples).Path,
+    '--output', [System.IO.Path]::GetFullPath($Output)
 )
+if ($Dataset) {
+    $arguments += @('--dataset', (Resolve-Path -LiteralPath $Dataset).Path)
+}
 
-& docker @arguments
+& $python @arguments
 if ($LASTEXITCODE -ne 0) {
-    throw "HumanEval container exited with code $LASTEXITCODE."
+    throw "Sandboxed HumanEval evaluation failed with code $LASTEXITCODE."
 }
 
-$metrics = Join-Path $outputPath 'metrics.txt'
-$plainResults = Join-Path $outputPath 'samples.jsonl_results.jsonl'
-$gzipResults = Join-Path $outputPath 'samples.jsonl_results.jsonl.gz'
-$results = if (Test-Path -LiteralPath $plainResults) { $plainResults } else { $gzipResults }
-if (-not (Test-Path -LiteralPath $metrics) -or -not (Test-Path -LiteralPath $results)) {
-    throw 'HumanEval evaluator did not produce its expected evidence files.'
+$receipt = Join-Path ([System.IO.Path]::GetFullPath($Output)) 'receipt.json'
+if (-not (Test-Path -LiteralPath $receipt -PathType Leaf)) {
+    throw 'Sandboxed HumanEval evaluator did not publish its receipt.'
 }
-
-[pscustomobject]@{
-    image = $Image
-    metrics = $metrics
-    metrics_sha256 = (Get-FileHash -LiteralPath $metrics -Algorithm SHA256).Hash.ToLowerInvariant()
-    results = $results
-    results_sha256 = (Get-FileHash -LiteralPath $results -Algorithm SHA256).Hash.ToLowerInvariant()
-    samples_sha256 = (Get-FileHash -LiteralPath $samplesPath -Algorithm SHA256).Hash.ToLowerInvariant()
-} | ConvertTo-Json -Depth 3
+Get-Content -LiteralPath $receipt -Raw

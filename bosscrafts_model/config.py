@@ -1,9 +1,16 @@
-from dataclasses import dataclass, asdict
 import hashlib
 import json
-from typing import TypedDict, Unpack
+from dataclasses import asdict, dataclass
+from typing import Self, TypedDict, Unpack
 
-STAGES = ("hypothesis", "prediction", "planning", "construction", "evidence", "revision")
+STAGES = (
+    "hypothesis",
+    "prediction",
+    "planning",
+    "construction",
+    "evidence",
+    "revision",
+)
 
 
 class _ModelConfigOverrides(TypedDict, total=False):
@@ -34,9 +41,17 @@ class ModelConfig:
     modular: bool = True
     tokenizer_manifest: str = "UNBOUND"
 
-    def __post_init__(self):
-        for key in ("vocab_size", "width", "layers", "heads", "ff_width",
-                    "module_width", "module_rounds", "max_sequence"):
+    def __post_init__(self) -> None:
+        for key in (
+            "vocab_size",
+            "width",
+            "layers",
+            "heads",
+            "ff_width",
+            "module_width",
+            "module_rounds",
+            "max_sequence",
+        ):
             value = getattr(self, key)
             if type(value) is not int or value <= 0:
                 raise ValueError(f"{key} must be a positive integer")
@@ -45,34 +60,48 @@ class ModelConfig:
         if self.width % self.heads or (self.width // self.heads) % 2:
             raise ValueError("width must divide heads with an even head dimension")
 
-    def parameter_count(self):
+    def parameter_count(self) -> int:
         d = self.width
-        shared = self.vocab_size*d + self.layers*(4*d*d + 3*d*self.ff_width + 2*d) + d
-        modular = 6*(2*d*self.module_width+d) + 6*d + 6 if self.modular else 0
+        shared = (
+            self.vocab_size * d
+            + self.layers * (4 * d * d + 3 * d * self.ff_width + 2 * d)
+            + d
+        )
+        modular = 6 * (2 * d * self.module_width + d) + 6 * d + 6 if self.modular else 0
         return shared + modular
 
-    def fingerprint(self):
-        return hashlib.sha256(json.dumps(asdict(self), sort_keys=True).encode()).hexdigest()
+    def fingerprint(self) -> str:
+        return hashlib.sha256(
+            json.dumps(asdict(self), sort_keys=True).encode()
+        ).hexdigest()
 
-    def check_manifest(self, manifest):
-        if (type(self.tokenizer_manifest) is not str or not self.tokenizer_manifest.strip() or self.tokenizer_manifest == "UNBOUND" or type(manifest) is not str or manifest != self.tokenizer_manifest):
-            raise ValueError("No compatible pinned tokenizer manifest; training data rejected")
+    def check_manifest(self, manifest: object) -> None:
+        if (
+            type(self.tokenizer_manifest) is not str
+            or not self.tokenizer_manifest.strip()
+            or self.tokenizer_manifest == "UNBOUND"
+            or type(manifest) is not str
+            or manifest != self.tokenizer_manifest
+        ):
+            raise ValueError(
+                "No compatible pinned tokenizer manifest; training data rejected"
+            )
 
     @classmethod
-    def tiny(cls, **overrides: Unpack[_ModelConfigOverrides]):
-        values: _ModelConfigOverrides = dict(
-            vocab_size=64,
-            width=32,
-            layers=2,
-            heads=4,
-            ff_width=64,
-            module_width=16,
-            module_rounds=2,
-            max_sequence=32,
-        )
+    def tiny(cls, **overrides: Unpack[_ModelConfigOverrides]) -> Self:
+        values: _ModelConfigOverrides = {
+            "vocab_size": 64,
+            "width": 32,
+            "layers": 2,
+            "heads": 4,
+            "ff_width": 64,
+            "module_width": 16,
+            "module_rounds": 2,
+            "max_sequence": 32,
+        }
         values.update(overrides)
         return cls(**values)
 
     @classmethod
-    def baseline(cls):
+    def baseline(cls) -> Self:
         return cls(layers=25, modular=False)

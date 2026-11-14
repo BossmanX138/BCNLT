@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter, defaultdict
 import json
-from pathlib import Path
 import sqlite3
 import sys
-
+from collections import Counter, defaultdict
+from pathlib import Path
+from typing import TypedDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -24,13 +24,12 @@ import tokenizers
 if tokenizers.__version__ != "0.23.2":
     raise RuntimeError("project-contained tokenizers runtime version mismatch")
 
+from bosscrafts_model.compression import decompress_bounded
 from bosscrafts_model.resumable_task_packing import (
     _decode_u16,
     audit_task_database,
 )
-from bosscrafts_model.compression import decompress_bounded
 from bosscrafts_model.tokenizer import NativeTokenizerBinding
-
 
 DEFAULT_DATABASE = (
     PROJECT_ROOT
@@ -39,6 +38,18 @@ DEFAULT_DATABASE = (
     / "bcnlt-current-spec-65536-balanced-expanded-v2"
     / "tasks.sqlite"
 )
+
+
+class _CollisionRecord(TypedDict):
+    example_id: str
+    document_id: str
+    language: str
+    record_index: int
+    split: str
+    prompt: tuple[int, ...]
+    fragment: tuple[int, ...]
+    event_token_id: int
+    source_sha256: str
 
 
 def main() -> int:
@@ -71,7 +82,7 @@ def main() -> int:
     database = arguments.database.resolve()
     connection = sqlite3.connect(f"{database.as_uri()}?mode=ro", uri=True, timeout=30)
     connection.execute("PRAGMA query_only=ON")
-    groups: dict[tuple[str, tuple[int, ...]], list[dict[str, object]]] = defaultdict(list)
+    groups: dict[tuple[str, tuple[int, ...]], list[_CollisionRecord]] = defaultdict(list)
     try:
         rows = connection.execute(
             """SELECT example_id,document_id,language,record_index,split,

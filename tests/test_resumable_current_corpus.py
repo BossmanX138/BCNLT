@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import replace
 import hashlib
-from pathlib import Path
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
+from pathlib import Path
 
 from bosscrafts_model.bcnlt_source_pipeline import BCNLTSourcePipeline
 from bosscrafts_model.current_corpus import SourceCandidate

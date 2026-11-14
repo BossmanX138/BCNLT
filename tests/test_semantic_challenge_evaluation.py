@@ -3,11 +3,10 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import json
-from pathlib import Path
 import tempfile
+from pathlib import Path
 
 import pytest
-
 from test_local_semantic_review import _decision, _review_server, _reviewers
 from test_semantic_challenge_review import _reviewed_source
 

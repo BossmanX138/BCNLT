@@ -10,8 +10,9 @@ from collections import Counter
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, TypedDict
 
+from .immutable_artifacts import publish_new_files
 
 PILOT_SCHEMA = "bosscrafts-project-codenet-pilot-v1"
 DATASET_LICENSE = "CDLA-Permissive-2.0"
@@ -24,6 +25,30 @@ class OverlapFilter(Protocol):
     def overlaps(self, prompt: str, code: str) -> bool: ...
 
 
+class PilotSelection(TypedDict):
+    languages: list[str]
+    per_language_limit: int
+    seed: str
+    minimum_code_bytes: int
+    maximum_code_bytes: int
+    one_solution_per_problem_language_pair: bool
+    split_unit: str
+
+
+class PilotReport(TypedDict):
+    schema_version: str
+    dataset: str
+    dataset_license: str
+    archive_sha256: str
+    tooling_commit: str
+    selection: PilotSelection
+    benchmark_exclusion_sha256: str | None
+    record_count: int
+    language_counts: dict[str, int]
+    split_counts: dict[str, int]
+    rejection_counts: dict[str, int]
+
+
 class _TextExtractor(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -31,6 +56,7 @@ class _TextExtractor(HTMLParser):
         self._ignored_depth = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        del attrs
         if tag.lower() in {"script", "style"}:
             self._ignored_depth += 1
         elif not self._ignored_depth and tag.lower() in {
@@ -194,7 +220,7 @@ def build_pilot(
     archive_sha256: str,
     tooling_commit: str,
     overlap_filter: OverlapFilter | None,
-) -> tuple[list[dict[str, object]], dict[str, object]]:
+) -> tuple[list[dict[str, object]], PilotReport]:
     if not _HEX64.fullmatch(archive_sha256):
         raise ValueError("archive SHA-256 is invalid")
     candidates, rejections = select_candidates(
@@ -255,7 +281,7 @@ def build_pilot(
         records.append(record)
         language_counts[candidate.language] += 1
         split_counts[split] += 1
-    report: dict[str, object] = {
+    report: PilotReport = {
         "schema_version": PILOT_SCHEMA,
         "dataset": "IBM/Project_CodeNet",
         "dataset_license": DATASET_LICENSE,
@@ -281,8 +307,44 @@ def build_pilot(
     return records, report
 
 
-def write_jsonl(path: Path, records: list[dict[str, object]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="\n") as handle:
-        for record in records:
-            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+def publish_pilot_artifacts(
+    output: Path,
+    report_path: Path,
+    records: list[dict[str, object]],
+    report: PilotReport,
+) -> None:
+    """Publish the corpus and its report as one immutable generation."""
+    if not records:
+        raise ValueError("Project CodeNet pilot requires at least one record")
+    if report.get("record_count") != len(records):
+        raise ValueError("Project CodeNet pilot report count mismatch")
+    try:
+        records_content = "".join(
+            json.dumps(
+                record,
+                ensure_ascii=False,
+                sort_keys=True,
+                allow_nan=False,
+            )
+            + "\n"
+            for record in records
+        ).encode("utf-8")
+        report_content = (
+            json.dumps(
+                report,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+                allow_nan=False,
+            )
+            + "\n"
+        ).encode("utf-8")
+    except (TypeError, ValueError) as error:
+        raise ValueError("Project CodeNet pilot artifacts are not JSON safe") from error
+    publish_new_files(
+        (
+            (output.resolve(), records_content),
+            (report_path.resolve(), report_content),
+        ),
+        artifact_label="Project CodeNet pilot",
+    )

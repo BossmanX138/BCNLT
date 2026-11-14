@@ -2,19 +2,17 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict
 import hashlib
 import json
-from pathlib import Path
 import sys
-
+from dataclasses import asdict
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bosscrafts_model.training_eligibility import AuditedTrainingEligibilityBuilder
-
 
 DEFAULT_ADMISSION = (
     PROJECT_ROOT

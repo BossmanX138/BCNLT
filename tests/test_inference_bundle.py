@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from pathlib import Path
+import hashlib
+import json
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 import torch
 
@@ -58,10 +61,12 @@ class InferenceBundleTests(unittest.TestCase):
                 expected_task_database_identity_sha256="b" * 64,
                 expected_model_fingerprint=config.fingerprint(),
             )
+            checkpoint_sha256 = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
             self.assertTrue((bundle / "manifest.json").is_file())
             self.assertTrue((bundle / "model.pt").is_file())
             self.assertTrue((bundle / "tokenizer" / "binding.json").is_file())
             self.assertEqual(status.checkpoint_step, 4)
+            self.assertEqual(status.source_checkpoint_sha256, checkpoint_sha256)
             self.assertRegex(status.bundle_sha256, r"^[0-9a-f]{64}$")
 
             restored = EngineeringModel(config)
@@ -71,12 +76,23 @@ class InferenceBundleTests(unittest.TestCase):
                 expected_task_database_identity_sha256="b" * 64,
                 expected_binding_sha256=self.binding.binding_sha256,
                 expected_model_fingerprint=config.fingerprint(),
+                expected_bundle_sha256=status.bundle_sha256,
             )
             self.assertEqual(state.checkpoint_step, 4)
+            self.assertEqual(state.source_checkpoint_sha256, checkpoint_sha256)
             self.assertEqual(state.training_plan_sha256, "c" * 64)
             self.assertTrue(
                 torch.equal(model.embedding.weight, restored.embedding.weight)
             )
+            with self.assertRaisesRegex(ValueError, "identity"):
+                load_inference_bundle(
+                    bundle,
+                    EngineeringModel(config),
+                    expected_task_database_identity_sha256="b" * 64,
+                    expected_binding_sha256=self.binding.binding_sha256,
+                    expected_model_fingerprint=config.fingerprint(),
+                    expected_bundle_sha256="f" * 64,
+                )
 
             with (bundle / "model.pt").open("ab") as stream:
                 stream.write(b"tamper")
@@ -123,6 +139,204 @@ class InferenceBundleTests(unittest.TestCase):
                     expected_task_database_identity_sha256="b" * 64,
                     expected_model_fingerprint=config.fingerprint(),
                 )
+
+    def test_loader_rejects_extra_manifest_fields_and_bundle_entries(self):
+        config = ModelConfig.tiny(
+            vocab_size=self.binding.vocab_size,
+            tokenizer_manifest=self.binding.binding_sha256,
+        )
+        model = EngineeringModel(config)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkpoint = root / "checkpoint.pt"
+            bundle = root / "bundle"
+            save_training_checkpoint(
+                checkpoint,
+                model,
+                optimizer,
+                step=1,
+                examples_seen=1,
+                epoch_index=1,
+                target_epochs=1,
+                last_example_id="a" * 64,
+                cursor_after_example_id=None,
+                task_database_identity_sha256="b" * 64,
+                binding_sha256=self.binding.binding_sha256,
+                model_fingerprint=config.fingerprint(),
+                training_plan_sha256="c" * 64,
+            )
+            export_inference_bundle(
+                checkpoint,
+                bundle,
+                model,
+                binding=self.binding,
+                expected_task_database_identity_sha256="b" * 64,
+                expected_model_fingerprint=config.fingerprint(),
+            )
+
+            manifest_path = bundle / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["unverified_override"] = True
+            unsigned = dict(manifest)
+            unsigned.pop("bundle_sha256")
+            manifest["bundle_sha256"] = hashlib.sha256(
+                json.dumps(
+                    unsigned,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).hexdigest()
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "fields"):
+                load_inference_bundle(
+                    bundle,
+                    EngineeringModel(config),
+                    expected_task_database_identity_sha256="b" * 64,
+                    expected_binding_sha256=self.binding.binding_sha256,
+                    expected_model_fingerprint=config.fingerprint(),
+                )
+
+            manifest.pop("unverified_override")
+            unsigned = dict(manifest)
+            unsigned.pop("bundle_sha256")
+            manifest["bundle_sha256"] = hashlib.sha256(
+                json.dumps(
+                    unsigned,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).hexdigest()
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            (bundle / "unexpected.txt").write_text("not part of the bundle", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "inventory"):
+                load_inference_bundle(
+                    bundle,
+                    EngineeringModel(config),
+                    expected_task_database_identity_sha256="b" * 64,
+                    expected_binding_sha256=self.binding.binding_sha256,
+                    expected_model_fingerprint=config.fingerprint(),
+                )
+
+            (bundle / "unexpected.txt").unlink()
+            manifest_path.write_text(
+                '{"bundle_sha256":"a","bundle_sha256":"b"}',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "duplicate"):
+                load_inference_bundle(
+                    bundle,
+                    EngineeringModel(config),
+                    expected_task_database_identity_sha256="b" * 64,
+                    expected_binding_sha256=self.binding.binding_sha256,
+                    expected_model_fingerprint=config.fingerprint(),
+                )
+
+    def test_loader_rejects_rehashed_model_payload_extensions(self):
+        config = ModelConfig.tiny(
+            vocab_size=self.binding.vocab_size,
+            tokenizer_manifest=self.binding.binding_sha256,
+        )
+        model = EngineeringModel(config)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkpoint = root / "checkpoint.pt"
+            bundle = root / "bundle"
+            save_training_checkpoint(
+                checkpoint,
+                model,
+                optimizer,
+                step=1,
+                examples_seen=1,
+                epoch_index=1,
+                target_epochs=1,
+                last_example_id="a" * 64,
+                cursor_after_example_id=None,
+                task_database_identity_sha256="b" * 64,
+                binding_sha256=self.binding.binding_sha256,
+                model_fingerprint=config.fingerprint(),
+                training_plan_sha256="c" * 64,
+            )
+            export_inference_bundle(
+                checkpoint,
+                bundle,
+                model,
+                binding=self.binding,
+                expected_task_database_identity_sha256="b" * 64,
+                expected_model_fingerprint=config.fingerprint(),
+            )
+
+            model_path = bundle / "model.pt"
+            payload = torch.load(model_path, map_location="cpu", weights_only=True)
+            payload["unverified_override"] = True
+            torch.save(payload, model_path)
+            manifest_path = bundle / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["model_file_bytes"] = model_path.stat().st_size
+            manifest["model_file_sha256"] = hashlib.sha256(
+                model_path.read_bytes()
+            ).hexdigest()
+            unsigned = dict(manifest)
+            unsigned.pop("bundle_sha256")
+            manifest["bundle_sha256"] = hashlib.sha256(
+                json.dumps(
+                    unsigned,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).hexdigest()
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "model payload"):
+                load_inference_bundle(
+                    bundle,
+                    EngineeringModel(config),
+                    expected_task_database_identity_sha256="b" * 64,
+                    expected_binding_sha256=self.binding.binding_sha256,
+                    expected_model_fingerprint=config.fingerprint(),
+                )
+
+    def test_export_ignores_orphaned_legacy_temporary_directory(self):
+        config = ModelConfig.tiny(
+            vocab_size=self.binding.vocab_size,
+            tokenizer_manifest=self.binding.binding_sha256,
+        )
+        model = EngineeringModel(config)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkpoint = root / "checkpoint.pt"
+            bundle = root / "bundle"
+            orphan = root / ".bundle.tmp"
+            orphan.mkdir()
+            save_training_checkpoint(
+                checkpoint,
+                model,
+                optimizer,
+                step=1,
+                examples_seen=1,
+                epoch_index=1,
+                target_epochs=1,
+                last_example_id="a" * 64,
+                cursor_after_example_id=None,
+                task_database_identity_sha256="b" * 64,
+                binding_sha256=self.binding.binding_sha256,
+                model_fingerprint=config.fingerprint(),
+                training_plan_sha256="c" * 64,
+            )
+            export_inference_bundle(
+                checkpoint,
+                bundle,
+                model,
+                binding=self.binding,
+                expected_task_database_identity_sha256="b" * 64,
+                expected_model_fingerprint=config.fingerprint(),
+            )
+            self.assertTrue(bundle.is_dir())
+            shutil.rmtree(orphan)
 
     def test_export_script_runs_from_project_root(self):
         project_root = Path(__file__).resolve().parents[1]

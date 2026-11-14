@@ -1,0 +1,51 @@
+name: BossCrafts model audit
+
+on:
+  push:
+    branches:
+      - v10-main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Windows Python 3.13 host-portable verification
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      PYTHONHASHSEED: "0"
+    steps:
+      - name: Check out source and LFS artifacts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Install pinned uv and Python
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.5"
+          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Synchronize the frozen environment
+        run: uv sync --frozen --dev
+
+      - name: Verify source formatting and imports
+        run: uv run --frozen ruff check bosscrafts_model scripts tests
+
+      - name: Verify strict production typing
+        run: uv run --frozen mypy --strict bosscrafts_model
+
+      - name: Compile all Python sources
+        run: uv run --frozen python -m compileall -q bosscrafts_model scripts tests
+
+      - name: Run the warning-strict host-portable regression
+        run: uv run --frozen python -m pytest -W error -q -m "not requires_docker"

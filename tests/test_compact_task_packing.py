@@ -68,6 +68,22 @@ def test_compact_task_fragments_are_independently_decodable() -> None:
         assert codec.decode(stream) == f"{line}\n"
 
 
+def test_compact_task_rejects_non_integer_canonical_span() -> None:
+    binding = NativeTokenizerBinding.load()
+    packer = CompactCurrentCorpusTaskPacker(binding, max_sequence=2048)
+    payload = _payload("alpha", [], 1)
+    payload["span"] = [1, 0, 1, "5"]
+
+    with pytest.raises(ValueError, match="canonical task record span is invalid"):
+        packer._semantic_record_fragments(
+            {
+                "canonical_jsonl": f"{_canonical(payload)}\n",
+                "language": "python",
+                "semantic_record_count": 1,
+            }
+        )
+
+
 def test_compact_task_packer_builds_all_task_families() -> None:
     binding = NativeTokenizerBinding.load()
     packer = CompactCurrentCorpusTaskPacker(binding, max_sequence=2048)

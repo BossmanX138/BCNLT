@@ -3,13 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from runtime_import import select_bcnlt_runtime
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_SOURCE = (
-    PROJECT_ROOT / "vendor" / "bcnlt_runtime_v6_candidate" / "source"
+    PROJECT_ROOT / "vendor" / "bcnlt_runtime_v10_learning_candidate" / "source"
 )
 select_bcnlt_runtime(RUNTIME_SOURCE)
 

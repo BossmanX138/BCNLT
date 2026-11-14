@@ -1,24 +1,27 @@
 from __future__ import annotations
 
-from array import array
 import hashlib
 import json
-from pathlib import Path
 import sqlite3
 import sys
 import tempfile
 import unittest
 import zlib
-
+from array import array
+from pathlib import Path
+from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PINNED_TOKENIZERS_SITE = PROJECT_ROOT / "vendor" / "tokenizers_runtime_0_23"
 if str(PINNED_TOKENIZERS_SITE) not in sys.path:
     sys.path.insert(0, str(PINNED_TOKENIZERS_SITE))
 
-from bosscrafts_model.deterministic_curriculum import derive_deterministic_curriculum
 from bosscrafts_model.bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
-from bosscrafts_model.resumable_task_packing import TASK_DATABASE_SCHEMA
+from bosscrafts_model.deterministic_curriculum import derive_deterministic_curriculum
+from bosscrafts_model.resumable_task_packing import (
+    TASK_DATABASE_SCHEMA,
+    audit_task_database,
+)
 from bosscrafts_model.task_determinism import audit_task_prompt_determinism
 from bosscrafts_model.tokenizer import NativeTokenizerBinding
 
@@ -136,6 +139,25 @@ class DeterministicCurriculumTests(unittest.TestCase):
             source = root / "source.sqlite"
             destination = root / "clean.sqlite"
             self._write_database(source)
+            stale_temporary = root / ".clean.sqlite.tmp"
+            stale_temporary.write_bytes(b"unrelated sentinel")
+            source_audit = audit_task_database(self.binding, source)
+            failed_destination = root / "failed.sqlite"
+            with (
+                patch(
+                    "bosscrafts_model.deterministic_curriculum.audit_task_database",
+                    side_effect=(source_audit, ValueError("injected output audit failure")),
+                ),
+                self.assertRaisesRegex(ValueError, "injected output audit failure"),
+            ):
+                derive_deterministic_curriculum(
+                    self.binding,
+                    source,
+                    failed_destination,
+                    languages=("python",),
+                    quotas={"train": 1, "validation": 1, "test": 1},
+                )
+            self.assertFalse(failed_destination.exists())
             status = derive_deterministic_curriculum(
                 self.binding,
                 source,
@@ -143,6 +165,7 @@ class DeterministicCurriculumTests(unittest.TestCase):
                 languages=("python",),
                 quotas={"train": 1, "validation": 1, "test": 1},
             )
+            self.assertEqual(stale_temporary.read_bytes(), b"unrelated sentinel")
             audit = audit_task_prompt_determinism(
                 self.binding, destination, sample_limit=5
             )

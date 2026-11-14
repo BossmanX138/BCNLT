@@ -1,6 +1,8 @@
 import unittest
+
 from bosscrafts_model.config import ModelConfig
 from bosscrafts_model.evidence import EvidenceLedger
+
 
 class AdmissionRegressionTests(unittest.TestCase):
     def test_missing_manifest_fails_closed(self):

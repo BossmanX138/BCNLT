@@ -1,22 +1,24 @@
 """Deterministic balanced task curriculum built directly from admitted sources."""
 from __future__ import annotations
 
+import hashlib
+import os
+import sqlite3
+import tempfile
+import zlib
 from collections import Counter
 from dataclasses import dataclass
-import hashlib
 from pathlib import Path
-import sqlite3
 from typing import cast
-import zlib
 
+from .bcnlt_adapter import MAX_CANONICAL_OUTPUT_BYTES
 from .bcnlt_source_pipeline import (
     CURRENT_RUNTIME_SPEC_SHA256,
     PARSER_RUNTIME_IDENTITY_SHA256,
 )
-from .bcnlt_adapter import MAX_CANONICAL_OUTPUT_BYTES
-from .compression import decompress_bounded
 from .compact_semantic_wire import COMPACT_SEMANTIC_WIRE_SCHEMA
 from .compact_task_packing import CompactCurrentCorpusTaskPacker
+from .compression import decompress_bounded
 from .current_task_packing import CurrentCorpusTaskPacker
 from .resumable_current_corpus import RESUMABLE_SCHEMA
 from .resumable_task_packing import (
@@ -29,7 +31,6 @@ from .resumable_task_packing import (
     audit_task_database,
 )
 from .tokenizer import NativeTokenizerBinding
-
 
 CURRICULUM_SCHEMA = "bosscrafts-balanced-curriculum-v2"
 TASK_FAMILIES = (
@@ -99,7 +100,10 @@ def build_balanced_curriculum(
     languages = _validate_policy(languages, quotas)
     if type(max_sequence) is not int or max_sequence < 64:
         raise ValueError("max_sequence must be an integer of at least 64")
-    if semantic_wire not in {"compact_v2", "full_v3"}:
+    if type(semantic_wire) is not str or semantic_wire not in {
+        "compact_v2",
+        "full_v3",
+    }:
         raise ValueError("semantic_wire must be compact_v2 or full_v3")
     semantic_wire_schema = (
         COMPACT_SEMANTIC_WIRE_SCHEMA
@@ -128,6 +132,8 @@ def build_balanced_curriculum(
             metadata.get("binding_sha256") != binding.binding_sha256
             or metadata.get("tokenizer_sha256") != binding.tokenizer_sha256
             or metadata.get("vocabulary_size") != str(binding.vocab_size)
+            or metadata.get("parser_runtime_identity_sha256")
+            != PARSER_RUNTIME_IDENTITY_SHA256
         ):
             raise ValueError("admission tokenizer lineage mismatch")
         expected_specs = _canonical_json(CURRENT_RUNTIME_SPEC_SHA256)
@@ -179,9 +185,14 @@ def build_balanced_curriculum(
     }
 
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f".{destination.name}.tmp")
-    if temporary.exists():
-        temporary.unlink()
+    temporary_handle = tempfile.NamedTemporaryFile(
+        dir=destination.parent,
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+        delete=False,
+    )
+    temporary = Path(temporary_handle.name)
+    temporary_handle.close()
     output = sqlite3.connect(temporary)
     output.execute("PRAGMA journal_mode=DELETE")
     output.execute("PRAGMA synchronous=FULL")
@@ -281,14 +292,20 @@ def build_balanced_curriculum(
                 ).decode("utf-8")
                 if hashlib.sha256(canonical_jsonl.encode("utf-8")).hexdigest() != admission_row[5]:
                     raise ValueError("admission canonical JSONL SHA-256 mismatch")
-                expected_semantic_bytes = int(admission_row[9]) * 2
+                semantic_token_count = admission_row[9]
+                if (
+                    type(semantic_token_count) is not int
+                    or not 3 <= semantic_token_count <= MAX_CANONICAL_OUTPUT_BYTES
+                ):
+                    raise ValueError("admission semantic token count is invalid")
+                expected_semantic_bytes = semantic_token_count * 2
                 semantic_ids = _decode_u16(
                     decompress_bounded(
                         admission_row[7],
                         maximum_output_bytes=expected_semantic_bytes,
                     )
                 )
-                if len(semantic_ids) != int(admission_row[9]):
+                if len(semantic_ids) != semantic_token_count:
                     raise ValueError("admission semantic token count mismatch")
                 row = {
                     "document_id": document_id,
@@ -369,11 +386,19 @@ def build_balanced_curriculum(
 
     try:
         audit = audit_task_database(binding, temporary)
+        with temporary.open("r+b") as stream:
+            os.fsync(stream.fileno())
+        if destination.exists():
+            raise ValueError("balanced curriculum database already exists")
+        try:
+            os.link(temporary, destination)
+        except FileExistsError as error:
+            raise ValueError("balanced curriculum database already exists") from error
     except BaseException:
         if temporary.exists():
             temporary.unlink()
         raise
-    temporary.replace(destination)
+    temporary.unlink()
     return BalancedCurriculumStatus(
         database_path=destination,
         example_count=audit.example_count,

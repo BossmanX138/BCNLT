@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import importlib
 import importlib.util
-import hashlib
 import json
 from pathlib import Path
 
 import pytest
+
+from bosscrafts_model.heldout_semantic_review import HeldoutSemanticReviewQueue
 
 
 def _feature():
@@ -136,6 +138,67 @@ def test_non_extension_ir_name_must_match_its_claimed_surface():
     }
 
 
+def test_truncated_surface_must_be_an_exact_bounded_prefix():
+    exact = "x" * 4100
+    item = _item(surface="x" * 4096, span=[1, 0, 1, 4100])
+    item["source_excerpt"] = (
+        "[source context lines 1-1; target span 1:0-1:4100]\n"
+        f">000001| {exact}\n"
+    )
+    item["canonical_record"]["metadata"]["surface_truncated"] = True
+    item["canonical_record"]["ir"]["name"] = exact
+
+    result = _feature().DeterministicSemanticAuditor().audit_item(item)
+
+    assert result.passed is True
+    assert result.extracted_surface == exact
+
+
+def test_truncated_surface_rejects_a_nonprefix_claim():
+    exact = "x" * 4100
+    item = _item(surface="y" * 4096, span=[1, 0, 1, 4100])
+    item["source_excerpt"] = (
+        "[source context lines 1-1; target span 1:0-1:4100]\n"
+        f">000001| {exact}\n"
+    )
+    item["canonical_record"]["metadata"]["surface_truncated"] = True
+    item["canonical_record"]["ir"]["name"] = exact
+
+    result = _feature().DeterministicSemanticAuditor().audit_item(item)
+
+    assert {finding.code for finding in result.findings} == {
+        "surface_span_mismatch",
+        "ir_name_surface_mismatch",
+    }
+
+
+def test_span_evidence_preserves_and_canonicalizes_crlf_bytes():
+    item = _item(
+        event="UNKNOWN_SEMANTIC",
+        surface="Logging\n",
+        span=[1, 8, 1, 16],
+        ir_kind="extension",
+    )
+    item["source_excerpt"] = HeldoutSemanticReviewQueue._review_source_context(
+        "#region Logging\r\n",
+        item["canonical_record"],
+    )
+    item["canonical_record"]["ir"]["name"] = "c_sharp.preproc_arg"
+    item["canonical_record"]["metadata"] = {
+        "knowledge_state": "provisional",
+        "unknown_node": "preproc_arg",
+        "uncertainty_signals": ["unknown semantic"],
+        "uyr_rounds": 1,
+    }
+    item["canonical_record"]["confidence_band"] = "medium"
+    item["canonical_record"]["uncertainty_band"] = "medium"
+
+    result = _feature().DeterministicSemanticAuditor().audit_item(item)
+
+    assert result.extracted_surface == "Logging\n"
+    assert result.passed is True
+
+
 def test_zero_width_scope_boundary_uses_structural_surface_by_contract():
     item = _item(
         event="SCOPE_EXIT",
@@ -151,6 +214,27 @@ def test_zero_width_scope_boundary_uses_structural_surface_by_contract():
 
     assert result.passed is True
     assert result.extracted_surface == ""
+
+
+def test_decorated_scope_entry_accepts_a_nonempty_ast_owned_name():
+    item = _item(
+        event="SCOPE_ENTER",
+        surface="serialize",
+        span=[1, 0, 1, 0],
+        ir_kind="extension",
+    )
+    item["source_excerpt"] = (
+        "[source context lines 1-2; target span 1:0-1:0]\n"
+        ">000001| @Override\n"
+        " 000002| public void serialize() {}\n"
+    )
+    item["canonical_record"]["ir"]["name"] = "java.scope_enter"
+    item["canonical_record"]["scope"] = "module.Serializer"
+    item["canonical_record"]["ast_relation"] = "method_declaration.scope"
+
+    result = _feature().DeterministicSemanticAuditor().audit_item(item)
+
+    assert result.passed is True
 
 
 def test_scope_boundary_surface_must_anchor_to_target_source_scope_or_node_kind():

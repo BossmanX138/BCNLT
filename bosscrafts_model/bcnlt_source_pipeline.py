@@ -1,9 +1,9 @@
 """Live BCNLT semantic preprocessing bound to the frozen native tokenizer.
 
-Parsing runs in an isolated CPython 3.13 sidecar because its native Tree-sitter
-bindings cannot be imported into the model's CPython 3.12 process. The sidecar
-only parses source and returns canonical JSONL. This module validates that
-handoff, applies the frozen structural-token protocol, and preserves an
+Parsing runs in an isolated copy of the active CPython 3.13 interpreter so its
+pinned native Tree-sitter modules remain separate from the model process. The
+sidecar only parses source and returns canonical JSONL. This module validates
+that handoff, applies the frozen structural-token protocol, and preserves an
 explicit raw-code path.
 
 Learned meanings remain outside the immutable tokenizer vocabulary.  The
@@ -12,32 +12,51 @@ foundation behavior.  A caller may explicitly select ``observe`` to append
 bounded wildcard evidence, or ``read_only`` to consume a previously validated
 Extended Core without mutating it.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 import hashlib
 import json
+import math
 import os
-from pathlib import Path
 import subprocess
+import sys
+import tempfile
 import threading
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Sequence
 
 from .bcnlt_adapter import (
-    BCNLTCanonicalRecord,
-    BCNLTMultilingualOutputAdapter,
-    BCNLTParserOutputProvenance,
     EXTRACTION_RULE_VERSION,
     GRAMMAR_PACKAGE_VERSION,
     PARSER_BUNDLE_SHA256,
+    BCNLTCanonicalRecord,
+    BCNLTMultilingualOutputAdapter,
+    BCNLTParserOutputProvenance,
     validate_canonical_record_payload,
+)
+from .runtime_identity import (
+    PYTHON_SOURCE_IDENTITY_POLICY,
+)
+from .runtime_identity import (
+    aggregate_sha256 as _aggregate_sha256,
+)
+from .runtime_identity import (
+    identity_bytes as _identity_bytes,
+)
+from .runtime_identity import (
+    is_generated_python_bytecode as _is_generated_python_bytecode,
+)
+from .runtime_identity import (
+    sha256_file as _sha256,
 )
 from .semantic import NativeSemanticRecordCodec
 from .tokenizer import NativeTokenizerBinding
 
-
-SIDECAR_PROTOCOL = "bosscrafts-bcnlt-source-sidecar-v2"
+SIDECAR_PROTOCOL = "bosscrafts-bcnlt-source-sidecar-v4"
 CURRENT_RUNTIME_SPEC_SHA256 = {
     "bash": "da1bb0468fb23c5a6eaa8af1eb0e9eeea4b9e295e7ffbc0d4aeb073c671810ca",
     "c": "f3765a6dd8687810a0d51f0ea9067af9bbee6642b98f23419168cd34d75e37f5",
@@ -45,30 +64,34 @@ CURRENT_RUNTIME_SPEC_SHA256 = {
     "cpp": "c499bd19f76c84e522d6a8370a5d5e6ae26a96c7ca6bddf54b8f01e177182378",
     "go": "23f3a60f689ae22f34e5b819066d8e29ce823d4535cfca915e945ba2f2f3e6c2",
     "java": "c20f4e36ab239b8ed7f75428587f72d56f7e85c2f0a46a5a38a853f0ba033e4b",
-    "javascript": "ed9e52d0dc7c0cecc5478b3fa60d7c4605a69015bc72af70381eda286312b4cd",
+    "javascript": "b300189c01eb2607a1d6597e9fef5b5d74795d7283f5194ca1b11712673c96c3",
     "kotlin": "02568b22e74dc1a05d3c4cf84c23808eec19f818ee312f497107782bbf3be9a5",
     "php": "6f5aaff7714b1893ff7966d671700d6fc55a641b7665dcdd98701e11904e57ed",
     "python": "9dec2e498ca82f936d4d454a650de48f55dcea094000f27507dbbaf0cd408381",
     "ruby": "59ecd18636cc23219ce4e0a50bebe5b5904db420dca47b2666e108387d77ae57",
     "rust": "d0df302624a6374508c715ea95e4351a5479e7fbced804784b0c19df4831d66b",
     "swift": "d553d2c3df05cc7448e833ecf54266fb73a297d74b57db1bea0be1a099e3dd5a",
-    "typescript": "0a69b500f983e3690aa18cdaabca1690b70b0099e02fc0dd3a53b500d5cfd67a",
+    "typescript": "7124ea196695ceb20d9657f9cd4f144c97a872632ec07a7c55a90de23dbf6e2b",
 }
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _RUNTIME_ROOT = _PROJECT_ROOT / "vendor" / "bcnlt_runtime_v10_learning_candidate"
 _SIDECAR = _RUNTIME_ROOT / "bcnlt_source_sidecar.py"
-_DEFAULT_PYTHON_313 = Path(r"C:\ProgramData\anaconda3\python.exe")
+_DEFAULT_PYTHON_313 = Path(sys.executable).resolve()
 _RUNTIME_MANIFEST = _RUNTIME_ROOT / "runtime-manifest.json"
 _EXPECTED_RUNTIME_IDENTITY = {
-    "source": "8f7f820ba20206a61ddc3509dd8c2a7564954bb3197de118fdc373a2fffc7c66",
-    "sidecar": "c86f40828c0303adad2cbf05eb25b5c358ff88ffc1bb9ebcbd39d9de75b158cc",
+    "source": "c5623e97f3f1e1e884e1d54a316d174292fbcbf61da3ddfdbf3b432418e0450a",
+    "sidecar": "5eb8df0226ada9b5ba9d7d5b845d86abb6b4dbd22423c35a7ba6bff1f31be1f3",
     "tree_sitter": "d8efa5533a1c79cc404df3a0ff03d76626ad50d54b74d97e4cf6e30ab85bebe4",
     "language_pack": "18fda57fbe2f52f85cf09fd1fc5af6509bfe0a8c6d3d425cafe3d7b63f8dca6e",
     "grammars": "19fc42827e8ab3b37282c0666caa1ddd8abcd3708298fb1665c10df440c3d090",
+    "site_packages": "3daa4575bdd757c649febf2c8514c80ab1311641c0205463b1c89b1e928b262c",
 }
+_EXPECTED_RUNTIME_MANIFEST_SHA256 = (
+    "cb7b0df010bbe162b0b9c0877addded2f5b06f3bc0fbbd9b39b58a7bdad6ed20"
+)
 PARSER_RUNTIME_IDENTITY_SHA256 = (
-    "d0a0a61605faf57270d9df4828a01c281ace1af095e87c86fa2a5812b1cd950a"
+    "c1ca753bf4d1dbabf841fdcd120e5c3eec026b7211ca5c0f08d066074acee938"
 )
 PARSER_RUNTIME_NOT_APPLICABLE = "not_applicable"
 _FIELD_ORDER = (
@@ -90,6 +113,8 @@ _SEMANTIC_RECORD_BATCH_SIZE = 128
 _RESPONSE_KEYS = frozenset(
     (
         "protocol",
+        "sidecar_source_sha256",
+        "parser_runtime_identity_sha256",
         "language",
         "path",
         "dialect",
@@ -148,28 +173,6 @@ def _reject_nonfinite(value: str) -> object:
     raise ValueError(f"non-finite JSON constant is forbidden: {value}")
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _aggregate_sha256(root: Path, pattern: str) -> tuple[str, int, int]:
-    paths = sorted(root.rglob(pattern), key=lambda item: item.relative_to(root).as_posix())
-    digest = hashlib.sha256()
-    total_bytes = 0
-    for path in paths:
-        relative = path.relative_to(root).as_posix()
-        digest.update(relative.encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(_sha256(path).encode("ascii"))
-        digest.update(b"\n")
-        total_bytes += path.stat().st_size
-    return digest.hexdigest(), len(paths), total_bytes
-
-
 def _sidecar_environment() -> dict[str, str]:
     return {
         "PATH": os.environ.get("PATH", ""),
@@ -182,7 +185,18 @@ def _sidecar_environment() -> dict[str, str]:
         "TMP": os.environ.get("TMP", str(_PROJECT_ROOT / ".tmp")),
         "PYTHONIOENCODING": "utf-8",
         "PYTHONNOUSERSITE": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
     }
+
+
+def _unexpected_runtime_cache_entries(root: Path) -> tuple[Path, ...]:
+    return tuple(
+        path
+        for path in root.rglob("*")
+        if path.is_file()
+        and "__pycache__" in path.relative_to(root).parts
+        and not _is_generated_python_bytecode(path, root)
+    )
 
 
 class _PersistentSidecarWorker:
@@ -193,6 +207,9 @@ class _PersistentSidecarWorker:
         self._timeout_seconds = timeout_seconds
         self._lock = threading.Lock()
         self._process: subprocess.Popen[bytes] | None = None
+        self._bytecode_cache = tempfile.TemporaryDirectory(
+            prefix="bosscrafts-bcnlt-pycache-"
+        )
         self._reader = ThreadPoolExecutor(
             max_workers=1,
             thread_name_prefix="bcnlt-sidecar-reader",
@@ -202,7 +219,9 @@ class _PersistentSidecarWorker:
     def pid(self) -> int | None:
         with self._lock:
             process = self._process
-            return process.pid if process is not None and process.poll() is None else None
+            return (
+                process.pid if process is not None and process.poll() is None else None
+            )
 
     def _start_locked(self) -> subprocess.Popen[bytes]:
         process = self._process
@@ -210,10 +229,24 @@ class _PersistentSidecarWorker:
             return process
         if process is not None:
             self._close_streams(process)
+        if _sha256(_SIDECAR) != _EXPECTED_RUNTIME_IDENTITY["sidecar"]:
+            raise BCNLTPreprocessingError(
+                "BCNLT persistent parser sidecar source identity changed"
+            )
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
             process = subprocess.Popen(
-                [str(self._python), "-I", str(_SIDECAR), "--worker"],
+                [
+                    str(self._python),
+                    "-I",
+                    "-B",
+                    "-X",
+                    f"pycache_prefix={self._bytecode_cache.name}",
+                    "-X",
+                    "utf8",
+                    str(_SIDECAR),
+                    "--worker",
+                ],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
@@ -228,7 +261,9 @@ class _PersistentSidecarWorker:
         if process.stdin is None or process.stdout is None:
             process.kill()
             process.wait(timeout=5)
-            raise BCNLTPreprocessingError("BCNLT persistent sidecar pipes are unavailable")
+            raise BCNLTPreprocessingError(
+                "BCNLT persistent sidecar pipes are unavailable"
+            )
         self._process = process
         return process
 
@@ -270,7 +305,9 @@ class _PersistentSidecarWorker:
         with self._lock:
             process = self._start_locked()
             if process.stdin is None or process.stdout is None:
-                raise BCNLTPreprocessingError("BCNLT persistent sidecar pipes are unavailable")
+                raise BCNLTPreprocessingError(
+                    "BCNLT persistent sidecar pipes are unavailable"
+                )
             try:
                 process.stdin.write(request_bytes + b"\n")
                 process.stdin.flush()
@@ -314,6 +351,7 @@ class _PersistentSidecarWorker:
         with self._lock:
             self._stop_locked(force=False)
         self._reader.shutdown(wait=True, cancel_futures=True)
+        self._bytecode_cache.cleanup()
 
 
 class _NativeSemanticStreamCodec:
@@ -416,7 +454,9 @@ class _NativeSemanticStreamCodec:
             cursor += 1
             payload: dict[str, object] = {"event": event}
             for field in _FIELD_ORDER:
-                if cursor >= len(values) - 1 or values[cursor] != self._id(f"field:{field}:begin"):
+                if cursor >= len(values) - 1 or values[cursor] != self._id(
+                    f"field:{field}:begin"
+                ):
                     raise ValueError(f"semantic {field} field begin mismatch")
                 cursor += 1
                 end = self._id(f"field:{field}:end")
@@ -467,7 +507,11 @@ class _NativeSemanticStreamCodec:
                 payload,
                 allowed_events=frozenset(self._event_by_id.values()),
             )
-            lines.append(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+            lines.append(
+                json.dumps(
+                    payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                )
+            )
         return "".join(f"{line}\n" for line in lines)
 
 
@@ -486,14 +530,20 @@ class BCNLTSourcePipeline:
     ) -> None:
         if type(binding) is not NativeTokenizerBinding:
             raise TypeError("binding must be a verified NativeTokenizerBinding")
-        if timeout_seconds <= 0 or timeout_seconds > 60:
+        if type(timeout_seconds) not in (int, float):
+            raise TypeError("sidecar timeout must be a finite number")
+        if (
+            not math.isfinite(timeout_seconds)
+            or timeout_seconds <= 0
+            or timeout_seconds > 60
+        ):
             raise ValueError("sidecar timeout must be in (0, 60] seconds")
         if type(persistent_sidecars) is not bool:
             raise TypeError("persistent_sidecars must be a boolean")
+        if type(learning_mode) is not str:
+            raise TypeError("learning_mode must be a string")
         if learning_mode not in {"ephemeral", "observe", "read_only"}:
-            raise ValueError(
-                "learning_mode must be ephemeral, observe, or read_only"
-            )
+            raise ValueError("learning_mode must be ephemeral, observe, or read_only")
         if learning_mode == "ephemeral":
             if learned_memory_root is not None:
                 raise ValueError(
@@ -512,7 +562,7 @@ class BCNLTSourcePipeline:
                 raise ValueError("learned-memory root must be a directory")
         configured = sidecar_python or os.environ.get("BCNLT_SIDECAR_PYTHON")
         self._python = Path(configured) if configured else _DEFAULT_PYTHON_313
-        self._timeout_seconds = timeout_seconds
+        self._timeout_seconds = float(timeout_seconds)
         self._persistent_sidecars = persistent_sidecars
         self._learning_mode = learning_mode
         self._learned_memory_root = resolved_memory_root
@@ -525,7 +575,7 @@ class BCNLTSourcePipeline:
             NativeSemanticRecordCodec(binding),
             runtime_spec_sha256=CURRENT_RUNTIME_SPEC_SHA256,
         )
-        self._validate_runtime_files()
+        self.validate_contained_runtime(self._python)
 
     @property
     def parser_execution_integrated(self) -> bool:
@@ -559,7 +609,9 @@ class BCNLTSourcePipeline:
     def persistent_worker_pids(self) -> tuple[int, ...]:
         with self._workers_lock:
             return tuple(
-                sorted(pid for worker in self._workers if (pid := worker.pid) is not None)
+                sorted(
+                    pid for worker in self._workers if (pid := worker.pid) is not None
+                )
             )
 
     def close(self) -> None:
@@ -574,7 +626,12 @@ class BCNLTSourcePipeline:
     def __enter__(self) -> "BCNLTSourcePipeline":
         return self
 
-    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
+    def __exit__(
+        self,
+        _exc_type: object,
+        _exc_value: object,
+        _traceback: object,
+    ) -> None:
         self.close()
 
     def _persistent_worker(self) -> _PersistentSidecarWorker:
@@ -590,31 +647,63 @@ class BCNLTSourcePipeline:
             self._workers.add(worker)
         return worker
 
-    def _validate_runtime_files(self) -> None:
-        if not self._python.is_file():
+    @staticmethod
+    def validate_contained_runtime(python: Path) -> None:
+        """Fail closed unless the shipped parser runtime and interpreter match."""
+
+        if not python.is_file():
             raise ValueError("pinned CPython 3.13 sidecar interpreter is unavailable")
         required = (
             _SIDECAR,
             _RUNTIME_ROOT / "source" / "bcnlt" / "__init__.py",
-            _RUNTIME_ROOT / "site-packages" / "tree_sitter" / "_binding.cp313-win_amd64.pyd",
-            _RUNTIME_ROOT / "site-packages" / "tree_sitter_language_pack" / "_native.pyd",
+            _RUNTIME_ROOT
+            / "site-packages"
+            / "tree_sitter"
+            / "_binding.cp313-win_amd64.pyd",
+            _RUNTIME_ROOT
+            / "site-packages"
+            / "tree_sitter_language_pack"
+            / "_native.pyd",
         )
         if any(not path.is_file() for path in required):
             raise ValueError("project-contained BCNLT sidecar runtime is incomplete")
         grammar_names = (
-            "bash", "c", "c_sharp", "cpp", "go", "java", "javascript", "kotlin",
-            "php", "python", "ruby", "rust", "swift", "typescript",
+            "bash",
+            "c",
+            "c_sharp",
+            "cpp",
+            "go",
+            "java",
+            "javascript",
+            "kotlin",
+            "php",
+            "python",
+            "ruby",
+            "rust",
+            "swift",
+            "typescript",
         )
         if any(
             not (_RUNTIME_ROOT / "grammars" / f"tree_sitter_{name}.dll").is_file()
             for name in grammar_names
         ):
             raise ValueError("project-contained BCNLT grammar set is incomplete")
+        if _sha256(_RUNTIME_MANIFEST) != _EXPECTED_RUNTIME_MANIFEST_SHA256:
+            raise ValueError("project-contained BCNLT runtime manifest identity mismatch")
         try:
-            manifest = json.loads(_RUNTIME_MANIFEST.read_text(encoding="utf-8"))
+            manifest = json.loads(
+                _RUNTIME_MANIFEST.read_text(encoding="utf-8"),
+                object_pairs_hook=_reject_duplicate_keys,
+                parse_constant=_reject_nonfinite,
+            )
         except (OSError, json.JSONDecodeError) as error:
-            raise ValueError("project-contained BCNLT runtime manifest is invalid") from error
-        if manifest.get("schema_version") != "bosscrafts-bcnlt-contained-runtime-v10-learning-candidate":
+            raise ValueError(
+                "project-contained BCNLT runtime manifest is invalid"
+            ) from error
+        if (
+            manifest.get("schema_version")
+            != "bosscrafts-bcnlt-contained-runtime-v10-learning-candidate"
+        ):
             raise ValueError("project-contained BCNLT runtime manifest schema mismatch")
         source_hash, source_count, source_bytes = _aggregate_sha256(
             _RUNTIME_ROOT / "source" / "bcnlt", "*.py"
@@ -622,6 +711,19 @@ class BCNLTSourcePipeline:
         grammar_hash, grammar_count, grammar_bytes = _aggregate_sha256(
             _RUNTIME_ROOT / "grammars", "*.dll"
         )
+        site_packages_root = _RUNTIME_ROOT / "site-packages"
+        site_packages_hash, site_packages_count, site_packages_bytes = (
+            _aggregate_sha256(
+                site_packages_root,
+                "*",
+                ignore_generated_python_bytecode=True,
+            )
+        )
+        unexpected_cache_entries = _unexpected_runtime_cache_entries(
+            site_packages_root
+        )
+        if unexpected_cache_entries:
+            raise ValueError("project-contained BCNLT runtime cache contains non-bytecode")
         source_manifest = manifest.get("source", {})
         runtime_manifest = manifest.get("runtime", {})
         actual = {
@@ -630,6 +732,7 @@ class BCNLTSourcePipeline:
             "tree_sitter": _sha256(required[2]),
             "language_pack": _sha256(required[3]),
             "grammars": grammar_hash,
+            "site_packages": site_packages_hash,
         }
         if actual != _EXPECTED_RUNTIME_IDENTITY:
             raise ValueError("project-contained BCNLT runtime identity mismatch")
@@ -637,22 +740,39 @@ class BCNLTSourcePipeline:
             json.dumps(actual, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
         if runtime_identity != PARSER_RUNTIME_IDENTITY_SHA256:
-            raise ValueError("project-contained BCNLT runtime aggregate identity mismatch")
+            raise ValueError(
+                "project-contained BCNLT runtime aggregate identity mismatch"
+            )
         if (
             source_manifest.get("aggregate_sha256") != source_hash
             or source_manifest.get("file_count") != source_count
             or source_manifest.get("bytes") != source_bytes
+            or source_manifest.get("identity_policy") != PYTHON_SOURCE_IDENTITY_POLICY
             or runtime_manifest.get("sidecar_sha256") != actual["sidecar"]
-            or runtime_manifest.get("tree_sitter_binding_sha256") != actual["tree_sitter"]
-            or runtime_manifest.get("language_pack_binding_sha256") != actual["language_pack"]
+            or runtime_manifest.get("sidecar_bytes") != len(_identity_bytes(_SIDECAR))
+            or runtime_manifest.get("tree_sitter_binding_sha256")
+            != actual["tree_sitter"]
+            or runtime_manifest.get("language_pack_binding_sha256")
+            != actual["language_pack"]
+            or runtime_manifest.get("site_packages_aggregate_sha256")
+            != site_packages_hash
+            or runtime_manifest.get("site_packages_file_count")
+            != site_packages_count
+            or runtime_manifest.get("site_packages_bytes") != site_packages_bytes
             or runtime_manifest.get("grammar_aggregate_sha256") != grammar_hash
             or runtime_manifest.get("grammar_count") != grammar_count
             or runtime_manifest.get("grammar_bytes") != grammar_bytes
+            or runtime_manifest.get("python_source_identity_policy")
+            != PYTHON_SOURCE_IDENTITY_POLICY
+            or runtime_manifest.get("parser_runtime_identity_sha256")
+            != PARSER_RUNTIME_IDENTITY_SHA256
         ):
-            raise ValueError("project-contained BCNLT runtime manifest identity mismatch")
+            raise ValueError(
+                "project-contained BCNLT runtime manifest identity mismatch"
+            )
         version_check = subprocess.run(
             [
-                str(self._python),
+                str(python),
                 "-I",
                 "-c",
                 "import platform,struct,sys; print(f'{sys.version_info.major}.{sys.version_info.minor}|{platform.python_implementation()}|{struct.calcsize(\"P\") * 8}')",
@@ -664,7 +784,10 @@ class BCNLTSourcePipeline:
             check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-        if version_check.returncode != 0 or version_check.stdout.strip() != "3.13|CPython|64":
+        if (
+            version_check.returncode != 0
+            or version_check.stdout.strip() != "3.13|CPython|64"
+        ):
             raise ValueError("BCNLT sidecar requires 64-bit CPython 3.13")
 
     def _provenance(self, language: str) -> BCNLTParserOutputProvenance:
@@ -705,38 +828,62 @@ class BCNLTSourcePipeline:
         try:
             request_bytes = request.encode("utf-8")
         except UnicodeEncodeError as error:
-            raise BCNLTPreprocessingError("BCNLT parser sidecar request is not UTF-8") from error
+            raise BCNLTPreprocessingError(
+                "BCNLT parser sidecar request is not UTF-8"
+            ) from error
         if self._persistent_sidecars:
             stdout_bytes = self._persistent_worker().request(request_bytes)
         else:
             creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-            try:
-                completed = subprocess.run(
-                    [str(self._python), "-I", str(_SIDECAR)],
-                    input=request_bytes,
-                    capture_output=True,
-                    timeout=self._timeout_seconds,
-                    check=False,
-                    env=_sidecar_environment(),
-                    creationflags=creationflags,
+            if _sha256(_SIDECAR) != _EXPECTED_RUNTIME_IDENTITY["sidecar"]:
+                raise BCNLTPreprocessingError(
+                    "BCNLT parser sidecar source identity changed"
                 )
+            try:
+                with tempfile.TemporaryDirectory(
+                    prefix="bosscrafts-bcnlt-pycache-"
+                ) as bytecode_cache:
+                    completed = subprocess.run(
+                        [
+                            str(self._python),
+                            "-I",
+                            "-B",
+                            "-X",
+                            f"pycache_prefix={bytecode_cache}",
+                            "-X",
+                            "utf8",
+                            str(_SIDECAR),
+                        ],
+                        input=request_bytes,
+                        capture_output=True,
+                        timeout=self._timeout_seconds,
+                        check=False,
+                        env=_sidecar_environment(),
+                        creationflags=creationflags,
+                    )
             except (OSError, subprocess.TimeoutExpired) as error:
                 raise BCNLTPreprocessingError(
                     "BCNLT parser sidecar could not complete"
                 ) from error
             if completed.returncode != 0:
                 stderr = completed.stderr.decode("utf-8", errors="replace")
-                detail = stderr.strip().splitlines()[-1] if stderr.strip() else "rejected"
+                detail = (
+                    stderr.strip().splitlines()[-1] if stderr.strip() else "rejected"
+                )
                 raise BCNLTPreprocessingError(f"BCNLT parser sidecar {detail}")
             stdout_bytes = completed.stdout
         try:
             stdout = stdout_bytes.decode("utf-8")
         except UnicodeDecodeError as error:
-            raise BCNLTPreprocessingError("BCNLT parser sidecar returned non-UTF-8 output") from error
+            raise BCNLTPreprocessingError(
+                "BCNLT parser sidecar returned non-UTF-8 output"
+            ) from error
         try:
             response = json.loads(stdout, object_pairs_hook=_reject_duplicate_keys)
         except (json.JSONDecodeError, TypeError, ValueError) as error:
-            raise BCNLTPreprocessingError("BCNLT parser sidecar returned invalid JSON") from error
+            raise BCNLTPreprocessingError(
+                "BCNLT parser sidecar returned invalid JSON"
+            ) from error
         if type(response) is dict and set(response) == _WORKER_ERROR_KEYS:
             if (
                 response.get("protocol") != SIDECAR_PROTOCOL
@@ -764,6 +911,8 @@ class BCNLTSourcePipeline:
         dialect: str | None = None,
         allow_raw_fallback: bool = False,
     ) -> PreparedBCNLTInput:
+        if type(allow_raw_fallback) is not bool:
+            raise TypeError("allow_raw_fallback must be a boolean")
         if type(source) is not str:
             raise TypeError("source must be a string")
         if language not in CURRENT_RUNTIME_SPEC_SHA256:
@@ -778,27 +927,44 @@ class BCNLTSourcePipeline:
                 dialect=dialect,
             )
             canonical_jsonl = response["canonical_jsonl"]
-            if type(canonical_jsonl) is not str or (canonical_jsonl and not canonical_jsonl.endswith("\n")):
+            if type(canonical_jsonl) is not str or (
+                canonical_jsonl and not canonical_jsonl.endswith("\n")
+            ):
                 raise BCNLTPreprocessingError("BCNLT canonical JSONL framing mismatch")
             expected_source_hash = hashlib.sha256(source.encode("utf-8")).hexdigest()
-            expected_canonical_hash = hashlib.sha256(canonical_jsonl.encode("utf-8")).hexdigest()
+            expected_canonical_hash = hashlib.sha256(
+                canonical_jsonl.encode("utf-8")
+            ).hexdigest()
             if (
                 response["protocol"] != SIDECAR_PROTOCOL
+                or response["sidecar_source_sha256"]
+                != _EXPECTED_RUNTIME_IDENTITY["sidecar"]
+                or response["parser_runtime_identity_sha256"]
+                != PARSER_RUNTIME_IDENTITY_SHA256
                 or response["language"] != language
                 or response["path"] != path
                 or response["dialect"] != dialect
                 or response["semantic_schema_version"] != "bcnlt-semantic-record-v3"
-                or response["semantic_spec_sha256"] != CURRENT_RUNTIME_SPEC_SHA256[language]
+                or response["semantic_spec_sha256"]
+                != CURRENT_RUNTIME_SPEC_SHA256[language]
                 or response["source_sha256"] != expected_source_hash
                 or response["canonical_sha256"] != expected_canonical_hash
             ):
-                raise BCNLTPreprocessingError("BCNLT parser sidecar provenance mismatch")
+                raise BCNLTPreprocessingError(
+                    "BCNLT parser sidecar provenance mismatch"
+                )
             if not canonical_jsonl:
                 records: tuple[BCNLTCanonicalRecord, ...] = ()
             else:
-                records = self._adapter.parse_jsonl(canonical_jsonl, self._provenance(language))
-            if type(response["record_count"]) is not int or response["record_count"] != len(records):
-                raise BCNLTPreprocessingError("BCNLT parser sidecar record count mismatch")
+                records = self._adapter.parse_jsonl(
+                    canonical_jsonl, self._provenance(language)
+                )
+            if type(response["record_count"]) is not int or response[
+                "record_count"
+            ] != len(records):
+                raise BCNLTPreprocessingError(
+                    "BCNLT parser sidecar record count mismatch"
+                )
             learned_memory_sha256 = response["learned_memory_sha256"]
             learned_definition_count = response["learned_definition_count"]
             extended_core_entry_count = response["extended_core_entry_count"]
@@ -834,7 +1000,9 @@ class BCNLTSourcePipeline:
                 )
             token_ids = self._stream_codec.encode(records)
             if self._stream_codec.decode(token_ids) != canonical_jsonl:
-                raise BCNLTPreprocessingError("BCNLT semantic token stream failed round-trip")
+                raise BCNLTPreprocessingError(
+                    "BCNLT semantic token stream failed round-trip"
+                )
             return PreparedBCNLTInput(
                 mode="semantic_code",
                 language=language,
@@ -852,6 +1020,18 @@ class BCNLTSourcePipeline:
                 learned_memory_sha256=learned_memory_sha256,
                 learned_definition_count=learned_definition_count,
                 extended_core_entry_count=extended_core_entry_count,
+            )
+        except (TypeError, ValueError, UnicodeError) as error:
+            normalized = BCNLTPreprocessingError(
+                "BCNLT semantic handoff validation failed"
+            )
+            if not allow_raw_fallback:
+                raise normalized from error
+            return self.prepare_raw(
+                source,
+                language=language,
+                path=path,
+                fallback_reason=str(normalized),
             )
         except BCNLTPreprocessingError as error:
             if not allow_raw_fallback:
@@ -909,7 +1089,10 @@ class BCNLTSourcePipeline:
 
     def decode_raw(self, ids: Sequence[int]) -> str:
         values = tuple(ids)
-        if len(values) < 3 or values[0] != self._binding.structural_token_ids["<|bcnlt:stream:begin|>"]:
+        if (
+            len(values) < 3
+            or values[0] != self._binding.structural_token_ids["<|bcnlt:stream:begin|>"]
+        ):
             raise ValueError("raw token stream header mismatch")
         if values[1] != self._binding.structural_token_ids["<|bcnlt:mode:raw_code|>"]:
             raise ValueError("raw token stream mode mismatch")

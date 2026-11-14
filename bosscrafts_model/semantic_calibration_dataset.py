@@ -3,13 +3,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import tempfile
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
 from .heldout_semantic_review import REVIEW_ITEM_SCHEMA, REVIEW_MANIFEST_SCHEMA
+from .immutable_artifacts import publish_new_files
 from .jsonl import split_jsonl_records
 from .local_semantic_review import (
     DualLocalSemanticReviewer,
@@ -47,23 +46,6 @@ def _sha256_bytes(value: bytes) -> str:
 
 def _sha256_text(value: str) -> str:
     return _sha256_bytes(value.encode("utf-8"))
-
-
-def _atomic_write(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
 
 
 @dataclass(frozen=True, slots=True)
@@ -266,18 +248,6 @@ class SemanticCalibrationDatasetBuilder:
 
         calibration_text = "".join(f"{_canonical(row)}\n" for row in calibration)
         heldout_text = "".join(f"{_canonical(row)}\n" for row in heldout)
-        _atomic_write(
-            output_path / "calibration_observations.jsonl",
-            calibration_text.encode("utf-8"),
-        )
-        _atomic_write(
-            output_path / "heldout_observations.jsonl",
-            heldout_text.encode("utf-8"),
-        )
-        _atomic_write(
-            output_path / "manual_decisions.jsonl",
-            manual_text.encode("utf-8"),
-        )
         unsigned = {
             "schema_version": _MANIFEST_SCHEMA,
             "source_review_manifest_sha256": queue_manifest["manifest_sha256"],
@@ -309,9 +279,26 @@ class SemanticCalibrationDatasetBuilder:
         }
         manifest_sha256 = _sha256_text(_canonical(unsigned))
         manifest = {**unsigned, "manifest_sha256": manifest_sha256}
-        _atomic_write(
-            output_path / "manifest.json",
-            f"{_canonical(manifest)}\n".encode(),
+        publish_new_files(
+            (
+                (
+                    output_path / "calibration_observations.jsonl",
+                    calibration_text.encode("utf-8"),
+                ),
+                (
+                    output_path / "heldout_observations.jsonl",
+                    heldout_text.encode("utf-8"),
+                ),
+                (
+                    output_path / "manual_decisions.jsonl",
+                    manual_text.encode("utf-8"),
+                ),
+                (
+                    output_path / "manifest.json",
+                    f"{_canonical(manifest)}\n".encode("utf-8"),
+                ),
+            ),
+            artifact_label="semantic calibration dataset",
         )
         return SemanticCalibrationDatasetResult(
             output_root=output_path,

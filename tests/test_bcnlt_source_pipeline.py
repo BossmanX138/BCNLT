@@ -2,20 +2,25 @@ from __future__ import annotations
 
 import hashlib
 import json
-from types import SimpleNamespace
+import math
+import sys
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
+
 import torch
 
 from bosscrafts_model.bcnlt_source_pipeline import (
+    _DEFAULT_PYTHON_313,
+    _EXPECTED_RUNTIME_IDENTITY,
+    CURRENT_RUNTIME_SPEC_SHA256,
     BCNLTPreprocessingError,
     BCNLTSourcePipeline,
-    CURRENT_RUNTIME_SPEC_SHA256,
 )
-from bosscrafts_model.tokenizer import NativeTokenizerBinding
 from bosscrafts_model.config import ModelConfig
 from bosscrafts_model.model import EngineeringModel
-
+from bosscrafts_model.tokenizer import NativeTokenizerBinding
 
 LANGUAGE_SAMPLES = {
     "python": "def f(x):\n    return x + 1\n",
@@ -40,6 +45,9 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.binding = NativeTokenizerBinding.load()
         cls.pipeline = BCNLTSourcePipeline(cls.binding)
+
+    def test_default_sidecar_interpreter_is_active_verified_python(self) -> None:
+        self.assertEqual(_DEFAULT_PYTHON_313, Path(sys.executable).resolve())
 
     def test_live_python_and_javascript_semantics_use_the_frozen_structural_ids(self):
         cases = (
@@ -67,7 +75,9 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     prepared.canonical_sha256,
-                    hashlib.sha256(prepared.canonical_jsonl.encode("utf-8")).hexdigest(),
+                    hashlib.sha256(
+                        prepared.canonical_jsonl.encode("utf-8")
+                    ).hexdigest(),
                 )
                 ids = prepared.token_ids
                 structural = self.binding.structural_token_ids
@@ -86,7 +96,9 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
                     self.pipeline.decode_semantic(ids),
                     prepared.canonical_jsonl,
                 )
-                payloads = [json.loads(line) for line in prepared.canonical_jsonl.splitlines()]
+                payloads = [
+                    json.loads(line) for line in prepared.canonical_jsonl.splitlines()
+                ]
                 self.assertTrue(
                     all("knowledge_state" in record["metadata"] for record in payloads)
                 )
@@ -101,7 +113,42 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
         second = self.pipeline.prepare_semantic(source, language="rust", path="lib.rs")
         self.assertEqual(first, second)
         self.assertEqual(self.binding.structural_token_ids, before)
-        self.assertTrue(all(0 <= token_id < self.binding.vocab_size for token_id in first.token_ids))
+        self.assertTrue(
+            all(0 <= token_id < self.binding.vocab_size for token_id in first.token_ids)
+        )
+
+    def test_sidecar_response_attests_frozen_executable_source(self):
+        source = "x = 1\n"
+        response = self.pipeline._invoke_sidecar(
+            source,
+            language="python",
+            path="attested.py",
+            dialect=None,
+        )
+        self.assertEqual(
+            response["sidecar_source_sha256"],
+            _EXPECTED_RUNTIME_IDENTITY["sidecar"],
+        )
+        self.assertEqual(
+            response["parser_runtime_identity_sha256"],
+            self.pipeline.parser_runtime_identity_sha256,
+        )
+
+        for field in ("sidecar_source_sha256", "parser_runtime_identity_sha256"):
+            with self.subTest(field=field):
+                tampered = dict(response)
+                tampered[field] = "0" * 64
+                with patch.object(
+                    self.pipeline, "_invoke_sidecar", return_value=tampered
+                ):
+                    with self.assertRaisesRegex(
+                        BCNLTPreprocessingError, "sidecar provenance mismatch"
+                    ):
+                        self.pipeline.prepare_semantic(
+                            source,
+                            language="python",
+                            path="attested.py",
+                        )
 
     def test_semantic_decoder_rejects_null_in_required_surface_field(self):
         prepared = self.pipeline.prepare_semantic(
@@ -113,9 +160,7 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
         surface_begin = self.binding.structural_token_ids[
             "<|bcnlt:field:surface:begin|>"
         ]
-        surface_end = self.binding.structural_token_ids[
-            "<|bcnlt:field:surface:end|>"
-        ]
+        surface_end = self.binding.structural_token_ids["<|bcnlt:field:surface:end|>"]
         value_null = self.binding.structural_token_ids["<|bcnlt:value:null|>"]
         start = ids.index(surface_begin)
         end = ids.index(surface_end, start + 1)
@@ -133,8 +178,13 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
                     path=f"sample.{language}",
                 )
                 self.assertGreater(prepared.record_count, 0)
-                self.assertEqual(prepared.semantic_spec_sha256, CURRENT_RUNTIME_SPEC_SHA256[language])
-                self.assertEqual(self.pipeline.decode_semantic(prepared.token_ids), prepared.canonical_jsonl)
+                self.assertEqual(
+                    prepared.semantic_spec_sha256, CURRENT_RUNTIME_SPEC_SHA256[language]
+                )
+                self.assertEqual(
+                    self.pipeline.decode_semantic(prepared.token_ids),
+                    prepared.canonical_jsonl,
+                )
 
     def test_raw_mode_is_preserved_and_fallback_is_never_silent(self):
         source = "function {"
@@ -160,9 +210,63 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
             self.binding.structural_token_ids["<|bcnlt:mode:raw_code|>"],
         )
 
+    def test_invalid_semantic_handoff_uses_only_explicit_auditable_fallback(self):
+        source = "x = 1\n"
+        response = self.pipeline._invoke_sidecar(
+            source,
+            language="python",
+            path="malformed.py",
+            dialect=None,
+        )
+        malformed = dict(response)
+        malformed["canonical_jsonl"] = '{"broken":true}\n'
+        malformed["canonical_sha256"] = hashlib.sha256(
+            malformed["canonical_jsonl"].encode("utf-8")
+        ).hexdigest()
+        malformed["record_count"] = 1
+
+        with patch.object(self.pipeline, "_invoke_sidecar", return_value=malformed):
+            with self.assertRaisesRegex(
+                BCNLTPreprocessingError, "semantic handoff validation failed"
+            ):
+                self.pipeline.prepare_semantic(
+                    source,
+                    language="python",
+                    path="malformed.py",
+                )
+
+            prepared = self.pipeline.prepare_semantic(
+                source,
+                language="python",
+                path="malformed.py",
+                allow_raw_fallback=True,
+            )
+        self.assertEqual(prepared.mode, "raw_code")
+        self.assertTrue(prepared.used_raw_fallback)
+        self.assertEqual(
+            prepared.fallback_reason,
+            "BCNLT semantic handoff validation failed",
+        )
+
     def test_unsupported_language_fails_closed(self):
         with self.assertRaisesRegex(ValueError, "unsupported BCNLT language"):
             self.pipeline.prepare_semantic("+", language="brainfuck", path="x.bf")
+
+    def test_pipeline_control_arguments_require_exact_types_and_finite_timeout(self):
+        for invalid_timeout in (True, False, math.nan, math.inf, "30"):
+            with self.subTest(timeout=invalid_timeout):
+                with self.assertRaises((TypeError, ValueError)):
+                    BCNLTSourcePipeline(
+                        self.binding,
+                        timeout_seconds=invalid_timeout,
+                    )
+
+        with self.assertRaises(TypeError):
+            self.pipeline.prepare_semantic(
+                "function {",
+                language="javascript",
+                allow_raw_fallback="yes",
+            )
 
     def test_sidecar_transport_captures_binary_output_before_decoding(self):
         completed = SimpleNamespace(
@@ -174,7 +278,9 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
             "bosscrafts_model.bcnlt_source_pipeline.subprocess.run",
             return_value=completed,
         ) as run:
-            with self.assertRaisesRegex(BCNLTPreprocessingError, "parser rejected input"):
+            with self.assertRaisesRegex(
+                BCNLTPreprocessingError, "parser rejected input"
+            ):
                 self.pipeline._invoke_sidecar(
                     "x = 1\n",
                     language="python",
@@ -190,7 +296,7 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
     def test_non_utf8_sidecar_stdout_fails_closed_without_reader_thread_decode(self):
         completed = SimpleNamespace(
             returncode=0,
-            stdout=b"{\"protocol\":\"broken\",\"payload\":\xc2}",
+            stdout=b'{"protocol":"broken","payload":\xc2}',
             stderr=b"",
         )
         with patch(
@@ -313,8 +419,7 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
         self.assertEqual(set(definitions), expected)
         self.assertFalse(
             any(
-                record["event"] == "DEFINE"
-                and record["surface"].startswith("{")
+                record["event"] == "DEFINE" and record["surface"].startswith("{")
                 for record in records
             )
         )
@@ -410,8 +515,18 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
             ("python", "x = obj.field\n", "member.py", "field"),
             ("c", "int f(void) { return obj.field; }\n", "member.c", "field"),
             ("cpp", "int f() { return obj.field; }\n", "member.cpp", "field"),
-            ("c_sharp", "class C { int F() { return obj.field; } }\n", "member.cs", "field"),
-            ("java", "class C { int f() { return obj.field; } }\n", "Member.java", "field"),
+            (
+                "c_sharp",
+                "class C { int F() { return obj.field; } }\n",
+                "member.cs",
+                "field",
+            ),
+            (
+                "java",
+                "class C { int f() { return obj.field; } }\n",
+                "Member.java",
+                "field",
+            ),
             ("go", "package p\nfunc f() { x := obj.field }\n", "member.go", "field"),
             ("rust", "fn f() { let x = obj.field; }\n", "member.rs", "field"),
             ("php", "<?php $x = $obj->field;\n", "member.php", "field"),
@@ -478,7 +593,9 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
             and record["span"][0] == 1
             and record["span"][1] > definitions["second"]["span"][1]
         )
-        self.assertEqual(default_reference["defines"], definitions["first"]["symbol_id"])
+        self.assertEqual(
+            default_reference["defines"], definitions["first"]["symbol_id"]
+        )
 
     def test_javascript_destructured_parameters_are_function_scoped_bindings(self):
         prepared = self.pipeline.prepare_semantic(
@@ -496,7 +613,9 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
             if record["event"] == "DEFINE" and record["surface"] in expected
         }
         self.assertEqual(set(definitions), expected)
-        self.assertTrue(all(record["scope"] == "module.f" for record in definitions.values()))
+        self.assertTrue(
+            all(record["scope"] == "module.f" for record in definitions.values())
+        )
         for name, definition in definitions.items():
             body_reference = next(
                 record
@@ -514,7 +633,9 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
             language="javascript",
             path="unicode.js",
         )
-        self.assertEqual(prepared.source_sha256, hashlib.sha256(source.encode()).hexdigest())
+        self.assertEqual(
+            prepared.source_sha256, hashlib.sha256(source.encode()).hexdigest()
+        )
         self.assertNotIn("\\udc", prepared.canonical_jsonl)
 
     def test_semantic_surfaces_and_history_are_bounded_before_handoff(self):
@@ -525,10 +646,15 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
             path="large-surface.js",
         )
         records = [json.loads(line) for line in prepared.canonical_jsonl.splitlines()]
-        self.assertTrue(any(record["metadata"].get("surface_truncated") for record in records))
+        self.assertTrue(
+            any(record["metadata"].get("surface_truncated") for record in records)
+        )
         self.assertLessEqual(max(len(record["surface"]) for record in records), 4096)
         self.assertLessEqual(
-            max((len(item) for record in records for item in record["recent_history"]), default=0),
+            max(
+                (len(item) for record in records for item in record["recent_history"]),
+                default=0,
+            ),
             512,
         )
 

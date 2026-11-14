@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import gzip
 import json
-from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -20,10 +21,67 @@ from bosscrafts_model.codex_code_curriculum import (
     extract_final_code,
     normalize_language,
 )
+from bosscrafts_model.resumable_task_packing import (
+    TaskDatabaseAuditResult,
+    audit_task_database,
+)
 from bosscrafts_model.tokenizer import NativeTokenizerBinding
 
 
 class CodeXCodeCurriculumTests(unittest.TestCase):
+    @staticmethod
+    def _write_tiny_inputs(root: Path) -> tuple[Path, Path]:
+        dataset = root / "dataset"
+        dataset.mkdir()
+        prompts = [
+            "Write Python code that returns the sum of two integers.",
+            "Write a JavaScript function that doubles a number.",
+            "This row has malformed Python and must be rejected.",
+            "Write Python containing <|eos|> and reject protocol injection.",
+        ]
+        outputs = [
+            "<think>Use addition.</think>\n```python\ndef add(a, b):\n    return a + b\n```",
+            "<think>Multiply by two.</think>\n```javascript\nfunction doubleValue(x) { return x * 2; }\n```",
+            "<think>Broken.</think>\n```python\ndef broken(:\n```",
+            "<think>Unsafe.</think>\n```python\ndef unsafe():\n    return '<|eos|>'\n```",
+        ]
+        pq.write_table(
+            pa.table({"input": prompts, "output": outputs}),
+            dataset / "shard_00000.parquet",
+        )
+        humaneval = root / "HumanEval.jsonl.gz"
+        with gzip.open(humaneval, "wt", encoding="utf-8") as stream:
+            for index in range(164):
+                stream.write(
+                    json.dumps(
+                        {
+                            "task_id": f"HumanEval/{index}",
+                            "prompt": f"def heldout_{index}(x):\n    \"\"\"Unique heldout task {index}.\"\"\"\n",
+                            "canonical_solution": f"    return x + {index}\n",
+                        }
+                    )
+                    + "\n"
+                )
+        return dataset, humaneval
+
+    def test_progress_write_preserves_unrelated_predictable_temp(self) -> None:
+        from bosscrafts_model import codex_code_curriculum as module
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            destination = root / "progress.json"
+            stale = root / ".progress.json.tmp"
+            stale.write_bytes(b"unrelated sentinel")
+
+            module._write_progress(destination, {"complete": False})
+
+            self.assertEqual(stale.read_bytes(), b"unrelated sentinel")
+            self.assertEqual(
+                json.loads(destination.read_text(encoding="utf-8")),
+                {"complete": False},
+            )
+            self.assertEqual(list(root.glob(".progress.json.*.tmp")), [])
+
     def test_language_aliases_are_canonical(self) -> None:
         self.assertEqual(normalize_language("C++"), "cpp")
         self.assertEqual(normalize_language("python3"), "python")
@@ -71,37 +129,7 @@ class CodeXCodeCurriculumTests(unittest.TestCase):
         binding = NativeTokenizerBinding.load()
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            dataset = root / "dataset"
-            dataset.mkdir()
-            prompts = [
-                "Write Python code that returns the sum of two integers.",
-                "Write a JavaScript function that doubles a number.",
-                "This row has malformed Python and must be rejected.",
-                "Write Python containing <|eos|> and reject protocol injection.",
-            ]
-            outputs = [
-                "<think>Use addition.</think>\n```python\ndef add(a, b):\n    return a + b\n```",
-                "<think>Multiply by two.</think>\n```javascript\nfunction doubleValue(x) { return x * 2; }\n```",
-                "<think>Broken.</think>\n```python\ndef broken(:\n```",
-                "<think>Unsafe.</think>\n```python\ndef unsafe():\n    return '<|eos|>'\n```",
-            ]
-            pq.write_table(
-                pa.table({"input": prompts, "output": outputs}),
-                dataset / "shard_00000.parquet",
-            )
-            humaneval = root / "HumanEval.jsonl.gz"
-            with gzip.open(humaneval, "wt", encoding="utf-8") as stream:
-                for index in range(164):
-                    stream.write(
-                        json.dumps(
-                            {
-                                "task_id": f"HumanEval/{index}",
-                                "prompt": f"def heldout_{index}(x):\n    \"\"\"Unique heldout task {index}.\"\"\"\n",
-                                "canonical_solution": f"    return x + {index}\n",
-                            }
-                        )
-                        + "\n"
-                    )
+            dataset, humaneval = self._write_tiny_inputs(root)
             output = root / "output"
             status = build_codex_code_curriculum(
                 binding,
@@ -137,6 +165,159 @@ class CodeXCodeCurriculumTests(unittest.TestCase):
             self.assertTrue(
                 all(row[4] == PARSER_RUNTIME_NOT_APPLICABLE for row in task_rows)
             )
+
+    def test_failed_final_audit_does_not_publish_training_database(self) -> None:
+        binding = NativeTokenizerBinding.load()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dataset, humaneval = self._write_tiny_inputs(root)
+            output = root / "output"
+
+            with (
+                mock.patch(
+                    "bosscrafts_model.codex_code_curriculum.audit_task_database",
+                    side_effect=ValueError("deliberate final audit failure"),
+                ),
+                self.assertRaisesRegex(ValueError, "deliberate final audit failure"),
+            ):
+                build_codex_code_curriculum(
+                    binding,
+                    dataset_root=dataset,
+                    shard_indices=(0,),
+                    output_root=output,
+                    humaneval_dataset=humaneval,
+                    workers=1,
+                    batch_size=2,
+                    max_sequence=2048,
+                )
+
+            self.assertFalse((output / "tasks.sqlite").exists())
+
+    def test_merge_preserves_stale_temp_and_never_clobbers_racing_output(self) -> None:
+        binding = NativeTokenizerBinding.load()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dataset, humaneval = self._write_tiny_inputs(root)
+            output = root / "output"
+            output.mkdir()
+            final_database = output / "tasks.sqlite"
+            stale = output / ".tasks.sqlite.tmp"
+            stale.write_bytes(b"unrelated-stale-state")
+            real_audit = audit_task_database
+
+            def audit_then_create_destination(
+                audit_binding: NativeTokenizerBinding, database: str | Path
+            ) -> TaskDatabaseAuditResult:
+                result = real_audit(audit_binding, database)
+                final_database.write_bytes(b"racing-owner")
+                return result
+
+            with (
+                mock.patch(
+                    "bosscrafts_model.codex_code_curriculum.audit_task_database",
+                    side_effect=audit_then_create_destination,
+                ),
+                self.assertRaisesRegex(ValueError, "already exists"),
+            ):
+                build_codex_code_curriculum(
+                    binding,
+                    dataset_root=dataset,
+                    shard_indices=(0,),
+                    output_root=output,
+                    humaneval_dataset=humaneval,
+                    workers=1,
+                    batch_size=2,
+                    max_sequence=2048,
+                )
+
+            self.assertEqual(final_database.read_bytes(), b"racing-owner")
+            self.assertEqual(stale.read_bytes(), b"unrelated-stale-state")
+            self.assertEqual(list(output.glob(".tasks.sqlite.*.tmp")), [])
+
+    def test_rejects_tampered_completed_shard_provenance_on_resume(self) -> None:
+        binding = NativeTokenizerBinding.load()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dataset, humaneval = self._write_tiny_inputs(root)
+            output = root / "output"
+            build_codex_code_curriculum(
+                binding,
+                dataset_root=dataset,
+                shard_indices=(0,),
+                output_root=output,
+                humaneval_dataset=humaneval,
+                workers=1,
+                batch_size=2,
+                max_sequence=2048,
+            )
+            (output / "tasks.sqlite").unlink()
+            shard = output / "shards" / "shard_00000.sqlite"
+            connection = sqlite3.connect(shard)
+            try:
+                connection.execute(
+                    "UPDATE codex_provenance SET source_parquet_sha256=? "
+                    "WHERE example_id=(SELECT example_id FROM codex_provenance LIMIT 1)",
+                    ("f" * 64,),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            with self.assertRaisesRegex(ValueError, "provenance"):
+                build_codex_code_curriculum(
+                    binding,
+                    dataset_root=dataset,
+                    shard_indices=(0,),
+                    output_root=output,
+                    humaneval_dataset=humaneval,
+                    workers=1,
+                    batch_size=2,
+                    max_sequence=2048,
+                )
+
+            self.assertFalse((output / "tasks.sqlite").exists())
+
+    def test_rejects_humaneval_exclusion_changed_during_shard_build(self) -> None:
+        binding = NativeTokenizerBinding.load()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dataset, humaneval = self._write_tiny_inputs(root)
+            output = root / "output"
+            real_overlaps = HumanEvalExclusion.overlaps
+            exclusion_changed = False
+
+            def overlap_then_change_exclusion(
+                exclusion: HumanEvalExclusion, prompt: str, code: str
+            ) -> bool:
+                nonlocal exclusion_changed
+                result = real_overlaps(exclusion, prompt, code)
+                if not exclusion_changed:
+                    humaneval.write_bytes(humaneval.read_bytes() + b"changed")
+                    exclusion_changed = True
+                return result
+
+            with (
+                mock.patch.object(
+                    HumanEvalExclusion,
+                    "overlaps",
+                    autospec=True,
+                    side_effect=overlap_then_change_exclusion,
+                ),
+                self.assertRaisesRegex(ValueError, "changed during build"),
+            ):
+                build_codex_code_curriculum(
+                    binding,
+                    dataset_root=dataset,
+                    shard_indices=(0,),
+                    output_root=output,
+                    humaneval_dataset=humaneval,
+                    workers=1,
+                    batch_size=2,
+                    max_sequence=2048,
+                )
+
+            self.assertFalse((output / "tasks.sqlite").exists())
+            self.assertFalse((output / "shards" / "shard_00000.sqlite").exists())
 
 
 if __name__ == "__main__":

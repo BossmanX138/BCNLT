@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import csv
+import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from bosscrafts_model.project_codenet_pilot import build_pilot  # noqa: E402
-
+from bosscrafts_model.project_codenet_pilot import (  # noqa: E402
+    build_pilot,
+    publish_pilot_artifacts,
+)
 
 FIELDS = [
     "submission_id",
@@ -104,6 +106,33 @@ class ProjectCodeNetPilotTests(unittest.TestCase):
         self.assertEqual(report["language_counts"], {"JavaScript": 2})
         self.assertTrue(all(row["dataset_license"] == "CDLA-Permissive-2.0" for row in first))
         self.assertTrue(all(row["split"] in {"train", "validation", "test"} for row in first))
+
+    def test_pilot_publication_is_atomic_no_clobber_and_nonempty(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "pilot.jsonl"
+            report_path = root / "report.json"
+            record = {"record_id": "a" * 64, "source": "fixture"}
+            report = {"schema_version": "fixture", "record_count": 1}
+
+            with self.assertRaisesRegex(ValueError, "at least one record"):
+                publish_pilot_artifacts(output, report_path, [], report)
+            self.assertFalse(output.exists())
+            self.assertFalse(report_path.exists())
+
+            publish_pilot_artifacts(output, report_path, [record], report)
+            self.assertEqual(
+                [json.loads(line) for line in output.read_text().splitlines()],
+                [record],
+            )
+            self.assertEqual(json.loads(report_path.read_text()), report)
+            original_output = output.read_bytes()
+            original_report = report_path.read_bytes()
+
+            with self.assertRaisesRegex(ValueError, "already exists"):
+                publish_pilot_artifacts(output, report_path, [record], report)
+            self.assertEqual(output.read_bytes(), original_output)
+            self.assertEqual(report_path.read_bytes(), original_report)
 
 
 if __name__ == "__main__":

@@ -4,11 +4,10 @@ from __future__ import annotations
 import argparse
 import json
 import math
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import torch
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -104,6 +103,7 @@ def main() -> int:
     boundaries = torch.tensor([loss_start], dtype=torch.long, device=device)
     probe_token = ids_list[loss_start]
     before = model.embedding.weight[probe_token].detach().float().clone()
+    optimizer: torch.optim.Optimizer
     if arguments.optimizer == "adamw":
         optimizer = torch.optim.AdamW(model.parameters(), lr=arguments.learning_rate)
     else:
@@ -111,7 +111,7 @@ def main() -> int:
     optimizer.zero_grad(set_to_none=True)
     logits, routes = model(ids)
     loss = masked_next_token_loss(logits, ids, boundaries)
-    loss.backward()
+    torch.autograd.backward(loss)
 
     gradient_square_sum = torch.zeros((), dtype=torch.float32, device=device)
     gradient_finite = True
@@ -126,6 +126,9 @@ def main() -> int:
     after = model.embedding.weight[probe_token].detach().float()
     parameter_changed = not torch.equal(before, after)
     loss_value = float(loss.detach().float().item())
+    tokenizers_runtime_file = tokenizers.__file__
+    if tokenizers_runtime_file is None:
+        raise RuntimeError("tokenizers runtime does not expose its module path")
     payload = {
         "binding_sha256": binding.binding_sha256,
         "checkpoint_written": False,
@@ -147,7 +150,7 @@ def main() -> int:
         "route_rounds": len(routes),
         "sequence_length": ids.shape[1],
         "tokenizer_sha256": binding.tokenizer_sha256,
-        "tokenizers_runtime_path": str(Path(tokenizers.__file__).resolve()),
+        "tokenizers_runtime_path": str(Path(tokenizers_runtime_file).resolve()),
         "tokenizers_version": tokenizers.__version__,
         "trained_steps": 1,
         "training_ready": False,

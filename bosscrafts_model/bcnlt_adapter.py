@@ -6,14 +6,13 @@ smaller frozen-tokenizer semantic handoff.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
 import math
 import unicodedata
+from dataclasses import dataclass
 
 from .semantic import NativeSemanticRecordCodec, SemanticRecord
-
 
 PARSER_BUNDLE_SHA256 = "d7df9e034b19a2a459299cecb1e14c31e4bd7b9626247f3ebd56ba258d3fecd6"
 EXTRACTION_RULE_VERSION = "bcnlt-multilingual-extraction-v1"
@@ -53,6 +52,30 @@ _RECORD_KEYS = frozenset(
     )
 )
 _IR_KEYS = frozenset(("children", "kind", "metadata", "name", "value"))
+_IR_KINDS = frozenset(
+    (
+        "module",
+        "value",
+        "variable",
+        "function",
+        "parameter",
+        "call",
+        "assignment",
+        "state",
+        "loop",
+        "branch",
+        "comparison",
+        "data_structure",
+        "io",
+        "error",
+        "return",
+        "operator",
+        "member_access",
+        "import",
+        "extension",
+    )
+)
+_IR_OPTIONAL_NAME_KINDS = frozenset(("module", "loop", "branch", "return"))
 _METADATA_REQUIRED_KEYS = frozenset(("knowledge_state", "uncertainty_signals", "uyr_rounds"))
 _METADATA_ALLOWED_KEYS = frozenset(
     (
@@ -145,9 +168,15 @@ def _validate_ir_node(ir: object, *, depth: int = 0) -> None:
         raise ValueError("BCNLT IR nesting is too deep")
     if type(ir) is not dict or set(ir) != _IR_KEYS:
         raise ValueError("BCNLT IR keys mismatch")
+    kind = ir["kind"]
+    name = ir["name"]
     if (
-        not _is_string(ir["kind"])
-        or not _is_string(ir["name"], allow_empty=True, maximum=8192)
+        kind not in _IR_KINDS
+        or (
+            name is not None
+            and not _is_string(name, maximum=8192)
+        )
+        or (kind not in _IR_OPTIONAL_NAME_KINDS and name is None)
         or ir["value"] is not None
         or type(ir["children"]) is not list
         or len(ir["children"]) > 256
@@ -170,7 +199,7 @@ class BCNLTParserOutputProvenance:
     extraction_rule_version: str
 
     @classmethod
-    def expected(cls, language: str) -> "BCNLTParserOutputProvenance":
+    def expected(cls, language: str) -> BCNLTParserOutputProvenance:
         if language not in LANGUAGE_SPEC_SHA256:
             raise ValueError("unsupported BCNLT parser language")
         return cls(

@@ -1,12 +1,15 @@
 """Resumable, local-only dual review for held-out semantic records."""
+
 from __future__ import annotations
 
+import base64
 import hashlib
 import ipaddress
 import json
 import os
 import re
 import tempfile
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypedDict
@@ -34,7 +37,16 @@ _MAX_RESPONSE_BYTES = 1024 * 1024
 class _NoRedirectHandler(urlrequest.HTTPRedirectHandler):
     """Never forward source-bearing reviewer requests to another endpoint."""
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
+    def redirect_request(
+        self,
+        req: object,
+        fp: object,
+        code: int,
+        msg: str,
+        headers: object,
+        newurl: str,
+    ) -> None:
+        del req, fp, code, msg, headers, newurl
         return None
 
 
@@ -127,9 +139,7 @@ class LocalReviewerSpec:
         ):
             raise ValueError("reviewer endpoint must be a plain HTTP loopback base URL")
         try:
-            loopback = parsed.hostname.lower() == "localhost" or ipaddress.ip_address(
-                parsed.hostname
-            ).is_loopback
+            loopback = ipaddress.ip_address(parsed.hostname).is_loopback
         except ValueError:
             loopback = False
         if not loopback:
@@ -218,7 +228,9 @@ class DualLocalSemanticReviewer:
             or len(review_ids) != len(set(review_ids))
         ):
             raise ValueError("review_ids must be a non-empty tuple of unique IDs")
-        if review_ids is not None and (limit is not None or limit_per_reviewer is not None):
+        if review_ids is not None and (
+            limit is not None or limit_per_reviewer is not None
+        ):
             raise ValueError("review_ids cannot be combined with numeric limits")
         if type(continue_on_failure) is not bool:
             raise TypeError("continue_on_failure must be boolean")
@@ -263,9 +275,10 @@ class DualLocalSemanticReviewer:
             # One separately evidenced repair is allowed. A pair that also
             # failed repair remains pending for human adjudication rather than
             # entering an unbounded deterministic retry loop.
-            if prior_failure is not None and prior_failure.get(
-                "request_kind", "initial"
-            ) == "repair":
+            if (
+                prior_failure is not None
+                and prior_failure.get("request_kind", "initial") == "repair"
+            ):
                 continue
             try:
                 decision = self._request_review(
@@ -281,9 +294,7 @@ class DualLocalSemanticReviewer:
             self._append_decision(decision)
             decisions[key] = decision
         failures = self._verify_failure_ledger(source_manifest, items)
-        return self._write_summary(
-            source_manifest, items, decisions, failures=failures
-        )
+        return self._write_summary(source_manifest, items, decisions, failures=failures)
 
     def verify(self) -> DualLocalReviewResult:
         """Verify all durable evidence and rebuild summaries without inference."""
@@ -304,7 +315,10 @@ class DualLocalSemanticReviewer:
             )
         except (OSError, json.JSONDecodeError) as exc:
             raise ValueError("review queue manifest is invalid") from exc
-        if type(manifest) is not dict or manifest.get("schema_version") != REVIEW_MANIFEST_SCHEMA:
+        if (
+            type(manifest) is not dict
+            or manifest.get("schema_version") != REVIEW_MANIFEST_SCHEMA
+        ):
             raise ValueError("review queue manifest schema mismatch")
         unsigned = dict(manifest)
         claimed = unsigned.pop("manifest_sha256", None)
@@ -323,11 +337,13 @@ class DualLocalSemanticReviewer:
                 item = json.loads(line)
             except json.JSONDecodeError as exc:
                 raise ValueError("review queue item JSON is invalid") from exc
-            if type(item) is not dict or item.get("schema_version") != REVIEW_ITEM_SCHEMA:
-                raise ValueError("review queue item schema mismatch")
             if (
-                item.get("parser_runtime_identity_sha256")
-                != manifest.get("parser_runtime_identity_sha256")
+                type(item) is not dict
+                or item.get("schema_version") != REVIEW_ITEM_SCHEMA
+            ):
+                raise ValueError("review queue item schema mismatch")
+            if item.get("parser_runtime_identity_sha256") != manifest.get(
+                "parser_runtime_identity_sha256"
             ):
                 raise ValueError("review queue item parser lineage mismatch")
             items.append(item)
@@ -350,9 +366,7 @@ class DualLocalSemanticReviewer:
         if not path.exists():
             return {}
         item_ids = {str(item["review_id"]) for item in items}
-        failures_by_sha = {
-            str(entry["failure_sha256"]): entry for entry in failures
-        }
+        failures_by_sha = {str(entry["failure_sha256"]): entry for entry in failures}
         decisions: dict[tuple[str, str], dict[str, object]] = {}
         try:
             lines = split_jsonl_records(path.read_text(encoding="utf-8"))
@@ -404,7 +418,9 @@ class DualLocalSemanticReviewer:
             expected_request = self._request_payload(
                 item, reviewer, prior_failure=prior_failure
             )
-            if entry.get("request_sha256") != _sha256_text(_canonical(expected_request)):
+            if entry.get("request_sha256") != _sha256_text(
+                _canonical(expected_request)
+            ):
                 raise ValueError("review request SHA-256 mismatch")
             self._verify_response_artifact(entry, reviewer)
             decisions[key] = entry
@@ -559,7 +575,7 @@ class DualLocalSemanticReviewer:
         ):
             raise ValueError("semantic review span evidence input is invalid")
         source_lines: dict[int, str] = {}
-        for rendered in excerpt.splitlines()[1:]:
+        for rendered in excerpt.split("\n")[1:]:
             match = re.fullmatch(r"[ >](\d{6})\| (.*)", rendered)
             if match is not None:
                 source_lines[int(match.group(1))] = match.group(2)
@@ -572,14 +588,17 @@ class DualLocalSemanticReviewer:
                     start_column:end_column
                 ]
             else:
-                segments = [
-                    source_lines[start_line].encode("utf-8")[start_column:]
-                ]
+                segments = [source_lines[start_line].encode("utf-8")[start_column:]]
                 for line_number in range(start_line + 1, end_line):
                     segments.append(source_lines[line_number].encode("utf-8"))
                 segments.append(source_lines[end_line].encode("utf-8")[:end_column])
                 extracted_bytes = b"\n".join(segments)
-            extracted = extracted_bytes.decode("utf-8")
+            extracted = unicodedata.normalize(
+                "NFC",
+                extracted_bytes.decode("utf-8")
+                .replace("\r\n", "\n")
+                .replace("\r", "\n"),
+            )
         except (KeyError, UnicodeDecodeError) as exc:
             raise ValueError("semantic review span cannot be decoded exactly") from exc
         return {
@@ -604,9 +623,7 @@ class DualLocalSemanticReviewer:
         *,
         prior_failure: dict[str, object] | None = None,
     ) -> dict[str, object]:
-        payload = self._request_payload(
-            item, reviewer, prior_failure=prior_failure
-        )
+        payload = self._request_payload(item, reviewer, prior_failure=prior_failure)
         request_kind = "repair" if prior_failure is not None else "initial"
         prior_failure_sha256 = (
             prior_failure["failure_sha256"] if prior_failure is not None else None
@@ -639,11 +656,47 @@ class DualLocalSemanticReviewer:
             )
             raise ValueError(message) from exc
         if len(raw) > _MAX_RESPONSE_BYTES:
-            raise ValueError("local reviewer response exceeds the size limit")
+            message = "local reviewer response exceeds the size limit"
+            response_sha256, response_file = self._persist_invalid_response(
+                raw,
+                failure_type="response_too_large",
+            )
+            self._append_failure(
+                source_manifest=source_manifest,
+                item=item,
+                reviewer=reviewer,
+                request_sha256=_sha256_text(_canonical(payload)),
+                response_sha256=response_sha256,
+                response_file=response_file,
+                response_model=None,
+                failure_type="response_too_large",
+                message=message,
+                request_kind=request_kind,
+                prior_failure_sha256=prior_failure_sha256,
+            )
+            raise ValueError(message)
         try:
             response_payload = json.loads(raw)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError("local reviewer response is not valid JSON") from exc
+            message = "local reviewer response is not valid JSON"
+            response_sha256, response_file = self._persist_invalid_response(
+                raw,
+                failure_type="invalid_json",
+            )
+            self._append_failure(
+                source_manifest=source_manifest,
+                item=item,
+                reviewer=reviewer,
+                request_sha256=_sha256_text(_canonical(payload)),
+                response_sha256=response_sha256,
+                response_file=response_file,
+                response_model=None,
+                failure_type="invalid_json",
+                message=message,
+                request_kind=request_kind,
+                prior_failure_sha256=prior_failure_sha256,
+            )
+            raise ValueError(message) from exc
         response_bytes = f"{_canonical(response_payload)}\n".encode()
         response_sha256 = _sha256_bytes(response_bytes)
         response_relative = f"responses/{response_sha256}.json"
@@ -663,7 +716,9 @@ class DualLocalSemanticReviewer:
                 request_sha256=_sha256_text(_canonical(payload)),
                 response_sha256=response_sha256,
                 response_file=response_relative,
-                response_model=response_payload.get("model") if type(response_payload) is dict else None,
+                response_model=response_payload.get("model")
+                if type(response_payload) is dict
+                else None,
                 failure_type="invalid_response",
                 message=str(exc),
                 request_kind=request_kind,
@@ -699,7 +754,11 @@ class DualLocalSemanticReviewer:
         if type(response) is not dict or response.get("model") != reviewer.model:
             raise ValueError("local reviewer response model identity mismatch")
         choices = response.get("choices")
-        if type(choices) is not list or len(choices) != 1 or type(choices[0]) is not dict:
+        if (
+            type(choices) is not list
+            or len(choices) != 1
+            or type(choices[0]) is not dict
+        ):
             raise ValueError("local reviewer response choices are invalid")
         choice = choices[0]
         if choice.get("finish_reason") != "stop":
@@ -711,7 +770,11 @@ class DualLocalSemanticReviewer:
             decision = json.loads(message["content"])
         except json.JSONDecodeError as exc:
             raise ValueError("local reviewer decision is not valid JSON") from exc
-        if type(decision) is not dict or set(decision) != {"decision", "notes", "rubric"}:
+        if type(decision) is not dict or set(decision) != {
+            "decision",
+            "notes",
+            "rubric",
+        }:
             raise ValueError("local reviewer decision fields mismatch")
         choice_value = decision.get("decision")
         notes = decision.get("notes")
@@ -723,12 +786,19 @@ class DualLocalSemanticReviewer:
         if (
             type(rubric) is not dict
             or set(rubric) != _RUBRIC_FIELDS
-            or any(value is not None and type(value) is not bool for value in rubric.values())
+            or any(
+                value is not None and type(value) is not bool
+                for value in rubric.values()
+            )
         ):
             raise ValueError("local reviewer decision rubric is invalid")
-        if choice_value == "keep" and any(value is not True for value in rubric.values()):
+        if choice_value == "keep" and any(
+            value is not True for value in rubric.values()
+        ):
             raise ValueError("local reviewer keep decision conflicts with rubric")
-        if choice_value == "reject" and not any(value is False for value in rubric.values()):
+        if choice_value == "reject" and not any(
+            value is False for value in rubric.values()
+        ):
             raise ValueError("local reviewer reject decision conflicts with rubric")
         if choice_value == "uncertain" and (
             any(value is False for value in rubric.values())
@@ -777,6 +847,29 @@ class DualLocalSemanticReviewer:
             handle.write(f"{_canonical(entry)}\n".encode())
             handle.flush()
             os.fsync(handle.fileno())
+
+    def _persist_invalid_response(
+        self,
+        raw: bytes,
+        *,
+        failure_type: str,
+    ) -> tuple[str, str]:
+        evidence = {
+            "schema_version": "bosscrafts-local-semantic-invalid-response-v1",
+            "failure_type": failure_type,
+            "raw_response_sha256": _sha256_bytes(raw),
+            "raw_response_base64": base64.b64encode(raw).decode("ascii"),
+        }
+        response_bytes = f"{_canonical(evidence)}\n".encode()
+        response_sha256 = _sha256_bytes(response_bytes)
+        response_relative = f"responses/{response_sha256}.json"
+        response_path = self.output_root / response_relative
+        if response_path.exists():
+            if response_path.read_bytes() != response_bytes:
+                raise ValueError("existing invalid response artifact SHA-256 mismatch")
+        else:
+            _atomic_write(response_path, response_bytes)
+        return response_sha256, response_relative
 
     def _append_failure(
         self,
@@ -858,7 +951,12 @@ class DualLocalSemanticReviewer:
                 or entry.get("base_url") != reviewer.base_url
                 or entry.get("expected_model") != reviewer.model
                 or entry.get("failure_type")
-                not in {"invalid_response", "request_failed"}
+                not in {
+                    "invalid_json",
+                    "invalid_response",
+                    "request_failed",
+                    "response_too_large",
+                }
             ):
                 raise ValueError("review failure lineage mismatch")
             request_kind = entry.get("request_kind", "initial")
@@ -902,13 +1000,19 @@ class DualLocalSemanticReviewer:
                     or candidate.parent != Path("responses")
                     or candidate.name != f"{response_sha256}.json"
                 ):
-                    raise ValueError("review failure response path escapes its directory")
+                    raise ValueError(
+                        "review failure response path escapes its directory"
+                    )
                 try:
                     response_bytes = (self.output_root / candidate).read_bytes()
                 except OSError as exc:
-                    raise ValueError("review failure response artifact is missing") from exc
+                    raise ValueError(
+                        "review failure response artifact is missing"
+                    ) from exc
                 if _sha256_bytes(response_bytes) != response_sha256:
-                    raise ValueError("review failure response artifact SHA-256 mismatch")
+                    raise ValueError(
+                        "review failure response artifact SHA-256 mismatch"
+                    )
             verified.append(entry)
             verified_by_sha[str(entry["failure_sha256"])] = entry
         return tuple(verified)
@@ -991,14 +1095,18 @@ class DualLocalSemanticReviewer:
                 proposed.append(
                     {
                         "review_id": review_id,
-                        "proposed_decision": "keep" if status == "agree_keep" else "reject",
+                        "proposed_decision": "keep"
+                        if status == "agree_keep"
+                        else "reject",
                         "reviewer_entry_sha256": row["reviewer_entry_sha256"],
                     }
                 )
         consensus_text = "".join(f"{_canonical(row)}\n" for row in consensus)
         manual_text = "".join(f"{_canonical(row)}\n" for row in manual)
         proposed_text = "".join(f"{_canonical(row)}\n" for row in proposed)
-        _atomic_write(self.output_root / "consensus.jsonl", consensus_text.encode("utf-8"))
+        _atomic_write(
+            self.output_root / "consensus.jsonl", consensus_text.encode("utf-8")
+        )
         _atomic_write(
             self.output_root / "manual_review_queue.jsonl", manual_text.encode("utf-8")
         )

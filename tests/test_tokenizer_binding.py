@@ -1,10 +1,10 @@
 import io
 import json
-from dataclasses import replace
-from pathlib import Path
 import shutil
 import tempfile
 import unittest
+from dataclasses import replace
+from pathlib import Path
 from unittest.mock import patch
 
 import torch
@@ -17,7 +17,6 @@ from bosscrafts_model.tokenizer import (
     bound_native_65k_config,
     validate_contiguous_vocab,
 )
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BUNDLE = PROJECT_ROOT / "artifacts" / "tokenizers" / "bcnlt-native-foundation-65536-v1"
@@ -83,6 +82,29 @@ class NativeTokenizerBindingTests(unittest.TestCase):
         with patch("bosscrafts_model.tokenizer.tokenizers.__version__", "0.24.0"):
             with self.assertRaisesRegex(ValueError, "tokenizers runtime mismatch"):
                 NativeTokenizerBinding.load(BUNDLE)
+
+    def test_load_revalidates_the_complete_owned_runtime(self):
+        with patch(
+            "bosscrafts_model.tokenizer._verify_owned_tokenizers_runtime",
+            side_effect=ValueError("owned runtime changed after import"),
+        ):
+            with self.assertRaisesRegex(ValueError, "changed after import"):
+                NativeTokenizerBinding.load(BUNDLE)
+
+    def test_unexpected_bundle_entries_fail_closed(self):
+        with tempfile.TemporaryDirectory(dir=PROJECT_ROOT) as directory:
+            copied = Path(directory) / "bundle"
+            shutil.copytree(BUNDLE, copied)
+            (copied / "untracked.txt").write_text("not part of the binding", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "bundle inventory mismatch"):
+                NativeTokenizerBinding.load(copied)
+
+        with tempfile.TemporaryDirectory(dir=PROJECT_ROOT) as directory:
+            copied = Path(directory) / "bundle"
+            shutil.copytree(BUNDLE, copied)
+            (copied / "untracked-directory").mkdir()
+            with self.assertRaisesRegex(ValueError, "bundle inventory mismatch"):
+                NativeTokenizerBinding.load(copied)
 
     def test_corruption_and_manifest_mismatch_fail_closed(self):
         with tempfile.TemporaryDirectory(dir=PROJECT_ROOT) as directory:

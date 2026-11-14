@@ -4,12 +4,13 @@ import hashlib
 import importlib
 import importlib.util
 import json
-from pathlib import Path
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from bosscrafts_model.bcnlt_source_pipeline import BCNLTSourcePipeline
 from bosscrafts_model.current_corpus import SourceCandidate
@@ -182,6 +183,47 @@ class ResumableTaskPackingTests(unittest.TestCase):
                 self.assertTrue(
                     all(0 <= token_id < self.binding.vocab_size for token_id in row["input_ids"])
                 )
+            victim = rows[0]
+            hardening = sqlite3.connect(tasks_path)
+            try:
+                hardening.execute(
+                    "UPDATE tasks SET token_count=? WHERE example_id=?",
+                    (10**9, victim["example_id"]),
+                )
+                hardening.commit()
+            finally:
+                hardening.close()
+            with patch.object(
+                module,
+                "decompress_bounded",
+                side_effect=AssertionError("oversized row reached decompression"),
+            ):
+                with self.assertRaisesRegex(ValueError, "token count"):
+                    module.audit_task_database(self.binding, tasks_path)
+            hardening = sqlite3.connect(tasks_path)
+            try:
+                hardening.execute(
+                    "UPDATE tasks SET token_count=? WHERE example_id=?",
+                    (len(victim["input_ids"]), victim["example_id"]),
+                )
+                hardening.execute(
+                    "UPDATE tasks SET split='untrusted' WHERE example_id=?",
+                    (victim["example_id"],),
+                )
+                hardening.commit()
+            finally:
+                hardening.close()
+            with self.assertRaisesRegex(ValueError, "split"):
+                dataset_type(self.binding, tasks_path)
+            hardening = sqlite3.connect(tasks_path)
+            try:
+                hardening.execute(
+                    "UPDATE tasks SET split=? WHERE example_id=?",
+                    (victim["split"], victim["example_id"]),
+                )
+                hardening.commit()
+            finally:
+                hardening.close()
             try:
                 remaining = list(
                     dataset.iter_examples(after_example_id=rows[0]["example_id"])
@@ -564,6 +606,146 @@ class ResumableTaskPackingTests(unittest.TestCase):
                 metadata["audited_source_eligibility_manifest_sha256"],
                 manifest_sha,
             )
+            dataset = module.ResumableTaskDataset(self.binding, tasks_path)
+            evaluation_rows = list(dataset.iter_examples(split="validation"))
+            self.assertGreaterEqual(len(evaluation_rows), 2)
+            requested_ids = [
+                str(evaluation_rows[-1]["example_id"]),
+                str(evaluation_rows[0]["example_id"]),
+            ]
+            selected_rows = list(
+                dataset.iter_examples_by_id(
+                    requested_ids,
+                    split="validation",
+                )
+            )
+            self.assertEqual(
+                [row["example_id"] for row in selected_rows],
+                requested_ids,
+            )
+            frozen_evaluation = importlib.import_module(
+                "bosscrafts_model.frozen_evaluation"
+            )
+            acceptance = importlib.import_module("bosscrafts_model.model_acceptance")
+            cells: dict[str, list[str]] = {}
+            for row in evaluation_rows:
+                cell = f'{row["language"]}|{row["family"]}'
+                cells.setdefault(cell, []).append(str(row["example_id"]))
+            frozen_cells = {
+                cell: tuple(sorted(example_ids))
+                for cell, example_ids in cells.items()
+            }
+            selected_cells = dataset.select_frozen_example_ids_by_cell(
+                split="validation",
+                expected_cells={cell: 1 for cell in frozen_cells},
+            )
+            self.assertEqual(set(selected_cells), set(frozen_cells))
+            self.assertTrue(
+                all(len(example_ids) == 1 for example_ids in selected_cells.values())
+            )
+            self.assertEqual(
+                selected_cells,
+                dataset.select_frozen_example_ids_by_cell(
+                    split="validation",
+                    expected_cells={cell: 1 for cell in frozen_cells},
+                ),
+            )
+            with self.assertRaisesRegex(ValueError, "complete"):
+                dataset.select_frozen_example_ids_by_cell(
+                    split="validation",
+                    expected_cells={next(iter(frozen_cells)): 10_000},
+                )
+            suite = acceptance.GroundedHeldoutSuite(
+                manifest_sha256="a" * 64,
+                task_database_identity_sha256="b" * 64,
+                evaluation_task_database_identities_sha256={
+                    "validation": "c" * 64,
+                    "test": "d" * 64,
+                },
+                evaluation_example_ids={
+                    "validation": frozen_cells,
+                    "test": {},
+                },
+                evaluation_example_ids_sha256={"validation": {}, "test": {}},
+                category_example_ids={},
+                category_example_ids_sha256={},
+                category_example_counts={},
+            )
+            frozen_rows = list(
+                frozen_evaluation.iter_frozen_evaluation_examples(
+                    dataset,
+                    suite,
+                    split="validation",
+                )
+            )
+            expected_frozen_ids = [
+                example_id
+                for cell in sorted(frozen_cells)
+                for example_id in frozen_cells[cell]
+            ]
+            self.assertEqual(
+                [row["example_id"] for row in frozen_rows],
+                expected_frozen_ids,
+            )
+            first_cell = next(iter(sorted(frozen_cells)))
+            wrong_cell = f'rust|{first_cell.split("|", 1)[1]}'
+            if wrong_cell == first_cell:
+                wrong_cell = f'go|{first_cell.split("|", 1)[1]}'
+            forged_suite = acceptance.GroundedHeldoutSuite(
+                manifest_sha256=suite.manifest_sha256,
+                task_database_identity_sha256=suite.task_database_identity_sha256,
+                evaluation_task_database_identities_sha256=(
+                    suite.evaluation_task_database_identities_sha256
+                ),
+                evaluation_example_ids={
+                    "validation": {
+                        **frozen_cells,
+                        wrong_cell: frozen_cells[first_cell],
+                        first_cell: (),
+                    },
+                    "test": {},
+                },
+                evaluation_example_ids_sha256=suite.evaluation_example_ids_sha256,
+                category_example_ids=suite.category_example_ids,
+                category_example_ids_sha256=suite.category_example_ids_sha256,
+                category_example_counts=suite.category_example_counts,
+            )
+            with self.assertRaisesRegex(ValueError, "cell"):
+                list(
+                    frozen_evaluation.iter_frozen_evaluation_examples(
+                        dataset,
+                        forged_suite,
+                        split="validation",
+                    )
+                )
+            with self.assertRaisesRegex(ValueError, "duplicate"):
+                list(
+                    dataset.iter_examples_by_id(
+                        [requested_ids[0], requested_ids[0]],
+                        split="validation",
+                    )
+                )
+            with self.assertRaisesRegex(ValueError, "lowercase SHA-256"):
+                list(
+                    dataset.iter_examples_by_id(
+                        ["not-an-example-id"],
+                        split="validation",
+                    )
+                )
+            missing_id = next(
+                candidate
+                for candidate in ("e" * 64, "f" * 64)
+                if candidate not in requested_ids
+            )
+            with self.assertRaisesRegex(ValueError, "missing"):
+                list(
+                    dataset.iter_examples_by_id(
+                        [missing_id],
+                        split="validation",
+                    )
+                )
+            with self.assertRaisesRegex(ValueError, "split"):
+                list(dataset.iter_examples_by_id(requested_ids, split="test"))
 
 
 if __name__ == "__main__":

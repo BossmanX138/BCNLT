@@ -1,12 +1,11 @@
 """Inference prompts that exactly mirror the frozen BCNLT training protocol."""
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Iterable, Sequence
 
 from .bcnlt_source_pipeline import _NativeSemanticStreamCodec
 from .tokenizer import NativeTokenizerBinding
-
 
 INFERENCE_TASKS = (
     "raw",
@@ -26,7 +25,7 @@ class HeldoutInferenceCase:
 
 
 def select_heldout_inference_case(
-    examples: Iterable[dict[str, object]],
+    examples: Iterable[Mapping[str, object]],
     *,
     family: str,
     max_new_tokens: int,
@@ -40,8 +39,6 @@ def select_heldout_inference_case(
     if type(maximum_sequence) is not int or maximum_sequence < 2:
         raise ValueError("maximum_sequence must be at least two")
     for example in examples:
-        if type(example) is not dict:
-            raise TypeError("held-out examples must be dictionaries")
         if example.get("family") != family:
             continue
         example_id = example.get("example_id")

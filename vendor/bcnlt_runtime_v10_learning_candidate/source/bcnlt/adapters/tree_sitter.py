@@ -167,7 +167,7 @@ class TreeSitterSemanticEngine:
             # lexical name. Never infer names for callbacks, properties, or
             # destructuring: those require a separate alias-analysis contract.
             if (name == "name" and document.language in {"javascript", "typescript"}
-                    and str(node.type) == "arrow_function"
+                    and str(node.type) in {"arrow_function", "function_expression"}
                     and node.child_by_field_name("name") is None):
                 parent = getattr(node, "parent", None)
                 if parent is not None and str(parent.type) == "variable_declarator":
@@ -404,7 +404,9 @@ class TreeSitterSemanticEngine:
             if key in pattern_owned_nodes:
                 return
 
-            candidate_role_rules = role_rules.get(str(node.type), ())
+            candidate_role_rules = (
+                role_rules.get(str(node.type), ()) if is_named else ()
+            )
             parent = getattr(node, "parent", None)
             parent_type = str(parent.type) if parent is not None else None
             contextual_role_rules = tuple(
@@ -417,7 +419,7 @@ class TreeSitterSemanticEngine:
             prewalked_child_keys: set[tuple[int, int, str]] = set()
             js_pattern_definition = False
 
-            if document.language in {"javascript", "typescript"}:
+            if is_named and document.language in {"javascript", "typescript"}:
                 node_type = str(node.type)
                 if node_type in {"import_clause", "named_imports"}:
                     mapped_nodes.add(key)
@@ -595,7 +597,7 @@ class TreeSitterSemanticEngine:
                 else:
                     raise ValueError(f"Unsupported identifier role: {role_rule.role}")
 
-            rules = node_rules.get(str(node.type), ())
+            rules = node_rules.get(str(node.type), ()) if is_named else ()
             matching_rules: list[tuple[NodeRule, Any | None, str]] = []
             for rule in rules:
                 if go_short and rule.event == "DEFINE":
@@ -697,7 +699,9 @@ class TreeSitterSemanticEngine:
                 )
 
             active_scope: ScopeRule | None = None
-            rules_for_scope = scope_rules.get(str(node.type), ())
+            rules_for_scope = (
+                scope_rules.get(str(node.type), ()) if is_named else ()
+            )
             if (document.language == "go" and str(node.type) == "block"
                     and parent_type in {"function_declaration", "method_declaration", "func_literal"}):
                 # Parameters and the outer function body share one Go scope.
@@ -772,7 +776,7 @@ class TreeSitterSemanticEngine:
                 if body is not None and str(body.type) != "statement_block":
                     emit(surface=text(body), event="RETURN", unit_span=span(body),
                          relation="arrow_function.implicit_return",
-                         ir=self._core.extension("javascript.arrow_return", {"syntactic_body": True}))
+                         ir=self._core.return_value())
 
             # Rust function tails return their final expression without a
             # `return` keyword. Only a direct function-body tail qualifies;
@@ -793,7 +797,7 @@ class TreeSitterSemanticEngine:
                                  or str(tail.type) in {"identifier", "block", "self"})):
                         emit(surface=text(tail), event="RETURN", unit_span=span(tail),
                              relation="function_item.implicit_tail",
-                             ir=self._core.extension("rust.implicit_return", {"syntactic_tail": True}))
+                             ir=self._core.return_value())
 
             for child in node.children:
                 if go_right is not None and node_key(child) == node_key(go_right):

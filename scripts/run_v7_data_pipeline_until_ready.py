@@ -5,13 +5,12 @@ import argparse
 import ctypes
 import json
 import os
-from pathlib import Path
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
-
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -22,7 +21,6 @@ from bosscrafts_model.resumable_task_packing import (  # noqa: E402
     audit_task_database,
 )
 from bosscrafts_model.tokenizer import NativeTokenizerBinding  # noqa: E402
-
 
 ADMISSION = (
     PROJECT_ROOT
@@ -126,7 +124,7 @@ def _admission_status() -> dict[str, object]:
 def _process_is_active(process_id: int) -> bool:
     if os.name != "nt":
         raise RuntimeError("the V7 pipeline controller currently requires Windows")
-    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+    kernel32 = ctypes.windll.kernel32
     handle = kernel32.OpenProcess(
         PROCESS_QUERY_LIMITED_INFORMATION, False, process_id
     )

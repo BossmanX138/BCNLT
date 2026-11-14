@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from pathlib import Path
 import sys
 import tempfile
 import unittest
+from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from runtime_import import select_bcnlt_runtime
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_SOURCE = (
@@ -18,6 +19,7 @@ RUNTIME_SOURCE = (
 )
 select_bcnlt_runtime(RUNTIME_SOURCE)
 
+from bcnlt.core import ContextualUnit
 from bcnlt.scientific_learning import (
     CodingExperimentFixture,
     HypothesisProjection,
@@ -25,8 +27,8 @@ from bcnlt.scientific_learning import (
     ScientificExperimentEvidence,
     VerificationStatus,
 )
-from bcnlt.core import ContextualUnit
 from bcnlt.wildcard import DefinitionState, ProvisionalMeaning, WildcardMemory
+
 from bosscrafts_model.scientific_sandbox import DockerScientificSandbox
 
 
@@ -54,6 +56,7 @@ class SandboxScientificLearningTests(unittest.TestCase):
             evidence_kinds=("grammar_structure",),
         )
 
+    @pytest.mark.requires_docker
     def test_passed_evidence_requires_real_execution_and_negative_control(self) -> None:
         fixture = CodingExperimentFixture(
             experiment_id="sandbox-addition-1",
@@ -159,6 +162,7 @@ class SandboxScientificLearningTests(unittest.TestCase):
                 negative_control=control,
             )
 
+    @pytest.mark.requires_docker
     def test_two_sandbox_reproductions_promote_and_reload_attested_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             ledger = Path(directory) / "wildcard.jsonl"

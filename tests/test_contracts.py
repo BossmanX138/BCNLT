@@ -1,7 +1,9 @@
 import unittest
 from dataclasses import FrozenInstanceError
+
 from bosscrafts_model.config import ModelConfig
 from bosscrafts_model.evidence import EvidenceLedger
+
 
 class ContractTests(unittest.TestCase):
     def test_parameter_budget(self):

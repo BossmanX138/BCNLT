@@ -4,12 +4,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
 import sqlite3
 import sys
 import time
 import unicodedata
-
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_ROOT = PROJECT_ROOT / "vendor" / "bcnlt_runtime_v6_candidate"
@@ -21,7 +20,6 @@ from bcnlt.adapters import BCNLTMultilingualAdapter, LanguageCarousel  # noqa: E
 from bcnlt.adapters.tree_sitter import TreeSitterSemanticEngine  # noqa: E402
 from bcnlt.canonical import canonical_record_bytes  # noqa: E402
 from bcnlt.semantic_record import records_from_assessments  # noqa: E402
-
 
 DEFAULT_CATALOG = (
     PROJECT_ROOT

@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+language: en-US
+
+reviews:
+  profile: assertive
+  high_level_summary: true
+  review_status: true
+  commit_status: true
+  request_changes_workflow: false
+
+  auto_review:
+    enabled: true
+    drafts: true
+    auto_incremental_review: true
+    base_branches:
+      - v10-main
+
+  # Review owned source and tests. Generated evidence, frozen runtime payloads,
+  # and imported snapshots are verified by hashes and local regressions instead.
+  path_filters:
+    - "!artifacts/**"
+    - "!vendor/**"
+    - "!imports/**"
+
+  path_instructions:
+    - path: "bosscrafts_model/**/*.py"
+      instructions: >-
+        Prioritize correctness, fail-closed evidence lineage, bounded resource
+        handling, deterministic receipts, and train/evaluation data separation.
+    - path: "scripts/**/*.py"
+      instructions: >-
+        Check that orchestration stops on incomplete evidence or failed gates and
+        cannot silently proceed to model training.
+    - path: "tests/**/*.py"
+      instructions: >-
+        Check that adversarial tests exercise tampering, incomplete inventories,
+        lineage mismatches, and fail-closed behavior rather than only happy paths.
