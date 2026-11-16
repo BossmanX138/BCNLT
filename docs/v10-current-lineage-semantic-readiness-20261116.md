@@ -64,8 +64,12 @@ Evidence roots:
    `compact_v2` semantic wire and 2,048-token sequence bound.
 2. Audit every packed example and its loss-mask boundary across all three task
    databases.
-3. Rebuild the mixed semantic and reviewed-instruction curriculum from the
-   current task identities rather than reusing an older packed database.
+3. Build a train-only, split-safe semantic and reviewed-instruction curriculum
+   from the current training-task identity. Copy only reviewed instruction
+   `train` rows; retain semantic validation/test databases and reviewed
+   instruction validation/test rows as held-out artifacts with separate
+   identities. Do not recombine held-out rows into the training database or
+   reuse an older packed database.
 4. Produce genuine adversarial calibration qualification plus a disjoint
    natural zero-error sample; no synthetic or fabricated reject labels may be
    substituted.

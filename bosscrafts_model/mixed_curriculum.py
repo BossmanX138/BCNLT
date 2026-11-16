@@ -10,6 +10,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from .bcnlt_source_pipeline import CURRENT_RUNTIME_SPEC_SHA256
 from .current_task_packing import FAMILIES
 from .resumable_task_packing import (
     CELL_WEIGHT_MULTIPLIERS_METADATA_KEY,
@@ -27,6 +28,9 @@ from .reviewed_instruction_curriculum import (
 from .tokenizer import NativeTokenizerBinding
 
 MIXED_CURRICULUM_SCHEMA = "bosscrafts-semantic-reviewed-instruction-mix-v1"
+SPLIT_SAFE_MIXED_TRAINING_SCHEMA = (
+    "bosscrafts-split-safe-semantic-reviewed-instruction-train-mix-v1"
+)
 _SPLITS = ("train", "validation", "test")
 
 
@@ -41,6 +45,20 @@ class MixedCurriculumResult:
     instruction_example_count: int
     split_counts: dict[str, int]
     family_counts: dict[str, int]
+    instruction_training_weight_fraction: float
+
+
+@dataclass(frozen=True, slots=True)
+class SplitSafeMixedTrainingResult:
+    database_path: Path
+    database_identity_sha256: str
+    content_sha256: str
+    policy_sha256: str
+    example_count: int
+    semantic_example_count: int
+    instruction_train_example_count: int
+    excluded_instruction_validation_example_count: int
+    excluded_instruction_test_example_count: int
     instruction_training_weight_fraction: float
 
 
@@ -137,6 +155,41 @@ def _validate_sources(
     ):
         raise ValueError("reviewed instruction curriculum cells are invalid")
     return len(semantic_train_cells)
+
+
+def _validate_split_safe_sources(
+    semantic_cells: dict[tuple[str, str, str], int],
+    instruction_cells: dict[tuple[str, str, str], int],
+) -> tuple[int, int, int, int]:
+    expected_semantic = {
+        ("train", language, family)
+        for language in CURRENT_RUNTIME_SPEC_SHA256
+        for family in FAMILIES
+    }
+    if set(semantic_cells) != expected_semantic or any(
+        count < 1 for count in semantic_cells.values()
+    ):
+        raise ValueError(
+            "split-safe semantic curriculum must contain only complete train cells"
+        )
+    expected_instruction = {
+        (split, INSTRUCTION_LANGUAGE, INSTRUCTION_RESPONSE_FAMILY)
+        for split in _SPLITS
+    }
+    if set(instruction_cells) != expected_instruction or any(
+        count < 1 for count in instruction_cells.values()
+    ):
+        raise ValueError(
+            "split-safe reviewed instruction curriculum cells are invalid"
+        )
+    return (
+        len(expected_semantic),
+        instruction_cells[("train", INSTRUCTION_LANGUAGE, INSTRUCTION_RESPONSE_FAMILY)],
+        instruction_cells[
+            ("validation", INSTRUCTION_LANGUAGE, INSTRUCTION_RESPONSE_FAMILY)
+        ],
+        instruction_cells[("test", INSTRUCTION_LANGUAGE, INSTRUCTION_RESPONSE_FAMILY)],
+    )
 
 
 def build_mixed_curriculum(
@@ -360,5 +413,277 @@ def build_mixed_curriculum(
         instruction_example_count=instruction_audit.example_count,
         split_counts=mixed_audit.split_counts,
         family_counts=mixed_audit.family_counts,
+        instruction_training_weight_fraction=observed_fraction,
+    )
+
+
+def build_split_safe_mixed_training_curriculum(
+    binding: NativeTokenizerBinding,
+    *,
+    semantic_train_database: str | Path,
+    instruction_database: str | Path,
+    output_database: str | Path,
+    expected_semantic_train_identity_sha256: str,
+    expected_instruction_identity_sha256: str,
+    instruction_training_weight_fraction: float = 0.5,
+) -> SplitSafeMixedTrainingResult:
+    """Mix only training rows while retaining held-out source lineage."""
+    if type(binding) is not NativeTokenizerBinding:
+        raise TypeError("binding must be a verified NativeTokenizerBinding")
+    if not _is_sha256(expected_semantic_train_identity_sha256) or not _is_sha256(
+        expected_instruction_identity_sha256
+    ):
+        raise ValueError("split-safe mixed curriculum expected identity is invalid")
+    if (
+        type(instruction_training_weight_fraction) is not float
+        or not math.isfinite(instruction_training_weight_fraction)
+        or not 0.05 <= instruction_training_weight_fraction <= 0.95
+    ):
+        raise ValueError("instruction training weight fraction must be 0.05 through 0.95")
+    semantic_path = Path(semantic_train_database).resolve()
+    instruction_path = Path(instruction_database).resolve()
+    destination = Path(output_database).resolve()
+    if destination.exists():
+        raise ValueError("split-safe mixed curriculum output already exists")
+    if not semantic_path.is_file() or not instruction_path.is_file():
+        raise ValueError("split-safe mixed curriculum source database does not exist")
+
+    semantic_audit = audit_task_database(binding, semantic_path)
+    instruction_audit = audit_task_database(binding, instruction_path)
+    if (
+        semantic_audit.database_identity_sha256
+        != expected_semantic_train_identity_sha256
+        or instruction_audit.database_identity_sha256
+        != expected_instruction_identity_sha256
+    ):
+        raise ValueError("split-safe mixed curriculum source identity mismatch")
+    if set(semantic_audit.split_counts) != {"train"} or set(
+        instruction_audit.split_counts
+    ) != set(_SPLITS):
+        raise ValueError("split-safe mixed curriculum source split contract is invalid")
+
+    semantic_metadata = _metadata(semantic_path)
+    instruction_metadata = _metadata(instruction_path)
+    if (
+        semantic_metadata.get("schema_version") != TASK_DATABASE_SCHEMA
+        or instruction_metadata.get("schema_version") != TASK_DATABASE_SCHEMA
+        or semantic_metadata.get("packing_complete") != "true"
+        or instruction_metadata.get("packing_complete") != "true"
+        or semantic_metadata.get("binding_sha256") != binding.binding_sha256
+        or instruction_metadata.get("binding_sha256") != binding.binding_sha256
+    ):
+        raise ValueError("split-safe mixed curriculum source metadata is invalid")
+    try:
+        maximum_sequence = max(
+            int(semantic_metadata["maximum_sequence_tokens"]),
+            int(instruction_metadata["maximum_sequence_tokens"]),
+        )
+    except (KeyError, ValueError) as error:
+        raise ValueError(
+            "split-safe mixed curriculum maximum sequence metadata is invalid"
+        ) from error
+
+    semantic_cells = _cell_counts(semantic_path)
+    instruction_cells = _cell_counts(instruction_path)
+    (
+        semantic_train_cell_count,
+        instruction_train_count,
+        excluded_instruction_validation_count,
+        excluded_instruction_test_count,
+    ) = _validate_split_safe_sources(semantic_cells, instruction_cells)
+    multiplier = (
+        semantic_train_cell_count
+        * instruction_training_weight_fraction
+        / (1.0 - instruction_training_weight_fraction)
+    )
+    multiplier_key = (
+        f"train|{INSTRUCTION_LANGUAGE}|{INSTRUCTION_RESPONSE_FAMILY}"
+    )
+    multipliers = {multiplier_key: multiplier}
+    policy = {
+        "schema_version": SPLIT_SAFE_MIXED_TRAINING_SCHEMA,
+        "semantic_train_source_database_identity_sha256": (
+            semantic_audit.database_identity_sha256
+        ),
+        "instruction_source_database_identity_sha256": (
+            instruction_audit.database_identity_sha256
+        ),
+        "row_policy": (
+            "copy every semantic train row and only reviewed instruction train rows "
+            "without token modification"
+        ),
+        "example_id_policy": SALTED_SOURCE_EXAMPLE_ID_POLICY,
+        "heldout_policy": (
+            "exclude semantic validation/test databases and reviewed instruction "
+            "validation/test rows from the training artifact"
+        ),
+        "excluded_instruction_validation_example_count": (
+            excluded_instruction_validation_count
+        ),
+        "excluded_instruction_test_example_count": excluded_instruction_test_count,
+        "instruction_training_weight_fraction": instruction_training_weight_fraction,
+        "semantic_training_cell_count": semantic_train_cell_count,
+        "training_cell_weight_multipliers": multipliers,
+    }
+    policy_sha256 = hashlib.sha256(
+        _canonical_json(policy).encode("utf-8")
+    ).hexdigest()
+    output_metadata = dict(semantic_metadata)
+    output_metadata.update(
+        {
+            "curriculum_schema_version": SPLIT_SAFE_MIXED_TRAINING_SCHEMA,
+            "curriculum_policy_sha256": policy_sha256,
+            "curriculum_source_split": "train",
+            "semantic_train_source_database_identity_sha256": (
+                semantic_audit.database_identity_sha256
+            ),
+            "instruction_source_database_identity_sha256": (
+                instruction_audit.database_identity_sha256
+            ),
+            "instruction_source_train_example_count": str(instruction_train_count),
+            "excluded_instruction_validation_example_count": str(
+                excluded_instruction_validation_count
+            ),
+            "excluded_instruction_test_example_count": str(
+                excluded_instruction_test_count
+            ),
+            "instruction_training_weight_fraction": repr(
+                instruction_training_weight_fraction
+            ),
+            CELL_WEIGHT_MULTIPLIERS_METADATA_KEY: _canonical_json(multipliers),
+            "training_example_id_policy": SALTED_SOURCE_EXAMPLE_ID_POLICY,
+            "maximum_sequence_tokens": str(maximum_sequence),
+            "packing_complete": "true",
+        }
+    )
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, raw_temporary = tempfile.mkstemp(
+        dir=destination.parent,
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+    )
+    os.close(descriptor)
+    temporary = Path(raw_temporary)
+    try:
+        output = sqlite3.connect(temporary)
+        try:
+            output.create_function(
+                "salt_source_id", 2, salted_source_example_id, deterministic=True
+            )
+            output.execute("PRAGMA journal_mode=DELETE")
+            output.execute("PRAGMA synchronous=FULL")
+            output.execute(
+                "CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)"
+            )
+            output.execute(
+                """CREATE TABLE tasks(
+                       example_id TEXT PRIMARY KEY,document_id TEXT NOT NULL,
+                       language TEXT NOT NULL,family TEXT NOT NULL,
+                       record_index INTEGER NOT NULL,split TEXT NOT NULL,
+                       input_ids_zlib BLOB NOT NULL,token_count INTEGER NOT NULL,
+                       loss_start_index INTEGER NOT NULL,
+                       semantic_spec_sha256 TEXT NOT NULL,
+                       parser_runtime_identity_sha256 TEXT NOT NULL,
+                       source_sha256 TEXT NOT NULL)"""
+            )
+            output.execute(
+                """CREATE TABLE source_example_identity(
+                       example_id TEXT PRIMARY KEY,source_example_id TEXT NOT NULL,
+                       source_kind TEXT NOT NULL CHECK(source_kind IN ('replay','instruction')),
+                       UNIQUE(source_kind,source_example_id))"""
+            )
+            output.execute("ATTACH DATABASE ? AS semantic", (str(semantic_path),))
+            output.execute(
+                "ATTACH DATABASE ? AS instruction", (str(instruction_path),)
+            )
+            for schema, kind in (("semantic", "replay"), ("instruction", "instruction")):
+                output.execute(
+                    f"""INSERT INTO tasks
+                        SELECT salt_source_id(?,example_id),document_id,language,family,
+                               record_index,split,input_ids_zlib,token_count,
+                               loss_start_index,semantic_spec_sha256,
+                               parser_runtime_identity_sha256,source_sha256
+                          FROM {schema}.tasks WHERE split='train'""",
+                    (kind,),
+                )
+                output.execute(
+                    f"""INSERT INTO source_example_identity
+                        SELECT salt_source_id(?,example_id),example_id,?
+                          FROM {schema}.tasks WHERE split='train'""",
+                    (kind, kind),
+                )
+            output.execute("CREATE INDEX tasks_cell ON tasks(split,language,family)")
+            map_sha256 = _source_identity_map_sha256(output)
+            output_metadata["source_example_identity_map_sha256"] = map_sha256
+            output.executemany(
+                "INSERT INTO metadata VALUES(?,?)", sorted(output_metadata.items())
+            )
+            output.commit()
+        finally:
+            output.close()
+
+        mixed_audit = audit_task_database(binding, temporary)
+        expected_examples = semantic_audit.example_count + instruction_train_count
+        if (
+            mixed_audit.example_count != expected_examples
+            or mixed_audit.split_counts != {"train": expected_examples}
+        ):
+            raise ValueError("split-safe mixed curriculum example count mismatch")
+        dataset = ResumableTaskDataset(binding, temporary)
+        cell_weight_totals = dataset.cell_sampling_weight_totals(split="train")
+        instruction_weight = sum(
+            weight
+            for (_, _, family), weight in cell_weight_totals.items()
+            if family == INSTRUCTION_RESPONSE_FAMILY
+        )
+        semantic_weight = sum(cell_weight_totals.values()) - instruction_weight
+        total_weight = instruction_weight + semantic_weight
+        observed_fraction = instruction_weight / total_weight
+        if not math.isclose(
+            observed_fraction,
+            instruction_training_weight_fraction,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        ):
+            raise ValueError(
+                "split-safe mixed curriculum training weight fraction mismatch"
+            )
+        final_semantic = audit_task_database(binding, semantic_path)
+        final_instruction = audit_task_database(binding, instruction_path)
+        if (
+            final_semantic.database_identity_sha256
+            != semantic_audit.database_identity_sha256
+            or final_instruction.database_identity_sha256
+            != instruction_audit.database_identity_sha256
+        ):
+            raise ValueError("split-safe mixed curriculum source changed during build")
+        with temporary.open("r+b") as stream:
+            os.fsync(stream.fileno())
+        if destination.exists():
+            raise ValueError("split-safe mixed curriculum output already exists")
+        try:
+            os.link(temporary, destination)
+        except FileExistsError as error:
+            raise ValueError(
+                "split-safe mixed curriculum output already exists"
+            ) from error
+    except BaseException:
+        if temporary.exists():
+            temporary.unlink()
+        raise
+    temporary.unlink()
+    return SplitSafeMixedTrainingResult(
+        database_path=destination,
+        database_identity_sha256=mixed_audit.database_identity_sha256,
+        content_sha256=mixed_audit.content_sha256,
+        policy_sha256=policy_sha256,
+        example_count=mixed_audit.example_count,
+        semantic_example_count=semantic_audit.example_count,
+        instruction_train_example_count=instruction_train_count,
+        excluded_instruction_validation_example_count=(
+            excluded_instruction_validation_count
+        ),
+        excluded_instruction_test_example_count=excluded_instruction_test_count,
         instruction_training_weight_fraction=observed_fraction,
     )

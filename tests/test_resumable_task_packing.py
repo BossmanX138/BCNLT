@@ -292,6 +292,14 @@ class ResumableTaskPackingTests(unittest.TestCase):
                 2.0 * weighted_totals[comparison_cell],
                 places=10,
             )
+            self.assertEqual(
+                set(weighted_dataset.cell_sampling_weight_totals(split=weighted_split)),
+                set(weighted_cells),
+            )
+            for cell, total in weighted_dataset.cell_sampling_weight_totals(
+                split=weighted_split
+            ).items():
+                self.assertAlmostEqual(total, weighted_totals[cell], places=10)
             audit_task_database = getattr(module, "audit_task_database", None)
             self.assertIsNotNone(
                 audit_task_database,

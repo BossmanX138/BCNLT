@@ -241,12 +241,14 @@ class ResumableTaskDataset:
             )
 
         self._weights: dict[tuple[str, str, str], float] = {}
+        self._cell_counts: dict[tuple[str, str, str], int] = {}
         self._split_counts: Counter[str] = Counter()
         for split_rows in by_split.values():
             mean_count = sum(row[3] for row in split_rows) / len(split_rows)
             unnormalized: dict[tuple[str, str, str], float] = {}
             for split, language, family, count in split_rows:
                 cell = (split, language, family)
+                self._cell_counts[cell] = count
                 unnormalized[cell] = mean_count / count * multipliers.get(cell, 1.0)
                 self._split_counts[split] += count
             total_examples = sum(row[3] for row in split_rows)
@@ -264,6 +266,18 @@ class ResumableTaskDataset:
         if split is None:
             return sum(self._split_counts.values())
         return self._split_counts[split]
+
+    def cell_sampling_weight_totals(
+        self, *, split: str | None = None
+    ) -> dict[tuple[str, str, str], float]:
+        """Return exact per-cell aggregate weights without decoding task rows."""
+        if split is not None and split not in {"train", "validation", "test"}:
+            raise ValueError("split must be train, validation, test or None")
+        return {
+            cell: self._weights[cell] * count
+            for cell, count in self._cell_counts.items()
+            if split is None or cell[0] == split
+        }
 
     def iter_examples(
         self,
