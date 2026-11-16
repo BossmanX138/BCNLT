@@ -848,6 +848,44 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
         self.assertEqual(inner_reference["defines"], definition["symbol_id"])
         self.assertIsNone(outer_reference["defines"])
 
+    def test_scope_exit_preserves_exact_dotted_or_computed_scope_name(self):
+        cases = (
+            (
+                "javascript",
+                "const symbols = {run: Symbol()};\n"
+                "class Runner { [symbols.run]() { return 1; } }\n",
+                "computed-method.js",
+                "[symbols.run]",
+            ),
+            (
+                "swift",
+                "extension Outer.Inner { func run() {} }\n",
+                "qualified-extension.swift",
+                "Outer.Inner",
+            ),
+        )
+        for language, source, path, expected_surface in cases:
+            with self.subTest(language=language):
+                prepared = self.pipeline.prepare_semantic(
+                    source,
+                    language=language,
+                    path=path,
+                )
+                records = [
+                    json.loads(line)
+                    for line in prepared.canonical_jsonl.splitlines()
+                ]
+                scope_records = [
+                    record
+                    for record in records
+                    if record["event"] in {"SCOPE_ENTER", "SCOPE_EXIT"}
+                    and record["surface"] == expected_surface
+                ]
+                self.assertEqual(
+                    [record["event"] for record in scope_records],
+                    ["SCOPE_ENTER", "SCOPE_EXIT"],
+                )
+
     def test_isolated_sidecar_roundtrips_non_ascii_source_over_utf8_transport(self):
         source = "// 背景色\nconst value = 'Grüße';\n"
         prepared = self.pipeline.prepare_semantic(

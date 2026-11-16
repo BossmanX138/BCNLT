@@ -181,6 +181,25 @@ class CurrentCorpusAdmissionTests(unittest.TestCase):
             )
             self.assertEqual(rejection["reason_code"], "invalid_source_unicode")
 
+    def test_comment_only_source_is_rejected_when_no_semantic_records_exist(self):
+        candidate = _candidate(
+            "comment-only",
+            "python",
+            "# This historical file intentionally contains no executable code.\n",
+            "comment-only.py",
+        )
+        with tempfile.TemporaryDirectory() as output_dir:
+            result = CurrentCorpusAdmission(self.pipeline).materialize(
+                (candidate,),
+                output_dir,
+            )
+            self.assertEqual(result.admitted_count, 0)
+            self.assertEqual(result.rejected_count, 1)
+            rejection = json.loads(
+                (Path(output_dir) / "rejected.jsonl").read_text(encoding="utf-8")
+            )
+            self.assertEqual(rejection["reason_code"], "no_semantic_records")
+
     def test_nonresumable_admission_fails_closed_above_pilot_limit(self):
         candidates = (
             _candidate("doc-a", "python", "a = 1\n", "a.py"),

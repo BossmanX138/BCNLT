@@ -23,7 +23,7 @@ from .bcnlt_source_pipeline import (
 from .current_corpus import CurrentCorpusAdmission, SourceCandidate
 from .tokenizer import NativeTokenizerBinding
 
-RESUMABLE_SCHEMA = "bosscrafts-current-corpus-resumable-v4"
+RESUMABLE_SCHEMA = "bosscrafts-current-corpus-resumable-v5"
 _EXECUTOR_PREFETCH_MULTIPLIER = 4
 
 
@@ -60,6 +60,7 @@ class ResumableAdmissionStatus:
 class _PreparedCandidate:
     semantic: PreparedBCNLTInput | None
     raw: PreparedBCNLTInput | None
+    rejection_code: str | None
     rejection_detail: str | None
 
 
@@ -73,6 +74,7 @@ class _CompressedPreparedCandidate:
     semantic_record_count: int
     semantic_token_count: int
     raw_token_count: int
+    rejection_code: str | None
     rejection_detail: str | None
 
 
@@ -119,7 +121,21 @@ def _prepare_candidate_in_process(
             semantic_record_count=0,
             semantic_token_count=0,
             raw_token_count=0,
+            rejection_code="semantic_preprocessing_failure",
             rejection_detail=" ".join(str(error).split())[:512],
+        )
+    if semantic.record_count == 0:
+        return _CompressedPreparedCandidate(
+            semantic_spec_sha256=None,
+            parser_runtime_identity_sha256=None,
+            canonical_sha256=None,
+            canonical_jsonl_zlib=None,
+            semantic_ids_zlib=None,
+            semantic_record_count=0,
+            semantic_token_count=0,
+            raw_token_count=0,
+            rejection_code="no_semantic_records",
+            rejection_detail="semantic extraction produced zero records",
         )
     raw = pipeline.prepare_raw(
         candidate.source,
@@ -137,6 +153,7 @@ def _prepare_candidate_in_process(
         semantic_record_count=semantic.record_count,
         semantic_token_count=len(semantic.token_ids),
         raw_token_count=len(raw.token_ids),
+        rejection_code=None,
         rejection_detail=None,
     )
 
@@ -445,7 +462,15 @@ class ResumableCurrentCorpusAdmission:
             return _PreparedCandidate(
                 semantic=None,
                 raw=None,
+                rejection_code="semantic_preprocessing_failure",
                 rejection_detail=" ".join(str(error).split())[:512],
+            )
+        if semantic.record_count == 0:
+            return _PreparedCandidate(
+                semantic=None,
+                raw=None,
+                rejection_code="no_semantic_records",
+                rejection_detail="semantic extraction produced zero records",
             )
         raw = self._pipeline.prepare_raw(
             candidate.source,
@@ -455,6 +480,7 @@ class ResumableCurrentCorpusAdmission:
         return _PreparedCandidate(
             semantic=semantic,
             raw=raw,
+            rejection_code=None,
             rejection_detail=None,
         )
 
@@ -464,11 +490,11 @@ class ResumableCurrentCorpusAdmission:
         candidate: SourceCandidate,
         prepared: _PreparedCandidate,
     ) -> None:
-        if prepared.rejection_detail is not None:
+        if prepared.rejection_code is not None:
             self._insert_rejection(
                 connection,
                 candidate,
-                "semantic_preprocessing_failure",
+                prepared.rejection_code,
                 prepared.rejection_detail,
             )
             return
@@ -511,11 +537,11 @@ class ResumableCurrentCorpusAdmission:
         candidate: SourceCandidate,
         prepared: _CompressedPreparedCandidate,
     ) -> None:
-        if prepared.rejection_detail is not None:
+        if prepared.rejection_code is not None:
             self._insert_rejection(
                 connection,
                 candidate,
-                "semantic_preprocessing_failure",
+                prepared.rejection_code,
                 prepared.rejection_detail,
             )
             return

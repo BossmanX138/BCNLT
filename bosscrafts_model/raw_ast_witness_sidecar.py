@@ -20,7 +20,7 @@ os.environ["BCNLT_PARSER_CACHE"] = str(RUNTIME_ROOT / "grammars")
 PROTOCOL = "bosscrafts-raw-ast-witness-v2"
 SIDECAR_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 PARSER_RUNTIME_IDENTITY_SHA256 = (
-    "5b8f0b043d8d749449b468fd479564aba6193785081336f7d011f3c5079f3511"
+    "4cc9aac31f89be5c4e3f77ef61eabeea229dfa6db4c1dc80bd578a8f2d9a7917"
 )
 MAX_SOURCE_BYTES = 200 * 1024
 MAX_QUERIES = 16_384

@@ -10,7 +10,11 @@ from typing import Any, Callable
 from bcnlt.cache import ProjectIndex
 from bcnlt.core import ContextualUnit, SourceDocument, Span
 from bcnlt.ir import CommonCodingCore, IRKind, IRNode
-from bcnlt.parsers.bundle import MAX_SOURCE_BYTES, PARSE_TIMEOUT_MS, assert_clean_parse_tree
+from bcnlt.parsers.bundle import (
+    MAX_SOURCE_BYTES,
+    PARSE_TIMEOUT_MS,
+    assert_clean_parse_tree,
+)
 from bcnlt.preprocessing import SemanticPreprocessor
 from bcnlt.semantic_record import normalize_semantic_text
 from bcnlt.semantic_schema import SEMANTIC_SCHEMA_VERSION
@@ -20,7 +24,6 @@ from .carousel import LanguageCartridge
 from .coverage import SemanticCoverage, SemanticExtraction, is_unresolved_unknown
 from .spec import IdentifierRoleRule, NodeRule, ScopeRule
 from .symbols import LexicalSymbolTable
-
 
 ParserProvider = Callable[[str], Any]
 _OWNED_GRAMMARS = frozenset(
@@ -861,6 +864,7 @@ class TreeSitterSemanticEngine:
                 )
 
             active_scope: ScopeRule | None = None
+            active_scope_name: str | None = None
             rules_for_scope = (
                 scope_rules.get(str(node.type), ()) if is_named else ()
             )
@@ -872,12 +876,18 @@ class TreeSitterSemanticEngine:
                 active_scope = rules_for_scope[0]
                 mapped_nodes.add(key)
                 name_node = field(node, active_scope.name_field)
-                scope_name = text(name_node) if name_node is not None else str(node.type)
+                active_scope_name = (
+                    text(name_node) if name_node is not None else str(node.type)
+                )
                 parent_scope = symbols.scope
-                scope_id = symbols.enter_scope(active_scope.scope_kind, scope_name, int(node.start_byte))
+                scope_id = symbols.enter_scope(
+                    active_scope.scope_kind,
+                    active_scope_name,
+                    int(node.start_byte),
+                )
                 scope_enters += 1
                 emit(
-                    surface=scope_name,
+                    surface=active_scope_name,
                     event="SCOPE_ENTER",
                     unit_span=point_span(node.start_point),
                     relation=f"{node.type}.scope",
@@ -969,12 +979,13 @@ class TreeSitterSemanticEngine:
                 walk(child)
 
             if active_scope is not None:
-                scope_name = symbols.scope.rsplit(".", 1)[-1]
+                if active_scope_name is None:
+                    raise RuntimeError("active scope name is missing")
                 current_scope = symbols.scope
                 symbols.exit_scope()
                 scope_exits += 1
                 emit(
-                    surface=scope_name,
+                    surface=active_scope_name,
                     event="SCOPE_EXIT",
                     unit_span=point_span(node.end_point),
                     relation=f"{node.type}.scope",

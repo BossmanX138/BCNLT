@@ -299,6 +299,15 @@ class CurrentCorpusAdmission:
                     self._rejection(candidate, "semantic_preprocessing_failure", detail)
                 )
                 continue
+            if semantic.record_count == 0:
+                rejections.append(
+                    self._rejection(
+                        candidate,
+                        "no_semantic_records",
+                        "semantic extraction produced zero records",
+                    )
+                )
+                continue
             raw = self._pipeline.prepare_raw(
                 candidate.source,
                 language=candidate.language,

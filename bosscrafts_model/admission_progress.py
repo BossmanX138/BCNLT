@@ -4,9 +4,14 @@ import sqlite3
 from pathlib import Path
 
 LEGACY_ADMISSION_SCHEMA = "bosscrafts-current-corpus-resumable-v1"
-CURRENT_ADMISSION_SCHEMA = "bosscrafts-current-corpus-resumable-v4"
+PREVIOUS_ADMISSION_SCHEMA = "bosscrafts-current-corpus-resumable-v4"
+CURRENT_ADMISSION_SCHEMA = "bosscrafts-current-corpus-resumable-v5"
 SUPPORTED_ADMISSION_SCHEMAS = frozenset(
-    (LEGACY_ADMISSION_SCHEMA, CURRENT_ADMISSION_SCHEMA)
+    (
+        LEGACY_ADMISSION_SCHEMA,
+        PREVIOUS_ADMISSION_SCHEMA,
+        CURRENT_ADMISSION_SCHEMA,
+    )
 )
 _REQUIRED_DOCUMENT_COLUMNS = frozenset(
     ("status", "language", "reason_code", "semantic_token_count", "raw_token_count")
