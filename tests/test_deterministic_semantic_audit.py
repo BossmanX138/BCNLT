@@ -279,10 +279,10 @@ def test_decorated_scope_entry_accepts_a_nonempty_ast_owned_name():
     assert result.passed is True
 
 
-def test_scope_boundary_surface_must_anchor_to_target_source_scope_or_node_kind():
+def test_scope_boundary_surface_must_be_nonempty_before_raw_ast_ownership_check():
     item = _item(
         event="SCOPE_ENTER",
-        surface="unrelated_name",
+        surface="",
         span=[1, 0, 1, 0],
         ir_kind="extension",
     )

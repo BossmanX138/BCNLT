@@ -580,6 +580,7 @@ class ResumableTrainingSemanticAudit:
                     "span": record.get("span"),
                     "ast_relation": record.get("ast_relation"),
                     "scope": record.get("scope"),
+                    "surface": record.get("surface"),
                 }
             )
         raw_lines: list[str] = []
@@ -633,6 +634,8 @@ class ResumableTrainingSemanticAudit:
                         witness_codes.append("ast_relation_span_mismatch")
                     if witness.get("scope_match") is False:
                         witness_codes.append("raw_scope_mismatch")
+                    if witness.get("surface_match") is False:
+                        witness_codes.append("raw_surface_mismatch")
                     if witness_codes:
                         review_id = str(witness["query_id"])
                         failed_ids.add(review_id)
@@ -703,10 +706,8 @@ class ResumableTrainingSemanticAudit:
         lines = source.split("\n")
         if start_line < 1 or end_line < start_line or end_line > len(lines):
             raise ValueError("canonical semantic record span is outside source")
-        event = record.get("event")
-        context_after = 16 if event == "SCOPE_ENTER" else 3
         first_line = max(1, start_line - 3)
-        last_line = min(len(lines), end_line + context_after)
+        last_line = min(len(lines), end_line + 3)
         rendered = [
             f"[source: {relative_path}; context lines {first_line}-{last_line}; "
             f"target span {start_line}:{span[1]}-{end_line}:{span[3]}]"

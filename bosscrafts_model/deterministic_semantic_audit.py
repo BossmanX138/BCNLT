@@ -132,30 +132,12 @@ class DeterministicSemanticAuditor:
                         "scope boundary events must use a zero-width point span",
                     )
                 )
-            source_excerpt = item.get("source_excerpt")
-            ast_relation = record.get("ast_relation")
-            target_source = "\n".join(
-                line.split("| ", 1)[1]
-                for line in str(source_excerpt).splitlines()
-                if (line.startswith(">") or line.startswith(" ")) and "| " in line
-            )
-            node_kind = (
-                ast_relation[: -len(".scope")]
-                if type(ast_relation) is str and ast_relation.endswith(".scope")
-                else ""
-            )
-            scope_tail = scope.rsplit(".", 1)[-1]
-            surface_is_anchored = bool(surface) and (
-                surface == node_kind
-                or surface in target_source
-                or (scope != "module" and (surface in scope or scope_tail in surface))
-            )
-            if not surface_is_anchored:
+            if not surface:
                 findings.append(
                     DeterministicSemanticFinding(
                         "scope_boundary_surface_unanchored",
                         "surface",
-                        "scope boundary surface must name the target source, scope, or structural node",
+                        "scope boundary surface must be non-empty; exact ownership is verified by the raw AST gate",
                     )
                 )
         elif not (surface == extracted or valid_truncated_surface):

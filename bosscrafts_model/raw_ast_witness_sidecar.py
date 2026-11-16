@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import sys
+import unicodedata
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Protocol, cast
@@ -110,9 +111,12 @@ def _load_request(raw: bytes | None = None) -> dict[str, object]:
         raise ValueError("request metadata is invalid")
     seen: set[str] = set()
     for query in queries:
-        if type(query) is not dict or set(query) not in (
-            {"query_id", "span", "ast_relation"},
-            {"query_id", "span", "ast_relation", "scope"},
+        required_query_keys = {"query_id", "span", "ast_relation"}
+        allowed_query_keys = {*required_query_keys, "scope", "surface"}
+        if (
+            type(query) is not dict
+            or not required_query_keys.issubset(query)
+            or not set(query).issubset(allowed_query_keys)
         ):
             raise ValueError("query keys mismatch")
         query_id = query["query_id"]
@@ -134,6 +138,7 @@ def _load_request(raw: bytes | None = None) -> dict[str, object]:
                 "scope" in query
                 and (type(query["scope"]) is not str or not query["scope"])
             )
+            or ("surface" in query and type(query["surface"]) is not str)
         ):
             raise ValueError("query is invalid")
         seen.add(query_id)
@@ -266,6 +271,14 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
         return None
 
     source_bytes = source.encode("utf-8")
+
+    def canonical_surface(node: _Node) -> str:
+        raw = source_bytes[node.start_byte : node.end_byte].decode(
+            "utf-8", errors="replace"
+        )
+        return unicodedata.normalize(
+            "NFC", raw[:4096].replace("\r\n", "\n").replace("\r", "\n")
+        )
 
     def is_within(node: _Node, ancestor: _Node) -> bool:
         ancestor_key = node_key(ancestor)
@@ -536,6 +549,30 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
                 ):
                     matching_owners.append(node)
         relation_match = bool(matching_owners)
+        derived_surfaces: set[str] = set()
+        if relation_match:
+            if relation_kind == "scope":
+                for owner in matching_owners:
+                    rule = scope_rules_by_type.get(str(owner.type))
+                    if rule is None:
+                        continue
+                    name_field = rule.name_field
+                    name_node = (
+                        resolve_field(owner, name_field)
+                        if isinstance(name_field, str) and name_field
+                        else None
+                    )
+                    derived_surfaces.add(
+                        canonical_surface(name_node)
+                        if name_node is not None
+                        else str(owner.type)
+                    )
+            else:
+                derived_surfaces.update(canonical_surface(node) for node in exact_targets)
+        unique_surface = (
+            next(iter(derived_surfaces)) if len(derived_surfaces) == 1 else None
+        )
+        claimed_surface = query.get("surface")
         claimed_scope = query.get("scope")
         derived_scopes = sorted(
             {derived_scope(owner, relation, span) for owner in matching_owners}
@@ -550,6 +587,13 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
                 "boundary_start_named_node_types": boundary_start_types,
                 "boundary_end_named_node_types": boundary_end_types,
                 "relation_span_match": relation_match,
+                "claimed_surface": claimed_surface,
+                "derived_surface": unique_surface,
+                "surface_match": (
+                    claimed_surface in derived_surfaces
+                    if isinstance(claimed_surface, str)
+                    else None
+                ),
                 "claimed_scope": claimed_scope,
                 "derived_scope": unique_scope,
                 "scope_match": (

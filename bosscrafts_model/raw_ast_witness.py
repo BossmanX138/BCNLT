@@ -42,6 +42,9 @@ _WITNESS_KEYS = {
     "boundary_start_named_node_types",
     "boundary_end_named_node_types",
     "relation_span_match",
+    "claimed_surface",
+    "derived_surface",
+    "surface_match",
     "claimed_scope",
     "derived_scope",
     "scope_match",
@@ -55,6 +58,7 @@ def _validate_witness_rows(
         raise ValueError("raw AST witness response coverage mismatch")
     for row, query in zip(value, queries, strict=True):
         claimed_scope = query.get("scope")
+        claimed_surface = query.get("surface")
         if (
             type(row) is not dict
             or set(row) != _WITNESS_KEYS
@@ -62,6 +66,7 @@ def _validate_witness_rows(
             or row.get("span") != query.get("span")
             or row.get("ast_relation") != query.get("ast_relation")
             or row.get("claimed_scope") != claimed_scope
+            or row.get("claimed_surface") != claimed_surface
             or type(row.get("relation_span_match")) is not bool
             or (
                 row.get("derived_scope") is not None
@@ -77,6 +82,18 @@ def _validate_witness_rows(
             or (
                 claimed_scope is not None
                 and type(row.get("scope_match")) is not bool
+            )
+            or (
+                row.get("derived_surface") is not None
+                and type(row.get("derived_surface")) is not str
+            )
+            or (
+                claimed_surface is None
+                and row.get("surface_match") is not None
+            )
+            or (
+                claimed_surface is not None
+                and type(row.get("surface_match")) is not bool
             )
         ):
             raise ValueError("raw AST witness response row mismatch")
@@ -94,7 +111,9 @@ def _validate_witness_rows(
                 raise ValueError("raw AST witness response node types are invalid")
         if row["relation_span_match"] is False and (
             row["derived_scope"] is not None
+            or row["derived_surface"] is not None
             or row["scope_match"] not in {False, None}
+            or row["surface_match"] not in {False, None}
         ):
             raise ValueError("raw AST witness response relation state is inconsistent")
 

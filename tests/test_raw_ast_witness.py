@@ -313,6 +313,39 @@ def test_raw_ast_witness_distinguishes_scope_entry_parent_from_exit_owner():
     assert by_id["exit"]["scope_match"] is True
 
 
+def test_raw_ast_witness_derives_decorated_scope_surface_without_line_window():
+    annotations = "\n".join(f"@Marker{i}(value = {i})" for i in range(24))
+    source = f"{annotations}\npublic class Actual {{}}\n"
+    response = _feature().RawAstWitnessClient().inspect(
+        source,
+        language="java",
+        path="Decorated.java",
+        dialect=None,
+        queries=(
+            {
+                "query_id": "correct",
+                "span": [1, 0, 1, 0],
+                "ast_relation": "class_declaration.scope",
+                "scope": "module",
+                "surface": "Actual",
+            },
+            {
+                "query_id": "incorrect",
+                "span": [1, 0, 1, 0],
+                "ast_relation": "class_declaration.scope",
+                "scope": "module",
+                "surface": "Unrelated",
+            },
+        ),
+    )
+
+    by_id = {row["query_id"]: row for row in response["witnesses"]}
+    assert by_id["correct"]["derived_surface"] == "Actual"
+    assert by_id["correct"]["surface_match"] is True
+    assert by_id["incorrect"]["derived_surface"] == "Actual"
+    assert by_id["incorrect"]["surface_match"] is False
+
+
 def test_raw_ast_witness_reuses_one_bounded_sidecar_across_documents():
     client = _feature().RawAstWitnessClient()
     query = (
@@ -363,6 +396,9 @@ def test_raw_ast_witness_rejects_mismatched_response_rows():
         "boundary_start_named_node_types": ["return_statement"],
         "boundary_end_named_node_types": ["return_statement"],
         "relation_span_match": True,
+        "claimed_surface": None,
+        "derived_surface": "return 1",
+        "surface_match": None,
         "claimed_scope": "module.f",
         "derived_scope": "module.f",
         "scope_match": True,
