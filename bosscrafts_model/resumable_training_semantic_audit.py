@@ -16,9 +16,10 @@ from .compression import decompress_bounded
 from .deterministic_semantic_audit import DeterministicSemanticAuditor
 from .jsonl import split_jsonl_records
 from .raw_ast_witness import RawAstWitnessClient
+from .resumable_current_corpus import RESUMABLE_SCHEMA
 
 AUDIT_SCHEMA = "bosscrafts-resumable-training-semantic-audit-v1"
-SOURCE_ADMISSION_SCHEMA = "bosscrafts-current-corpus-resumable-v4"
+SOURCE_ADMISSION_SCHEMA = RESUMABLE_SCHEMA
 
 
 def _canonical(value: object) -> str:

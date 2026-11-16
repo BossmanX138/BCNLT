@@ -12,6 +12,7 @@ import pytest
 
 import bosscrafts_model.resumable_training_semantic_audit as audit_module
 from bosscrafts_model.bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
+from bosscrafts_model.resumable_current_corpus import RESUMABLE_SCHEMA
 from bosscrafts_model.resumable_training_semantic_audit import (
     ResumableTrainingSemanticAudit,
 )
@@ -173,7 +174,7 @@ def _fixture(
             """
         )
         metadata = {
-            "schema_version": "bosscrafts-current-corpus-resumable-v4",
+            "schema_version": RESUMABLE_SCHEMA,
             "catalog_exhausted": str(complete).lower(),
             "expected_source_document_count": "2",
             "source_catalog_sha256": catalog_sha,
