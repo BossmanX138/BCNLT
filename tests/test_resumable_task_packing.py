@@ -125,6 +125,14 @@ class ResumableTaskPackingTests(unittest.TestCase):
                 tasks_path,
                 max_sequence=2048,
             )
+            contention_probe = packer._connect()
+            try:
+                busy_timeout_ms = int(
+                    contention_probe.execute("PRAGMA busy_timeout").fetchone()[0]
+                )
+            finally:
+                contention_probe.close()
+            self.assertGreaterEqual(busy_timeout_ms, 300_000)
             first = packer.process(max_documents=1)
             self.assertEqual(first.processed_this_run, 1)
             self.assertEqual(first.processed_documents, 1)

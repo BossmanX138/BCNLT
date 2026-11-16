@@ -38,6 +38,7 @@ TASK_DATABASE_SCHEMA = "bosscrafts-current-task-resumable-v3"
 FULL_SEMANTIC_WIRE_SCHEMA = "bosscrafts-full-semantic-wire-v3"
 CELL_WEIGHT_MULTIPLIERS_METADATA_KEY = "training_cell_weight_multipliers_v1_json"
 SALTED_SOURCE_EXAMPLE_ID_POLICY = "bosscrafts-v11-salted-source-example-id-v1"
+TASK_DATABASE_BUSY_TIMEOUT_MS = 300_000
 _TASK_FAMILIES = frozenset(
     {
         "instruction_to_code",
@@ -860,7 +861,11 @@ class ResumableCurrentTaskPacking:
         return connection
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.database_path, timeout=30)
+        connection = sqlite3.connect(
+            self.database_path,
+            timeout=TASK_DATABASE_BUSY_TIMEOUT_MS / 1000,
+        )
+        connection.execute(f"PRAGMA busy_timeout={TASK_DATABASE_BUSY_TIMEOUT_MS}")
         connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA synchronous=FULL")
         return connection
