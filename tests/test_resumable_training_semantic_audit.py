@@ -289,6 +289,32 @@ def test_source_excerpt_includes_context_around_zero_width_boundaries() -> None:
     assert " 000003| next();" in excerpt
 
 
+def test_source_excerpt_scans_forward_across_stacked_scope_attributes() -> None:
+    source = "\n".join(
+        (
+            "[Theory]",
+            "[InlineData(1)]",
+            "[InlineData(2)]",
+            "[InlineData(3)]",
+            "[InlineData(4)]",
+            "[InlineData(5)]",
+            "[InlineData(6)]",
+            "[InlineData(7)]",
+            "[InlineData(8)]",
+            "public void Run(int value) {}",
+            "next();",
+        )
+    )
+    record = {"event": "SCOPE_ENTER", "span": [1, 0, 1, 0]}
+
+    excerpt = ResumableTrainingSemanticAudit._source_excerpt(
+        source, "decorated.cs", record
+    )
+
+    assert ">000001| [Theory]" in excerpt
+    assert " 000010| public void Run(int value) {}" in excerpt
+
+
 def _real_audit(
     root: Path, admission: Path, catalog: Path, catalog_sha: str, freeze_sha: str
 ):

@@ -150,6 +150,21 @@ def test_truncated_surface_must_be_an_exact_bounded_prefix():
     assert result.extracted_surface == exact
 
 
+def test_truncated_surface_allows_the_runtime_eight_kib_ir_name_prefix():
+    exact = "x" * 9000
+    item = _item(surface="x" * 4096, span=[1, 0, 1, 9000])
+    item["source_excerpt"] = (
+        f"[source context lines 1-1; target span 1:0-1:9000]\n>000001| {exact}\n"
+    )
+    item["canonical_record"]["metadata"]["surface_truncated"] = True
+    item["canonical_record"]["ir"]["name"] = "x" * 8192
+
+    result = _feature().DeterministicSemanticAuditor().audit_item(item)
+
+    assert result.passed is True
+    assert result.extracted_surface == exact
+
+
 def test_truncated_surface_rejects_a_nonprefix_claim():
     exact = "x" * 4100
     item = _item(surface="y" * 4096, span=[1, 0, 1, 4100])

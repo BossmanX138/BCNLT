@@ -703,8 +703,10 @@ class ResumableTrainingSemanticAudit:
         lines = source.split("\n")
         if start_line < 1 or end_line < start_line or end_line > len(lines):
             raise ValueError("canonical semantic record span is outside source")
+        event = record.get("event")
+        context_after = 16 if event == "SCOPE_ENTER" else 3
         first_line = max(1, start_line - 3)
-        last_line = min(len(lines), end_line + 3)
+        last_line = min(len(lines), end_line + context_after)
         rendered = [
             f"[source: {relative_path}; context lines {first_line}-{last_line}; "
             f"target span {start_line}:{span[1]}-{end_line}:{span[3]}]"

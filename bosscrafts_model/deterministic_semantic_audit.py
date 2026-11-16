@@ -22,6 +22,7 @@ _SOURCE_ITEM_SCHEMA = "bosscrafts-heldout-semantic-review-item-v2"
 _FINDING_SCHEMA = "bosscrafts-deterministic-semantic-finding-v1"
 _REPORT_SCHEMA = "bosscrafts-deterministic-semantic-audit-manifest-v1"
 _MAX_SEMANTIC_SURFACE_CHARS = 4096
+_MAX_IR_NAME_CHARS = 8192
 
 
 def _canonical(value: object) -> str:
@@ -108,6 +109,12 @@ class DeterministicSemanticAuditor:
             .replace("\r\n", "\n")
             .replace("\r", "\n"),
         )
+        expected_truncated_ir_name = unicodedata.normalize(
+            "NFC",
+            raw_extracted[:_MAX_IR_NAME_CHARS]
+            .replace("\r\n", "\n")
+            .replace("\r", "\n"),
+        )
         valid_truncated_surface = (
             metadata.get("surface_truncated") is True
             and len(raw_extracted) > _MAX_SEMANTIC_SURFACE_CHARS
@@ -173,7 +180,7 @@ class DeterministicSemanticAuditor:
         truncated_ir_prefix = (
             valid_truncated_surface
             and isinstance(ir_name, str)
-            and ir_name in {expected_truncated_surface, extracted}
+            and ir_name == expected_truncated_ir_name
         )
         if (
             ir.get("kind") != "extension"

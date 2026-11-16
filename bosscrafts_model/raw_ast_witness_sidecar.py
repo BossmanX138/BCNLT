@@ -181,20 +181,24 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
     exact: dict[tuple[int, int, int, int], set[str]] = {}
     starts: dict[tuple[int, int], set[str]] = {}
     ends: dict[tuple[int, int], set[str]] = {}
-    all_nodes: list[_Node] = []
-    named_nodes: list[_Node] = []
+    nodes_by_span: dict[tuple[int, int, int, int], list[_Node]] = {}
+    named_nodes_by_type: dict[str, list[_Node]] = {}
+    named_starts: dict[tuple[int, int], list[_Node]] = {}
+    named_ends: dict[tuple[int, int], list[_Node]] = {}
     stack: list[_Node] = [cast(_Node, document.tree.root_node)]
     while stack:
         node = stack.pop()
         stack.extend(reversed(node.children))
-        all_nodes.append(node)
-        if not bool(getattr(node, "is_named", False)):
-            continue
-        named_nodes.append(node)
         start_row, start_col = node.start_point
         end_row, end_col = node.end_point
         span = (start_row + 1, start_col, end_row + 1, end_col)
+        nodes_by_span.setdefault(span, []).append(node)
+        if not bool(getattr(node, "is_named", False)):
+            continue
         node_type = str(node.type)
+        named_nodes_by_type.setdefault(node_type, []).append(node)
+        named_starts.setdefault((span[0], span[1]), []).append(node)
+        named_ends.setdefault((span[2], span[3]), []).append(node)
         exact.setdefault(span, set()).add(node_type)
         starts.setdefault((span[0], span[1]), set()).add(node_type)
         ends.setdefault((span[2], span[3]), set()).add(node_type)
@@ -384,7 +388,14 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
             .lstrip()
             .startswith("var ")
         )
-        for node in ancestry:
+        javascript_var_owner_index = -1
+        if javascript_var_hoist:
+            for index in range(len(ancestry) - 1, -1, -1):
+                candidate_rule = scope_rules_by_type.get(str(ancestry[index].type))
+                if candidate_rule is not None and candidate_rule.scope_kind == "function":
+                    javascript_var_owner_index = index
+                    break
+        for index, node in enumerate(ancestry):
             rule = scope_rules_by_type.get(str(node.type))
             if rule is None:
                 continue
@@ -397,7 +408,11 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
                 in {"function_declaration", "method_declaration", "func_literal"}
             ):
                 continue
-            if javascript_var_hoist and rule.scope_kind == "block":
+            if (
+                javascript_var_hoist
+                and rule.scope_kind == "block"
+                and index > javascript_var_owner_index
+            ):
                 continue
             if node_key(node) == owner_key:
                 if relation_kind == "scope":
@@ -431,6 +446,27 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
 
     witnesses: list[dict[str, object]] = []
     queries = cast(list[dict[str, object]], payload["queries"])
+    resolved_field_indexes: dict[
+        tuple[str, str],
+        dict[tuple[int, int, int, int], list[_Node]],
+    ] = {}
+
+    def field_owners(
+        owner_type: str,
+        relation_kind: str,
+        target_span: tuple[int, int, int, int],
+    ) -> tuple[_Node, ...]:
+        key = (owner_type, relation_kind)
+        index = resolved_field_indexes.get(key)
+        if index is None:
+            index = {}
+            for candidate in named_nodes_by_type.get(owner_type, ()):
+                resolved = resolve_field(candidate, relation_kind)
+                if resolved is not None:
+                    index.setdefault(node_span(resolved), []).append(candidate)
+            resolved_field_indexes[key] = index
+        return tuple(index.get(target_span, ()))
+
     for query in queries:
         span_values = cast(list[int], query["span"])
         span = (span_values[0], span_values[1], span_values[2], span_values[3])
@@ -440,29 +476,46 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
         boundary_start_types = sorted(starts.get((span[0], span[1]), set()))
         boundary_end_types = sorted(ends.get((span[2], span[3]), set()))
         matching_owners: list[_Node] = []
-        exact_targets = [node for node in all_nodes if node_span(node) == span]
+        exact_targets = tuple(nodes_by_span.get(span, ()))
         if not separator:
             pass
         elif relation_kind == "self":
             matching_owners = [
                 node
-                for node in named_nodes
-                if str(node.type) == owner_type and node_span(node) == span
+                for node in exact_targets
+                if bool(getattr(node, "is_named", False))
+                and str(node.type) == owner_type
             ]
         elif relation_kind == "scope" and span[0:2] == span[2:4]:
-            matching_owners = [
-                node
-                for node in named_nodes
-                if str(node.type) == owner_type
-                and (
-                    node_span(node)[0:2] == span[0:2]
-                    or node_span(node)[2:4] == span[0:2]
+            boundary_nodes = {
+                node_key(node): node
+                for node in (
+                    *named_starts.get(span[0:2], ()),
+                    *named_ends.get(span[0:2], ()),
                 )
-            ]
+                if str(node.type) == owner_type
+            }
+            matching_owners = list(boundary_nodes.values())
         else:
-            for node in named_nodes:
-                if str(node.type) != owner_type:
-                    continue
+            candidate_owners: dict[tuple[int, int, str], _Node] = {}
+            for target in exact_targets:
+                current: _Node | None = target
+                while current is not None:
+                    if (
+                        bool(getattr(current, "is_named", False))
+                        and str(current.type) == owner_type
+                    ):
+                        candidate_owners[node_key(current)] = current
+                    current = getattr(current, "parent", None)
+            for node in exact_targets:
+                if (
+                    bool(getattr(node, "is_named", False))
+                    and str(node.type) == owner_type
+                ):
+                    candidate_owners[node_key(node)] = node
+            for node in field_owners(owner_type, relation_kind, span):
+                candidate_owners[node_key(node)] = node
+            for node in candidate_owners.values():
                 if any(
                     synthetic_relation_matches(node, target, relation)
                     for target in exact_targets

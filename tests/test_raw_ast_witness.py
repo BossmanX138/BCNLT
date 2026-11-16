@@ -226,6 +226,35 @@ def test_raw_ast_witness_models_javascript_var_hoisting():
     assert witness["scope_match"] is True
 
 
+def test_raw_ast_witness_preserves_ancestor_blocks_before_var_owning_function():
+    source = (
+        "(function() { describe('x', function() { "
+        "if (ready) { var value = 1; } }); })();\n"
+    )
+    start = source.index("value")
+    response = _feature().RawAstWitnessClient().inspect(
+        source,
+        language="javascript",
+        path="nested-hoist.js",
+        dialect=None,
+        queries=(
+            {
+                "query_id": "nested-hoisted-var",
+                "span": [1, start, 1, start + len("value")],
+                "ast_relation": "variable_declarator.name",
+                "scope": "module.function_expression.statement_block.function_expression",
+            },
+        ),
+    )
+
+    witness = response["witnesses"][0]
+    assert witness["relation_span_match"] is True
+    assert witness["derived_scope"] == (
+        "module.function_expression.statement_block.function_expression"
+    )
+    assert witness["scope_match"] is True
+
+
 def test_raw_ast_witness_places_arrow_parameter_and_return_inside_arrow_scope():
     response = _feature().RawAstWitnessClient().inspect(
         "const render = value => value + 1;\n",
