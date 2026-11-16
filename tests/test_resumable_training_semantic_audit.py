@@ -276,6 +276,19 @@ def _failing_audit(
     )
 
 
+def test_source_excerpt_includes_context_around_zero_width_boundaries() -> None:
+    source = "[Fact]\npublic void Run() {}\nnext();\n"
+    record = {"span": [1, 0, 1, 0]}
+
+    excerpt = ResumableTrainingSemanticAudit._source_excerpt(
+        source, "decorated.cs", record
+    )
+
+    assert ">000001| [Fact]" in excerpt
+    assert " 000002| public void Run() {}" in excerpt
+    assert " 000003| next();" in excerpt
+
+
 def _real_audit(
     root: Path, admission: Path, catalog: Path, catalog_sha: str, freeze_sha: str
 ):
@@ -526,7 +539,9 @@ def test_refuses_same_count_with_nonfrozen_document_id(tmp_path: Path):
         connection.commit()
     finally:
         connection.close()
-    with pytest.raises(ValueError, match="source admission document count is incomplete"):
+    with pytest.raises(
+        ValueError, match="source admission document count is incomplete"
+    ):
         _audit(tmp_path, admission, catalog, catalog_sha, freeze_sha)
 
 

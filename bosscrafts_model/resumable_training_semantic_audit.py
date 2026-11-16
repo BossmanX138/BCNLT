@@ -1,4 +1,5 @@
 """Crash-resumable full-record semantic audit for a completed source admission."""
+
 from __future__ import annotations
 
 import hashlib
@@ -247,8 +248,7 @@ class ResumableTrainingSemanticAudit:
             if (
                 type(row) is not dict
                 or line != _canonical(row)
-                or row.get("schema_version")
-                != "bosscrafts-training-source-document-v1"
+                or row.get("schema_version") != "bosscrafts-training-source-document-v1"
                 or type(document_id) is not str
                 or not document_id
                 or document_id in all_ids
@@ -260,10 +260,9 @@ class ResumableTrainingSemanticAudit:
                 training_count += 1
             if split == source_split:
                 selected_ids.add(document_id)
-        if (
-            len(all_ids) != manifest.get("source_document_count")
-            or training_count != manifest.get("training_document_count")
-        ):
+        if len(all_ids) != manifest.get(
+            "source_document_count"
+        ) or training_count != manifest.get("training_document_count"):
             raise ValueError("source freeze document inventory count mismatch")
         if not selected_ids:
             raise ValueError("source freeze selected split is empty")
@@ -306,7 +305,9 @@ class ResumableTrainingSemanticAudit:
         try:
             expected_count = int(metadata["expected_source_document_count"])
         except (KeyError, ValueError) as exc:
-            raise ValueError("source admission expected document count is invalid") from exc
+            raise ValueError(
+                "source admission expected document count is invalid"
+            ) from exc
         if expected_count < 1:
             raise ValueError("source admission expected document count is invalid")
         return expected_count
@@ -400,9 +401,7 @@ class ResumableTrainingSemanticAudit:
         output = self._connect()
         processed = 0
         try:
-            rows = source.execute(
-                "SELECT * FROM documents ORDER BY document_id"
-            )
+            rows = source.execute("SELECT * FROM documents ORDER BY document_id")
             columns = [str(item[0]) for item in rows.description]
             for raw in rows:
                 row = dict(zip(columns, raw, strict=True))
@@ -519,7 +518,10 @@ class ResumableTrainingSemanticAudit:
             ).decode("utf-8")
         except (TypeError, ValueError, UnicodeDecodeError) as exc:
             raise ValueError("canonical JSONL payload is invalid") from exc
-        if _sha256_bytes(canonical_jsonl.encode("utf-8")) != admission["canonical_sha256"]:
+        if (
+            _sha256_bytes(canonical_jsonl.encode("utf-8"))
+            != admission["canonical_sha256"]
+        ):
             raise ValueError("canonical JSONL SHA-256 mismatch")
         records: list[dict[str, object]] = []
         for line in split_jsonl_records(canonical_jsonl):
@@ -701,9 +703,15 @@ class ResumableTrainingSemanticAudit:
         lines = source.split("\n")
         if start_line < 1 or end_line < start_line or end_line > len(lines):
             raise ValueError("canonical semantic record span is outside source")
-        rendered = [f"source: {relative_path}"]
-        for line_number in range(start_line, end_line + 1):
-            rendered.append(f">{line_number:06d}| {lines[line_number - 1]}")
+        first_line = max(1, start_line - 3)
+        last_line = min(len(lines), end_line + 3)
+        rendered = [
+            f"[source: {relative_path}; context lines {first_line}-{last_line}; "
+            f"target span {start_line}:{span[1]}-{end_line}:{span[3]}]"
+        ]
+        for line_number in range(first_line, last_line + 1):
+            marker = ">" if start_line <= line_number <= end_line else " "
+            rendered.append(f"{marker}{line_number:06d}| {lines[line_number - 1]}")
         return "\n".join(rendered)
 
     def status(

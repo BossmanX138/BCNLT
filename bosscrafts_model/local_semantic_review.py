@@ -34,6 +34,47 @@ _RUBRIC_FIELDS = frozenset(
 _MAX_RESPONSE_BYTES = 1024 * 1024
 
 
+def _span_surfaces(item: dict[str, object]) -> tuple[str, str]:
+    """Return the exact pre-normalized and canonical text for a record span."""
+    record = item.get("canonical_record")
+    excerpt = item.get("source_excerpt")
+    span = record.get("span") if type(record) is dict else None
+    if (
+        type(span) is not list
+        or len(span) != 4
+        or any(type(value) is not int or value < 0 for value in span)
+        or type(excerpt) is not str
+    ):
+        raise ValueError("semantic review span evidence input is invalid")
+    source_lines: dict[int, str] = {}
+    for rendered in excerpt.split("\n")[1:]:
+        match = re.fullmatch(r"[ >](\d{6})\| (.*)", rendered)
+        if match is not None:
+            source_lines[int(match.group(1))] = match.group(2)
+    start_line, start_column, end_line, end_column = span
+    if start_line not in source_lines or end_line not in source_lines:
+        raise ValueError("semantic review span is absent from numbered context")
+    try:
+        if start_line == end_line:
+            extracted_bytes = source_lines[start_line].encode("utf-8")[
+                start_column:end_column
+            ]
+        else:
+            segments = [source_lines[start_line].encode("utf-8")[start_column:]]
+            for line_number in range(start_line + 1, end_line):
+                segments.append(source_lines[line_number].encode("utf-8"))
+            segments.append(source_lines[end_line].encode("utf-8")[:end_column])
+            extracted_bytes = b"\n".join(segments)
+        raw = extracted_bytes.decode("utf-8")
+    except (KeyError, UnicodeDecodeError) as exc:
+        raise ValueError("semantic review span cannot be decoded exactly") from exc
+    canonical = unicodedata.normalize(
+        "NFC",
+        raw.replace("\r\n", "\n").replace("\r", "\n"),
+    )
+    return raw, canonical
+
+
 class _NoRedirectHandler(urlrequest.HTTPRedirectHandler):
     """Never forward source-bearing reviewer requests to another endpoint."""
 
@@ -564,43 +605,7 @@ class DualLocalSemanticReviewer:
 
     @staticmethod
     def _span_evidence(item: dict[str, object]) -> dict[str, object]:
-        record = item.get("canonical_record")
-        excerpt = item.get("source_excerpt")
-        span = record.get("span") if type(record) is dict else None
-        if (
-            type(span) is not list
-            or len(span) != 4
-            or any(type(value) is not int or value < 0 for value in span)
-            or type(excerpt) is not str
-        ):
-            raise ValueError("semantic review span evidence input is invalid")
-        source_lines: dict[int, str] = {}
-        for rendered in excerpt.split("\n")[1:]:
-            match = re.fullmatch(r"[ >](\d{6})\| (.*)", rendered)
-            if match is not None:
-                source_lines[int(match.group(1))] = match.group(2)
-        start_line, start_column, end_line, end_column = span
-        if start_line not in source_lines or end_line not in source_lines:
-            raise ValueError("semantic review span is absent from numbered context")
-        try:
-            if start_line == end_line:
-                extracted_bytes = source_lines[start_line].encode("utf-8")[
-                    start_column:end_column
-                ]
-            else:
-                segments = [source_lines[start_line].encode("utf-8")[start_column:]]
-                for line_number in range(start_line + 1, end_line):
-                    segments.append(source_lines[line_number].encode("utf-8"))
-                segments.append(source_lines[end_line].encode("utf-8")[:end_column])
-                extracted_bytes = b"\n".join(segments)
-            extracted = unicodedata.normalize(
-                "NFC",
-                extracted_bytes.decode("utf-8")
-                .replace("\r\n", "\n")
-                .replace("\r", "\n"),
-            )
-        except (KeyError, UnicodeDecodeError) as exc:
-            raise ValueError("semantic review span cannot be decoded exactly") from exc
+        _, extracted = _span_surfaces(item)
         return {
             "line_coordinates": "one_based",
             "column_coordinates": "zero_based_utf8_bytes_end_exclusive",

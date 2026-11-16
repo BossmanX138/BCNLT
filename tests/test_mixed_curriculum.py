@@ -15,6 +15,7 @@ from bosscrafts_model.bcnlt_source_pipeline import (
     PARSER_RUNTIME_NOT_APPLICABLE,
 )
 from bosscrafts_model.mixed_curriculum import build_mixed_curriculum
+from bosscrafts_model.mixed_task_loss_mask_audit import MixedTaskLossMaskAuditor
 from bosscrafts_model.resumable_task_packing import (
     TASK_DATABASE_SCHEMA,
     ResumableTaskDataset,
@@ -60,18 +61,14 @@ def _write_database(
                     "binding_sha256": binding.binding_sha256,
                     "tokenizer_sha256": binding.tokenizer_sha256,
                     "vocabulary_size": str(binding.vocab_size),
-                    "parser_runtime_identity_sha256": (
-                        PARSER_RUNTIME_IDENTITY_SHA256
-                    ),
+                    "parser_runtime_identity_sha256": (PARSER_RUNTIME_IDENTITY_SHA256),
                     "maximum_sequence_tokens": "16",
                     "packing_complete": "true",
                 }.items()
             ),
         )
         for index, split in enumerate(("train", "validation", "test")):
-            family = (
-                INSTRUCTION_RESPONSE_FAMILY if instruction else "semantic_to_code"
-            )
+            family = INSTRUCTION_RESPONSE_FAMILY if instruction else "semantic_to_code"
             language = INSTRUCTION_LANGUAGE if instruction else "python"
             document_id = f"{'instruction' if instruction else 'semantic'}-{split}"
             input_ids = [100 + index, 200 + index, 300 + index, 400 + index]
@@ -83,9 +80,7 @@ def _write_database(
                     _canonical_json(input_ids).encode()
                 ).hexdigest(),
             }
-            example_id = hashlib.sha256(
-                _canonical_json(identity).encode()
-            ).hexdigest()
+            example_id = hashlib.sha256(_canonical_json(identity).encode()).hexdigest()
             connection.execute(
                 "INSERT INTO tasks VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
@@ -132,6 +127,20 @@ def test_cli_runs_from_project_root() -> None:
     assert result.returncode == 0, result.stderr
     assert "--instruction-weight-fraction" in result.stdout
 
+    audit_result = subprocess.run(
+        [
+            sys.executable,
+            str(project_root / "scripts" / "audit_v10_mixed_task_loss_masks.py"),
+            "--help",
+        ],
+        cwd=project_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert audit_result.returncode == 0, audit_result.stderr
+    assert "--database" in audit_result.stdout
+
 
 def test_merges_sources_with_exact_lineage_and_half_instruction_weight(
     tmp_path: Path,
@@ -142,9 +151,7 @@ def test_merges_sources_with_exact_lineage_and_half_instruction_weight(
     output = tmp_path / "mixed.sqlite"
     _write_database(semantic, binding, instruction=False)
     _write_database(instruction, binding, instruction=True)
-    semantic_identity = audit_task_database(
-        binding, semantic
-    ).database_identity_sha256
+    semantic_identity = audit_task_database(binding, semantic).database_identity_sha256
     instruction_identity = audit_task_database(
         binding, instruction
     ).database_identity_sha256
@@ -184,6 +191,64 @@ def test_merges_sources_with_exact_lineage_and_half_instruction_weight(
     finally:
         connection.close()
     assert kinds == {"instruction": 3, "replay": 3}
+
+    loss_mask_result = MixedTaskLossMaskAuditor(
+        binding,
+        expected_languages=("python",),
+        expected_semantic_families=("semantic_to_code",),
+    ).materialize(output, tmp_path / "mixed-loss-mask.json")
+    assert loss_mask_result.audit_passed is True
+    assert loss_mask_result.training_ready is False
+    assert loss_mask_result.semantic_example_count == 3
+    assert loss_mask_result.instruction_example_count == 3
+    assert loss_mask_result.split_example_counts == {
+        "train": 2,
+        "validation": 2,
+        "test": 2,
+    }
+    assert loss_mask_result.observed_instruction_training_weight_fraction == (
+        pytest.approx(0.5)
+    )
+
+
+def test_mixed_loss_mask_audit_rejects_weight_policy_mismatch(
+    tmp_path: Path,
+) -> None:
+    binding = NativeTokenizerBinding.load()
+    semantic = tmp_path / "semantic.sqlite"
+    instruction = tmp_path / "instruction.sqlite"
+    output = tmp_path / "mixed.sqlite"
+    _write_database(semantic, binding, instruction=False)
+    _write_database(instruction, binding, instruction=True)
+    build_mixed_curriculum(
+        binding,
+        semantic_database=semantic,
+        instruction_database=instruction,
+        output_database=output,
+        expected_semantic_identity_sha256=(
+            audit_task_database(binding, semantic).database_identity_sha256
+        ),
+        expected_instruction_identity_sha256=(
+            audit_task_database(binding, instruction).database_identity_sha256
+        ),
+        instruction_training_weight_fraction=0.5,
+    )
+    connection = sqlite3.connect(output)
+    try:
+        connection.execute(
+            "UPDATE metadata SET value='0.6' "
+            "WHERE key='instruction_training_weight_fraction'"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(ValueError, match="does not match policy"):
+        MixedTaskLossMaskAuditor(
+            binding,
+            expected_languages=("python",),
+            expected_semantic_families=("semantic_to_code",),
+        ).materialize(output, tmp_path / "should-not-exist.json")
 
 
 def test_rejects_wrong_expected_source_identity(tmp_path: Path) -> None:

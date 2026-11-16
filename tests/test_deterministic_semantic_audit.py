@@ -4,6 +4,7 @@ import hashlib
 import importlib
 import importlib.util
 import json
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,10 @@ from bosscrafts_model.heldout_semantic_review import HeldoutSemanticReviewQueue
 
 
 def _feature():
-    if importlib.util.find_spec("bosscrafts_model.deterministic_semantic_audit") is None:
+    if (
+        importlib.util.find_spec("bosscrafts_model.deterministic_semantic_audit")
+        is None
+    ):
         pytest.fail("deterministic semantic pre-auditor is not implemented")
     return importlib.import_module("bosscrafts_model.deterministic_semantic_audit")
 
@@ -32,8 +36,7 @@ def _item(
         "language": language,
         "parser_runtime_identity_sha256": "a" * 64,
         "source_excerpt": (
-            "[source context lines 1-1; target span 1:0-1:5]\n"
-            ">000001| value = 1\n"
+            "[source context lines 1-1; target span 1:0-1:5]\n>000001| value = 1\n"
         ),
         "canonical_record": {
             "event": event,
@@ -89,9 +92,7 @@ def _write_source_queue(root: Path):
     }
     manifest = {**unsigned, "manifest_sha256": _sha256(_canonical(unsigned))}
     root.mkdir(parents=True)
-    (root / "review_queue.jsonl").write_text(
-        queue_text, encoding="utf-8", newline="\n"
-    )
+    (root / "review_queue.jsonl").write_text(queue_text, encoding="utf-8", newline="\n")
     (root / "manifest.json").write_text(
         f"{_canonical(manifest)}\n", encoding="utf-8", newline="\n"
     )
@@ -116,9 +117,7 @@ def test_objective_audit_finds_surface_contract_and_uncertainty_defects():
     unknown_item["canonical_record"]["metadata"]["unknown_node"] = "identifier"
     unknown = auditor.audit_item(unknown_item)
 
-    assert {finding.code for finding in surface.findings} == {
-        "surface_span_mismatch"
-    }
+    assert {finding.code for finding in surface.findings} == {"surface_span_mismatch"}
     assert {finding.code for finding in contract.findings} == {
         "event_ir_contract_mismatch"
     }
@@ -133,17 +132,14 @@ def test_non_extension_ir_name_must_match_its_claimed_surface():
 
     result = _feature().DeterministicSemanticAuditor().audit_item(item)
 
-    assert {finding.code for finding in result.findings} == {
-        "ir_name_surface_mismatch"
-    }
+    assert {finding.code for finding in result.findings} == {"ir_name_surface_mismatch"}
 
 
 def test_truncated_surface_must_be_an_exact_bounded_prefix():
     exact = "x" * 4100
     item = _item(surface="x" * 4096, span=[1, 0, 1, 4100])
     item["source_excerpt"] = (
-        "[source context lines 1-1; target span 1:0-1:4100]\n"
-        f">000001| {exact}\n"
+        f"[source context lines 1-1; target span 1:0-1:4100]\n>000001| {exact}\n"
     )
     item["canonical_record"]["metadata"]["surface_truncated"] = True
     item["canonical_record"]["ir"]["name"] = exact
@@ -158,8 +154,7 @@ def test_truncated_surface_rejects_a_nonprefix_claim():
     exact = "x" * 4100
     item = _item(surface="y" * 4096, span=[1, 0, 1, 4100])
     item["source_excerpt"] = (
-        "[source context lines 1-1; target span 1:0-1:4100]\n"
-        f">000001| {exact}\n"
+        f"[source context lines 1-1; target span 1:0-1:4100]\n>000001| {exact}\n"
     )
     item["canonical_record"]["metadata"]["surface_truncated"] = True
     item["canonical_record"]["ir"]["name"] = exact
@@ -169,6 +164,38 @@ def test_truncated_surface_rejects_a_nonprefix_claim():
     assert {finding.code for finding in result.findings} == {
         "surface_span_mismatch",
         "ir_name_surface_mismatch",
+    }
+
+
+def test_truncated_surface_is_checked_before_nfc_normalization():
+    raw = "e\u0301" * 2050
+    expected = unicodedata.normalize("NFC", raw[:4096])
+    item = _item(surface=expected, span=[1, 0, 1, len(raw.encode("utf-8"))])
+    item["source_excerpt"] = (
+        f"[source context lines 1-1; target span 1:0-1:6150]\n>000001| {raw}\n"
+    )
+    item["canonical_record"]["metadata"]["surface_truncated"] = True
+    item["canonical_record"]["ir"]["name"] = expected
+
+    result = _feature().DeterministicSemanticAuditor().audit_item(item)
+
+    assert len(expected) < 4096
+    assert result.passed is True
+
+
+def test_truncated_surface_rejects_an_arbitrarily_short_prefix():
+    exact = "x" * 4100
+    item = _item(surface="x" * 100, span=[1, 0, 1, 4100])
+    item["source_excerpt"] = (
+        f"[source context lines 1-1; target span 1:0-1:4100]\n>000001| {exact}\n"
+    )
+    item["canonical_record"]["metadata"]["surface_truncated"] = True
+    item["canonical_record"]["ir"]["name"] = "x" * 100
+
+    result = _feature().DeterministicSemanticAuditor().audit_item(item)
+
+    assert {finding.code for finding in result.findings} == {
+        "surface_span_mismatch",
     }
 
 
@@ -296,4 +323,3 @@ def test_report_verifier_rejects_tampered_or_stale_evidence(tmp_path):
 
     with pytest.raises(ValueError, match="stale or tampered"):
         reporter.verify(source, output)
-
