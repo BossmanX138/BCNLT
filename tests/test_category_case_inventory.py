@@ -45,7 +45,7 @@ def _case_body(category: str, index: int) -> dict[str, object]:
             "split": "test",
             "language": language,
         }
-    elif category in {"semantic_fidelity", "raw_code", "execution_correctness"}:
+    elif category in {"semantic_fidelity", "raw_code"}:
         case_kind = "packed_model_task"
         family = (
             "code_to_semantic"
@@ -59,13 +59,20 @@ def _case_body(category: str, index: int) -> dict[str, object]:
             "language": language,
             "family": family,
         }
-        if category == "execution_correctness":
-            case.update(
-                {
-                    "stdin": f"{index}\n",
-                    "expected_stdout": f"{index + 1}\n",
-                }
-            )
+    elif category == "execution_correctness":
+        case_kind = "benchmark_function_completion"
+        case = {
+            "source_task_id": f"fixture/{index}",
+            "split": "test",
+            "language": language,
+            "inference_task": "instruction_to_code",
+            "prompt": f"Implement benchmark function {index}.",
+            "execution_mode": "test_harness",
+            "harness_prefix": f"fixture prefix {index}\n",
+            "harness_suffix": f"fixture tests {index}\n",
+            "stdin": "",
+            "expected_stdout": "",
+        }
     elif category == "ordinary_instruction":
         case_kind = "ifeval_instruction"
         case = {
@@ -162,7 +169,6 @@ def test_builds_content_addressed_category_inventory(tmp_path: Path) -> None:
         "tokenizer_fidelity",
         "semantic_fidelity",
         "raw_code",
-        "execution_correctness",
     }
     assert all(
         len(loaded.category_example_ids[category])
@@ -245,7 +251,7 @@ def test_execution_correctness_requires_bounded_frozen_oracle(
         "".join(json.dumps(record) + "\n" for record in records),
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="fields"):
+    with pytest.raises(ValueError, match="benchmark case"):
         build_category_case_inventory(case_files)
 
     case_files = _write_case_files(tmp_path)
@@ -259,7 +265,41 @@ def test_execution_correctness_requires_bounded_frozen_oracle(
         "".join(json.dumps(record) + "\n" for record in records),
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="oracle"):
+    with pytest.raises(ValueError, match="benchmark case"):
+        build_category_case_inventory(case_files)
+
+    case_files = _write_case_files(tmp_path)
+    execution_path = case_files["execution_correctness"]
+    records = [json.loads(line) for line in execution_path.read_text().splitlines()]
+    harness_record = records[0]
+    harness_record["case"].update(
+        {
+            "execution_mode": "test_harness",
+            "harness_prefix": "",
+            "harness_suffix": "\nassert candidate(2) == 3\n",
+            "stdin": "",
+            "expected_stdout": "",
+        }
+    )
+    body = {key: value for key, value in harness_record.items() if key != "example_id"}
+    harness_record["example_id"] = hashlib.sha256(_canonical(body)).hexdigest()
+    records.sort(key=lambda record: record["example_id"])
+    execution_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+    build_category_case_inventory(case_files)
+
+    harness_record["case"]["harness_suffix"] = ""
+    harness_record["case"]["harness_prefix"] = ""
+    body = {key: value for key, value in harness_record.items() if key != "example_id"}
+    harness_record["example_id"] = hashlib.sha256(_canonical(body)).hexdigest()
+    records.sort(key=lambda record: record["example_id"])
+    execution_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="benchmark case"):
         build_category_case_inventory(case_files)
 
 

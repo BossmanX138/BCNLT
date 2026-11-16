@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Protocol
 
 from .category_case_inventory import (
+    MAX_EXECUTION_HARNESS_BYTES,
     MAX_EXECUTION_STDIN_BYTES,
     MAX_EXECUTION_STDOUT_BYTES,
     load_category_case_bundle,
@@ -17,6 +18,7 @@ from .category_case_inventory import (
 )
 from .immutable_artifacts import publish_new_files
 from .inference_protocol import (
+    build_inference_prompt,
     response_payload_token_ids,
     response_protocol_complete,
 )
@@ -32,11 +34,12 @@ from .tokenizer import (
     NativeTokenizerBinding,
 )
 
-CODE_ACCEPTANCE_RECEIPT_SCHEMA = "bosscrafts-code-acceptance-receipt-v1"
+CODE_ACCEPTANCE_RECEIPT_SCHEMA = "bosscrafts-code-acceptance-receipt-v2"
 CODE_ACCEPTANCE_CATEGORIES = ("raw_code", "execution_correctness")
 MAX_CODE_ACCEPTANCE_CASES = 100_000
 MAX_GENERATED_TOKENS = 2_048
 MAX_GENERATED_SOURCE_BYTES = 64 * 1024
+MAX_EXECUTION_SOURCE_BYTES = 64 * 1024
 MAX_CODE_ACCEPTANCE_RECEIPT_BYTES = 256 * 1024 * 1024
 
 
@@ -47,6 +50,7 @@ class SandboxExecutor(Protocol):
         language: str,
         source: str,
         stdin_text: str,
+        mode: str = "program",
     ) -> SandboxExecutionResult: ...
 
 
@@ -115,17 +119,19 @@ def _validated_generations(
 def _decoded_generation(
     binding: NativeTokenizerBinding,
     generated_ids: list[int],
+    *,
+    inference_task: str,
 ) -> tuple[bool, list[int], str, bool]:
     protocol_complete = response_protocol_complete(
         binding,
-        task="semantic_to_code",
+        task=inference_task,
         generated_ids=generated_ids,
     )
     if not protocol_complete:
         return False, [], "", False
     payload_ids = response_payload_token_ids(
         binding,
-        "semantic_to_code",
+        inference_task,
         generated_ids,
     )
     try:
@@ -153,6 +159,10 @@ def _record_from_detail(
 ) -> dict[str, object]:
     generated_ids = detail.get("generated_ids")
     language = detail.get("language")
+    inference_task = detail.get("inference_task")
+    execution_mode = detail.get("execution_mode")
+    harness_prefix = detail.get("harness_prefix")
+    harness_suffix = detail.get("harness_suffix")
     stdin_text = detail.get("stdin")
     expected_stdout = detail.get("expected_stdout")
     sandbox = detail.get("sandbox")
@@ -166,6 +176,12 @@ def _record_from_detail(
             for token_id in generated_ids
         )
         or type(language) is not str
+        or inference_task not in {"semantic_to_code", "instruction_to_code"}
+        or execution_mode not in {None, "stdin_stdout", "test_harness"}
+        or type(harness_prefix) is not str
+        or type(harness_suffix) is not str
+        or len((harness_prefix + harness_suffix).encode("utf-8"))
+        > MAX_EXECUTION_HARNESS_BYTES
         or type(stdin_text) is not str
         or len(stdin_text.encode("utf-8")) > MAX_EXECUTION_STDIN_BYTES
         or (
@@ -180,7 +196,11 @@ def _record_from_detail(
     ):
         raise ValueError("code acceptance detail values are invalid")
     protocol_complete, payload_ids, source, exact_roundtrip = (
-        _decoded_generation(binding, generated_ids)
+        _decoded_generation(
+            binding,
+            generated_ids,
+            inference_task=str(inference_task),
+        )
     )
     if (
         detail.get("generated_ids_sha256") != _sha256(generated_ids)
@@ -190,12 +210,49 @@ def _record_from_detail(
         != hashlib.sha256(source.encode("utf-8")).hexdigest()
     ):
         raise ValueError("code acceptance generated detail is inconsistent")
+    if category == "raw_code":
+        if (
+            inference_task != "semantic_to_code"
+            or execution_mode is not None
+            or harness_prefix
+            or harness_suffix
+        ):
+            raise ValueError("raw code detail harness is invalid")
+        execution_source = source
+    else:
+        if inference_task != "instruction_to_code":
+            raise ValueError("execution correctness inference task is invalid")
+        if type(expected_stdout) is not str:
+            raise ValueError("execution correctness detail oracle is invalid")
+        if (
+            execution_mode == "stdin_stdout"
+            and (
+                harness_prefix != ""
+                or harness_suffix != ""
+                or expected_stdout == ""
+            )
+        ) or (
+            execution_mode == "test_harness"
+            and harness_prefix == harness_suffix == ""
+        ):
+            raise ValueError("execution correctness detail harness is invalid")
+        execution_source = harness_prefix + source + harness_suffix
+    if (
+        len(execution_source.encode("utf-8")) > MAX_EXECUTION_SOURCE_BYTES
+        or detail.get("execution_source_sha256")
+        != hashlib.sha256(execution_source.encode("utf-8")).hexdigest()
+        or (not source and sandbox is not None)
+    ):
+        raise ValueError("code acceptance execution source is inconsistent")
     stdout = b""
+    stderr = b""
+    sandbox_mode = "test" if execution_mode == "test_harness" else "program"
     if sandbox is not None:
-        stdout, _ = validate_sandbox_execution_payload(
+        stdout, stderr = validate_sandbox_execution_payload(
             sandbox,
             language=language,
-            source=source,
+            mode=sandbox_mode,
+            source=execution_source,
             stdin_text=stdin_text,
         )
     compiled = _compile_passed(sandbox)
@@ -227,6 +284,7 @@ def _record_from_detail(
             sandbox is not None
             and sandbox.get("status") == "passed"
             and stdout == expected_stdout.encode("utf-8")
+            and stderr == b""
         ),
         "compile_passed": compiled,
         "sandbox_escape": False,
@@ -269,13 +327,20 @@ def _validated_records_and_details(
     detail_fields = {
         "example_id",
         "task_example_id",
+        "source_task_id",
         "language",
+        "inference_task",
         "task_input_ids_sha256",
+        "generation_prompt_sha256",
         "generated_ids",
         "generated_ids_sha256",
         "protocol_complete",
         "payload_ids_sha256",
         "generated_source_sha256",
+        "execution_mode",
+        "harness_prefix",
+        "harness_suffix",
+        "execution_source_sha256",
         "stdin",
         "expected_stdout",
         "sandbox",
@@ -288,14 +353,37 @@ def _validated_records_and_details(
         record = dict(raw_record)
         detail = dict(raw_detail)
         example_id = record.get("example_id")
+        task_example_id = detail.get("task_example_id")
+        source_task_id = detail.get("source_task_id")
+        task_input_sha256 = detail.get("task_input_ids_sha256")
+        lineage_invalid = (
+            (
+                category == "raw_code"
+                and (
+                    not _is_sha256(task_example_id)
+                    or source_task_id is not None
+                    or not _is_sha256(task_input_sha256)
+                )
+            )
+            or (
+                category == "execution_correctness"
+                and (
+                    task_example_id is not None
+                    or type(source_task_id) is not str
+                    or not source_task_id.strip()
+                    or len(source_task_id.encode("utf-8")) > 512
+                    or task_input_sha256 is not None
+                )
+            )
+        )
         if (
             set(record) != record_fields
             or set(detail) != detail_fields
             or not _is_sha256(example_id)
             or example_id in seen
             or detail.get("example_id") != example_id
-            or not _is_sha256(detail.get("task_example_id"))
-            or not _is_sha256(detail.get("task_input_ids_sha256"))
+            or lineage_invalid
+            or not _is_sha256(detail.get("generation_prompt_sha256"))
             or any(
                 type(record.get(field)) is not bool
                 for field in record_fields - {"example_id", "language"}
@@ -330,16 +418,17 @@ def run_code_acceptance_cases(
     if category not in CODE_ACCEPTANCE_CATEGORIES:
         raise ValueError("code acceptance category is invalid")
     bundle = load_category_case_bundle(case_bundle_root)
-    references = bundle.inventory.packed_task_references[category]
-    if not references or len(references) > MAX_CODE_ACCEPTANCE_CASES:
+    case_records = load_category_case_records(bundle, category)
+    if not case_records or len(case_records) > MAX_CODE_ACCEPTANCE_CASES:
         raise ValueError("code acceptance case count is invalid")
-    expected_ids = tuple(reference.category_example_id for reference in references)
+    expected_ids = tuple(str(record["example_id"]) for record in case_records)
+    if expected_ids != bundle.inventory.category_example_ids[category]:
+        raise ValueError("code acceptance case inventory mismatch")
     generations = _validated_generations(
         generated_ids_by_example_id,
         expected_ids,
         vocabulary_size=binding.vocab_size,
     )
-    case_records = load_category_case_records(bundle, category)
     cases = {
         str(record["example_id"]): record["case"] for record in case_records
     }
@@ -350,73 +439,148 @@ def run_code_acceptance_cases(
         != bundle.inventory.test_task_database_identity_sha256
     ):
         raise ValueError("code acceptance test database lineage mismatch")
-    dataset = ResumableTaskDataset(binding, test_task_database)
-    task_ids = tuple(reference.task_example_id for reference in references)
-    tasks = {
-        str(task["example_id"]): task
-        for task in dataset.iter_examples_by_id(task_ids, split="test")
+    references = bundle.inventory.packed_task_references.get(category, ())
+    references_by_case = {
+        reference.category_example_id: reference for reference in references
     }
+    tasks: dict[str, Mapping[str, object]] = {}
+    if category == "raw_code":
+        if len(references) != len(case_records):
+            raise ValueError("raw code packed case inventory is incomplete")
+        dataset = ResumableTaskDataset(binding, test_task_database)
+        task_ids = tuple(reference.task_example_id for reference in references)
+        tasks = {
+            str(task["example_id"]): task
+            for task in dataset.iter_examples_by_id(task_ids, split="test")
+        }
+    elif references:
+        raise ValueError("execution correctness must not use packed task rows")
     records: list[dict[str, object]] = []
     details: list[dict[str, object]] = []
-    for reference in references:
-        task = tasks.get(reference.task_example_id)
-        case = cases.get(reference.category_example_id)
-        if (
-            type(task) is not dict
-            or type(case) is not dict
-            or task.get("language") != reference.language
-            or task.get("family") != "semantic_to_code"
-            or case.get("task_example_id") != reference.task_example_id
-            or case.get("language") != reference.language
-            or case.get("family") != "semantic_to_code"
-            or case.get("task_database_identity_sha256")
-            != audit_before.database_identity_sha256
-        ):
-            raise ValueError("code acceptance task or case lineage mismatch")
-        input_ids = task.get("input_ids")
-        if type(input_ids) is not list or any(
-            type(token_id) is not int for token_id in input_ids
-        ):
-            raise ValueError("code acceptance task input IDs are invalid")
-        generated_ids = generations[reference.category_example_id]
+    for example_id in expected_ids:
+        case = cases.get(example_id)
+        if type(case) is not dict:
+            raise ValueError("code acceptance case is invalid")
+        task_example_id: str | None = None
+        source_task_id: str | None = None
+        task_input_ids_sha256: str | None = None
+        if category == "raw_code":
+            reference = references_by_case.get(example_id)
+            if reference is None:
+                raise ValueError("raw code packed reference is missing")
+            task = tasks.get(reference.task_example_id)
+            if (
+                type(task) is not dict
+                or task.get("language") != reference.language
+                or task.get("family") != "semantic_to_code"
+                or case.get("task_example_id") != reference.task_example_id
+                or case.get("language") != reference.language
+                or case.get("family") != "semantic_to_code"
+                or case.get("task_database_identity_sha256")
+                != audit_before.database_identity_sha256
+            ):
+                raise ValueError("code acceptance task or case lineage mismatch")
+            input_ids = task.get("input_ids")
+            loss_start = task.get("loss_start_index")
+            if (
+                type(input_ids) is not list
+                or any(type(token_id) is not int for token_id in input_ids)
+                or type(loss_start) is not int
+                or not 0 < loss_start < len(input_ids)
+            ):
+                raise ValueError("code acceptance task input IDs are invalid")
+            language = reference.language
+            inference_task = "semantic_to_code"
+            generation_prompt = input_ids[:loss_start]
+            task_example_id = reference.task_example_id
+            task_input_ids_sha256 = _sha256(input_ids)
+            execution_mode: str | None = None
+            harness_prefix = ""
+            harness_suffix = ""
+            stdin_text = ""
+            expected_stdout: str | None = None
+        else:
+            source_id = case.get("source_task_id")
+            language_value = case.get("language")
+            prompt = case.get("prompt")
+            mode = case.get("execution_mode")
+            prefix = case.get("harness_prefix")
+            suffix = case.get("harness_suffix")
+            stdin = case.get("stdin")
+            stdout = case.get("expected_stdout")
+            if (
+                type(source_id) is not str
+                or type(language_value) is not str
+                or case.get("inference_task") != "instruction_to_code"
+                or type(prompt) is not str
+                or mode not in {"stdin_stdout", "test_harness"}
+                or type(prefix) is not str
+                or type(suffix) is not str
+                or type(stdin) is not str
+                or type(stdout) is not str
+            ):
+                raise ValueError("execution correctness benchmark is invalid")
+            source_task_id = source_id
+            language = language_value
+            inference_task = "instruction_to_code"
+            generation_prompt = build_inference_prompt(
+                binding,
+                task=inference_task,
+                prompt=prompt,
+            )
+            execution_mode = str(mode)
+            harness_prefix = prefix
+            harness_suffix = suffix
+            stdin_text = stdin
+            expected_stdout = stdout
+        generated_ids = generations[example_id]
         protocol_complete, payload_ids, source, _ = _decoded_generation(
             binding,
             generated_ids,
+            inference_task=inference_task,
         )
-        stdin_text = ""
-        expected_stdout: str | None = None
-        if category == "execution_correctness":
-            stdin = case.get("stdin")
-            stdout = case.get("expected_stdout")
-            if type(stdin) is not str or type(stdout) is not str:
-                raise ValueError("execution correctness oracle is invalid")
-            stdin_text = stdin
-            expected_stdout = stdout
+        execution_source = harness_prefix + source + harness_suffix
+        if len(execution_source.encode("utf-8")) > MAX_EXECUTION_SOURCE_BYTES:
+            raise ValueError("execution correctness source exceeds its bound")
         sandbox_payload: dict[str, object] | None = None
         if source:
+            sandbox_mode = (
+                "test" if execution_mode == "test_harness" else "program"
+            )
             result = sandbox.execute(
-                language=reference.language,
-                source=source,
+                language=language,
+                source=execution_source,
                 stdin_text=stdin_text,
+                mode=sandbox_mode,
             )
             validate_sandbox_execution_result(
                 result,
-                language=reference.language,
-                source=source,
+                language=language,
+                mode=sandbox_mode,
+                source=execution_source,
                 stdin_text=stdin_text,
             )
             sandbox_payload = result.to_dict()
         detail: dict[str, object] = {
-            "example_id": reference.category_example_id,
-            "task_example_id": reference.task_example_id,
-            "language": reference.language,
-            "task_input_ids_sha256": _sha256(input_ids),
+            "example_id": example_id,
+            "task_example_id": task_example_id,
+            "source_task_id": source_task_id,
+            "language": language,
+            "inference_task": inference_task,
+            "task_input_ids_sha256": task_input_ids_sha256,
+            "generation_prompt_sha256": _sha256(generation_prompt),
             "generated_ids": generated_ids,
             "generated_ids_sha256": _sha256(generated_ids),
             "protocol_complete": protocol_complete,
             "payload_ids_sha256": _sha256(payload_ids),
             "generated_source_sha256": hashlib.sha256(
                 source.encode("utf-8")
+            ).hexdigest(),
+            "execution_mode": execution_mode,
+            "harness_prefix": harness_prefix,
+            "harness_suffix": harness_suffix,
+            "execution_source_sha256": hashlib.sha256(
+                execution_source.encode("utf-8")
             ).hexdigest(),
             "stdin": stdin_text,
             "expected_stdout": expected_stdout,

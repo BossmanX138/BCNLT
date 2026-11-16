@@ -146,7 +146,11 @@ def main() -> int:
         model=model,
         binding=binding,
         category=arguments.category,
-        family="semantic_to_code",
+        family=(
+            "instruction_to_code"
+            if arguments.category == "execution_correctness"
+            else "semantic_to_code"
+        ),
         case_bundle_root=arguments.case_bundle,
         test_task_database=arguments.test_database,
         maximum_new_tokens=arguments.max_new_tokens,

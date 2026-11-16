@@ -1,6 +1,6 @@
 # Pre-model source audit and repair record
 
-Date: 2026-11-13
+Date: 2026-11-16
 
 Branch: `audit/v10-exhaustive-code-review`
 
@@ -16,13 +16,14 @@ actionable defect after the repairs and gates below.
   stored remotely and reviewed through the repository rather than loose local
   files.
 - The contained runtime is sealed by the normalized Python-source aggregate
-  `c5623e97f3f1e1e884e1d54a316d174292fbcbf61da3ddfdbf3b432418e0450a`.
+  `d791c0eb80c9a65191be3b15877f6a7153e434bbe5f8cd4a6060f57af2fca14e`.
 - The resulting parser runtime identity is
-  `c1ca753bf4d1dbabf841fdcd120e5c3eec026b7211ca5c0f08d066074acee938`.
-- Ruff passed every changed Python file.
-- Mypy passed all 74 configured core source files and the changed orchestration
-  scripts in strict mode.
-- The latest complete combined regression passed 599 tests and 195 subtests
+  `7440ef6263537ded8bceec9a3d2fdb72cbaf7a324e6deea552dc18e4d6891dfc`.
+- Ruff passed the complete maintained Python tree; immutable recovery artifacts
+  and vendored third-party packages are explicitly outside that lint surface.
+- Strict mypy passed all 231 maintained source and orchestration files with
+  explicit package bases.
+- The latest complete combined regression passed 658 tests and 198 subtests
   with warnings treated as errors.
 - The focused scientific-sandbox slice passed 9 tests and 13 subtests against
   live Docker, and the new four-probe containment receipt passed independently.
@@ -204,25 +205,26 @@ actionable defect after the repairs and gates below.
     that receipt, and final acceptance independently revalidates its complete
     lineage. The runner and receipt contract are regression-tested; a real
     production receipt still requires the final frozen category-case bundle.
-23. Execution-correctness cases froze only a packed task reference while the
-    acceptance metric claimed exact expected output. No stdin or output oracle
-    existed in the content-addressed case, so a later caller could author the
-    result without an executable ground truth. Category Case V3 now requires
-    every execution case to preserve bounded UTF-8 stdin and exact expected
-    stdout inside the hashed case payload. Missing, extra or oversized oracle
-    fields fail before inventory publication. The complete regression passes
-    with the stricter contract. The production code-acceptance runner now loads
-    only a completed full-model checkpoint whose training, validation, test,
-    held-out-suite, tokenizer and model fingerprints match exactly; generates
-    every referenced `semantic_to_code` response with deterministic greedy
-    decoding; and sends only decoded, protocol-complete source through the
-    attested no-network Docker sandbox. Its no-clobber receipt preserves the
-    generated IDs, task hashes, frozen stdin/output oracles, full sandbox
-    response and isolation attestation, then independently rederives every
-    category boolean. Category Evidence Schema V10 requires this receipt for
-    both raw-code and execution-correctness evidence, and final acceptance
-    revalidates it. Forged result booleans, response payloads and sandbox-policy
-    substitutions fail even when an attacker recomputes the outer JSON hashes.
+23. Execution-correctness cases initially froze only a packed task reference,
+    and V3 later added stdin and expected stdout. That was still insufficient:
+    an arbitrary function-only `semantic_to_code` example could receive an
+    unrelated empty or constant oracle, allowing a syntactically valid no-op to
+    pass. Category Case V4 now invalidates that weak shape and requires one of
+    two explicit content-addressed execution modes. `stdin_stdout` admits only
+    a real command-line oracle with no injected harness and nonempty expected
+    output. `test_harness` requires a bounded frozen prefix or suffix that is
+    concatenated with the generated source before execution, so benchmark
+    assertions can exercise functions and implicit entry points. The production
+    code-acceptance runner loads only a completed exact-lineage checkpoint,
+    deterministically generates every referenced `instruction_to_code` response,
+    and sends the exact combined source through the attested no-network Docker
+    sandbox. Code Acceptance Receipt V2 preserves both harness segments and the
+    generated and combined source hashes; independent validation reconstructs
+    the combined source and verifies the sandbox request identity. Forged
+    booleans, generated payloads, harnesses, or sandbox-policy substitutions
+    fail even when an attacker recomputes every outer JSON hash. A production
+    case bundle must now be built from genuine runnable held-out benchmark
+    programs; arbitrary source fragments are no longer admissible evidence.
 24. The code receipt was explicitly allowed to grow to 256 MiB, but the final
     acceptance command still rejected every category-evidence artifact over 16
     MiB. A legitimate full raw-code receipt could therefore pass its own
@@ -273,6 +275,46 @@ actionable defect after the repairs and gates below.
     throughput to meet the frozen minimum in addition to the 12 GiB VRAM, RAM
     and zero-OOM budgets. Category Evidence Schema V13 removes the final
     caller-authored category-record exception.
+28. Historical eligibility could not be assumed to survive a contained
+    parser-runtime repair merely because document counts matched. The runtime-
+    equivalence gate now re-runs a complete logical comparison, requires the
+    prior receipt to equal the fresh result exactly, verifies every eligible and
+    excluded record against the baseline admission database, and publishes a
+    new no-clobber manifest bound to the candidate admission identity. The
+    current test admission transferred 2,735 eligible and 472 excluded documents
+    only after exact equivalence passed; the current validation admission
+    independently transferred 2,744 eligible and 475 excluded documents. The
+    process was repeated after the final runtime reseal rather than relabeling
+    earlier artifacts. The final test and validation eligibility manifests are
+    `b6220e5512afb932662fa21e34c6b6b51e83152d75e73b25b6a195145dded7db`
+    and
+    `9999566685f1eab07ac76c870e95b5fa7417b1929d8a0ff3cb08f18e4457331e`.
+29. The full regression exposed one remaining cross-boundary defect: scientific-
+    learning evidence still required sandbox protocol V1 after the attested
+    execution runner advanced to V2. Real V2 executions were therefore rejected
+    before they could promote independently reproduced meanings. The contained
+    runtime now requires V2 exactly, rejects legacy V1 evidence, and tests the
+    host/runtime protocol equality. This changed the sealed runtime identity, so
+    both evaluation admissions were rebuilt from source. Exact logical comparison
+    against the prior runtime passed with zero mismatches across 3,219 validation
+    and 3,207 test documents before eligibility was transferred again.
+30. The final-runtime test split is fully packed and independently
+    audited: 2,735 documents produced 2,835,712 examples and 2,876,705,335
+    sequence tokens across all 14 languages. Its content hash is
+    `7050717d0157cbe4901e2aaf36d17b5a05cab614d39a7458829dc11054d5fe14`
+    and database identity is
+    `a3923f08c80ca0c1ef99a7335d8691f6d3966687719a2640516fcd717ff8579d`.
+    A separately stored byte-identical copy passed SQLite integrity checking.
+    The final-runtime validation split independently passed with 2,744 documents,
+    2,827,054 examples and 2,869,345,343 tokens; its content hash is
+    `3669facbc062e42c3bf678191253afab8e856c75a6c35b52d3999821388da24f`
+    and database identity is
+    `89b0f3799e1013c6857d18b3f24f558002498628923ccfbc294f07943010c22c`.
+    The production case freezer selected globally disjoint, balanced catalogs
+    of 1,024 tokenizer-fidelity, 1,792 semantic-fidelity and 1,400 raw-code
+    cases from the final test database. The freeze audit identity is
+    `c722787f9015800e3e33cfbbed0f0d2507d461007007decbf07127a467b82696`.
+    These evaluation artifacts do not release the training hold.
 
 ## Boundaries
 
@@ -299,18 +341,29 @@ pending authentication. The ordinary-instruction runner is executable and
 audited, and it now generates both the candidate and fixed random baseline
 itself. The safety runner likewise generates its candidate responses directly
 from the complete checkpoint before invoking the pinned judge. The exact
-current tree passes 631 tests and 195 subtests, along with
-Ruff and strict mypy across 83 source files. The regression receipt path is now
-implemented and mandatory, but its fixed worker must still be exercised from a
-clean committed tree. Tokenizer fidelity is also executable and receipt-bound,
+    current tree passes 658 tests and 198 subtests, along with Ruff and strict
+    mypy across 231 maintained source and orchestration files. The regression
+    receipt path is now implemented and mandatory, but its fixed worker must
+    still be exercised from a clean committed tree. Tokenizer fidelity is also
+    executable and receipt-bound,
 but awaits the final frozen category-case bundle for its production run. The
 safety content runner, runtime sealer and separate containment
 runner are implemented and mandatory at both category compilation and final
-acceptance; the live containment probes pass, while the 8.64 GB pinned safety
-judge has not yet been installed or executed. Raw-code and execution-correctness
-generation and execution are now receipt-bound, but their production runs still
-require the final frozen category-case bundle and a completed current-lineage
-checkpoint. Resource measurement is now likewise checkpoint-bound and
+acceptance. The live containment probes pass. The exact 8.64 GB NVIDIA
+Nemotron-3 Content Safety snapshot and dependency closure are now sealed under
+manifest `61b1c3a81dcd74976ff9167722972f0f619fb682d51bd6db5a1bac75749c99dc`;
+the real model loaded on the RTX 4070 SUPER with bounded CPU offload and
+correctly classified both safe and unsafe smoke cases. The unsafe smoke also
+returned taxonomy categories, proving that the documented category template
+argument reaches generation despite Transformers logging it again as an unused
+processor argument. Nemotron may emit a literal terminal `<end_of_turn>` token;
+the strict parser now accepts exactly one such final marker while rejecting it
+anywhere else. These are runtime smokes, not a completed production safety
+receipt. Raw-code and execution-correctness generation and execution are now
+receipt-bound, and the execution path now requires real stdin/output or frozen
+test-harness oracles, but their production runs still require the final frozen
+category-case bundle and a completed current-lineage checkpoint. Resource
+measurement is now likewise checkpoint-bound and
 receipt-backed. All eight category paths have executable receipt contracts;
 their real production receipts still require the final frozen case bundle and
 a completed current-lineage checkpoint. Training and meaningful model insertion
@@ -327,4 +380,4 @@ matches and 0/12 exact clean-core matches, and failed promotion-quality
 protocol rates. Its evidence and non-promotion decision are recorded in
 `docs/v12-recovery-diagnostic-20261113.md`. Neither diagnostic is evidence that
 a model has been trained, promoted, or improved. The exact current tree passes
-631 tests and 195 subtests.
+  658 tests and 198 subtests.

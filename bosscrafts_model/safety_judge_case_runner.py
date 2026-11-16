@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import hashlib
-import importlib
 import json
 import os
 import subprocess
-import sys
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from .category_case_inventory import (
     CATEGORY_CASE_SCHEMA,
@@ -25,19 +22,19 @@ from .model_response_generation import (
 )
 from .safety_judge_runtime import (
     EXPECTED_SAFETY_JUDGE_RUNTIME_MANIFEST_SHA256,
-    SAFETY_JUDGE_RUNTIME_VERSIONS,
     SafetyJudgeRuntime,
     verify_safety_judge_runtime,
 )
+from .safety_judge_worker import (
+    MAX_SAFETY_BATCH_BYTES,
+    MAX_SAFETY_CASES,
+    MAX_SAFETY_JUDGMENT_BYTES,
+    MAX_SAFETY_RESPONSE_BYTES,
+    SAFETY_JUDGE_WORKER_INPUT_SCHEMA,
+    SAFETY_JUDGE_WORKER_OUTPUT_SCHEMA,
+)
 
-SAFETY_JUDGE_WORKER_INPUT_SCHEMA = "bosscrafts-safety-judge-worker-input-v1"
-SAFETY_JUDGE_WORKER_OUTPUT_SCHEMA = "bosscrafts-safety-judge-worker-output-v1"
 SAFETY_CONTENT_RECEIPT_SCHEMA = "bosscrafts-safety-content-receipt-v2"
-MAX_SAFETY_BATCH_BYTES = 64 * 1024 * 1024
-MAX_SAFETY_RESPONSE_BYTES = 256 * 1024
-MAX_SAFETY_JUDGMENT_BYTES = 4 * 1024
-MAX_SAFETY_CASES = 4_096
-MAX_SAFETY_CONTEXT_TOKENS = 131_000
 _WORKER_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "run_safety_judge_worker.py"
 _SAFETY_LABELS = {"safe", "unsafe"}
 _SAFETY_CATEGORIES = {
@@ -114,13 +111,19 @@ def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]
 
 
 def parse_safety_judgment(value: str) -> SafetyJudgment:
-    """Parse the exact documented Nemotron content-safety response format."""
+    """Parse the documented Nemotron response and its terminal turn marker."""
     if type(value) is not str or not value.strip():
         raise ValueError("safety judge output is empty")
     encoded = value.encode("utf-8")
     if len(encoded) > MAX_SAFETY_JUDGMENT_BYTES:
         raise ValueError("safety judge output is too large")
-    lines = value.strip().replace("\r\n", "\n").split("\n")
+    normalized = value.strip().replace("\r\n", "\n")
+    terminal_marker = "<end_of_turn>"
+    if normalized.endswith(terminal_marker):
+        normalized = normalized[: -len(terminal_marker)].rstrip()
+    if terminal_marker in normalized:
+        raise ValueError("safety judge terminal marker is invalid")
+    lines = normalized.split("\n")
     if len(lines) not in {2, 3} or any(line != line.strip() for line in lines):
         raise ValueError("safety judge output format is invalid")
     prefixes = ("User Safety: ", "Response Safety: ")
@@ -651,131 +654,3 @@ def publish_safety_content_receipt(
         ((destination, rendered),), artifact_label="safety content receipt"
     )
     return destination
-
-
-def _load_worker_dependencies() -> tuple[Any, Any]:
-    try:
-        torch = importlib.import_module("torch")
-        transformers = importlib.import_module("transformers")
-    except ImportError as error:
-        raise ValueError("safety judge dependencies are unavailable") from error
-    torch_version = str(getattr(torch, "__version__", "")).split("+", maxsplit=1)[0]
-    transformers_version = str(getattr(transformers, "__version__", ""))
-    if (
-        torch_version != SAFETY_JUDGE_RUNTIME_VERSIONS["torch"]
-        or transformers_version != SAFETY_JUDGE_RUNTIME_VERSIONS["transformers"]
-    ):
-        raise ValueError("safety judge dependency versions are invalid")
-    if not bool(torch.cuda.is_available()):
-        raise ValueError("safety judge CUDA runtime is unavailable")
-    return torch, transformers
-
-
-def _evaluate_payload(
-    runtime: SafetyJudgeRuntime, payload: dict[str, object]
-) -> dict[str, object]:
-    raw_cases = payload.get("cases")
-    if (
-        set(payload) != {"schema_version", "runtime_manifest_sha256", "cases"}
-        or payload.get("schema_version") != SAFETY_JUDGE_WORKER_INPUT_SCHEMA
-        or payload.get("runtime_manifest_sha256") != runtime.manifest_sha256
-        or type(raw_cases) is not list
-        or not 1 <= len(raw_cases) <= MAX_SAFETY_CASES
-    ):
-        raise ValueError("safety judge worker input contract is invalid")
-    torch, transformers = _load_worker_dependencies()
-    processor_class = transformers.AutoProcessor
-    model_class = transformers.Gemma3ForConditionalGeneration
-    processor = processor_class.from_pretrained(
-        str(runtime.root), local_files_only=True
-    )
-    model = model_class.from_pretrained(
-        str(runtime.root),
-        local_files_only=True,
-        torch_dtype=torch.bfloat16,
-    ).to("cuda")
-    model.eval()
-    results: list[dict[str, object]] = []
-    for case in raw_cases:
-        if (
-            type(case) is not dict
-            or set(case) != {"example_id", "prompt", "candidate_response"}
-            or not _is_sha256(case.get("example_id"))
-            or type(case.get("prompt")) is not str
-            or not str(case["prompt"]).strip()
-            or type(case.get("candidate_response")) is not str
-            or len(str(case["prompt"]).encode("utf-8")) > MAX_SAFETY_RESPONSE_BYTES
-            or len(str(case["candidate_response"]).encode("utf-8"))
-            > MAX_SAFETY_RESPONSE_BYTES
-        ):
-            raise ValueError("safety judge worker case is invalid")
-        messages = [
-            {
-                "role": "user",
-                "content": [{"type": "text", "text": case["prompt"]}],
-            },
-            {
-                "role": "assistant",
-                "content": [
-                    {"type": "text", "text": case["candidate_response"]}
-                ],
-            },
-        ]
-        inputs = processor.apply_chat_template(
-            messages,
-            add_generation_prompt=True,
-            tokenize=True,
-            return_dict=True,
-            return_tensors="pt",
-            request_categories="/categories",
-        )
-        input_length = int(inputs["input_ids"].shape[-1])
-        if input_length > MAX_SAFETY_CONTEXT_TOKENS:
-            raise ValueError("safety judge input exceeds the context bound")
-        inputs = inputs.to("cuda")
-        with torch.inference_mode():
-            generated = model.generate(
-                **inputs,
-                max_new_tokens=100,
-                do_sample=False,
-            )
-        output = processor.decode(
-            generated[0][input_length:], skip_special_tokens=True
-        )
-        if type(output) is not str or len(output.encode("utf-8")) > MAX_SAFETY_JUDGMENT_BYTES:
-            raise ValueError("safety judge generated output is invalid")
-        results.append({"example_id": case["example_id"], "raw_output": output})
-    return {
-        "schema_version": SAFETY_JUDGE_WORKER_OUTPUT_SCHEMA,
-        "runtime_manifest_sha256": runtime.manifest_sha256,
-        "results": results,
-    }
-
-
-def worker_main(argv: Sequence[str] | None = None) -> int:
-    import argparse
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--runtime-root", type=Path, required=True)
-    arguments = parser.parse_args(argv)
-    try:
-        content = sys.stdin.buffer.read(MAX_SAFETY_BATCH_BYTES + 1)
-        if not content or len(content) > MAX_SAFETY_BATCH_BYTES:
-            raise ValueError("safety judge worker input size is invalid")
-        payload = json.loads(
-            content.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys
-        )
-        if type(payload) is not dict:
-            raise ValueError("safety judge worker input must be an object")
-        runtime = verify_safety_judge_runtime(arguments.runtime_root)
-        output = _evaluate_payload(runtime, payload)
-        if verify_safety_judge_runtime(runtime.root).manifest_sha256 != runtime.manifest_sha256:
-            raise ValueError("safety judge runtime changed during worker execution")
-        rendered = _canonical(output)
-        if len(rendered) > MAX_SAFETY_BATCH_BYTES:
-            raise ValueError("safety judge worker output size is invalid")
-        sys.stdout.buffer.write(rendered)
-        return 0
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
-        print(f"{type(error).__name__}: {error}", file=sys.stderr)
-        return 2

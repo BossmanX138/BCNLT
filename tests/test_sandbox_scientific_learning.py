@@ -21,14 +21,17 @@ select_bcnlt_runtime(RUNTIME_SOURCE)
 
 from bcnlt.core import ContextualUnit
 from bcnlt.scientific_learning import (
+    SANDBOX_EXECUTION_PROTOCOL,
     CodingExperimentFixture,
     HypothesisProjection,
     SandboxBackedProjectionVerifier,
+    SandboxExecutionEvidence,
     ScientificExperimentEvidence,
     VerificationStatus,
 )
 from bcnlt.wildcard import DefinitionState, ProvisionalMeaning, WildcardMemory
 
+from bosscrafts_model.scientific_sandbox import PROTOCOL as HOST_SANDBOX_PROTOCOL
 from bosscrafts_model.scientific_sandbox import DockerScientificSandbox
 
 
@@ -110,6 +113,8 @@ class SandboxScientificLearningTests(unittest.TestCase):
         self.assertIsNotNone(evidence.sandbox_execution)
         execution = evidence.sandbox_execution
         assert execution is not None
+        self.assertEqual(SANDBOX_EXECUTION_PROTOCOL, HOST_SANDBOX_PROTOCOL)
+        self.assertEqual(execution.protocol, SANDBOX_EXECUTION_PROTOCOL)
         self.assertEqual(execution.status, "passed")
         self.assertEqual(execution.actual_output, 5)
         self.assertEqual(execution.network_mode, "none")
@@ -119,6 +124,10 @@ class SandboxScientificLearningTests(unittest.TestCase):
             ScientificExperimentEvidence.from_dict(evidence.to_dict()),
             evidence,
         )
+        legacy = execution.to_dict()
+        legacy["protocol"] = "bosscrafts-bcnlt-sandbox-v1"
+        with self.assertRaisesRegex(ValueError, "identity mismatch"):
+            SandboxExecutionEvidence.from_dict(legacy)
 
     def test_wildcard_memory_refuses_the_unattested_default_verifier(self) -> None:
         unit = self._unit("module.first", 1)

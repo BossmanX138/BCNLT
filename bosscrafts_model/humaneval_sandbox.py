@@ -12,8 +12,8 @@ from typing import Protocol, TypedDict, cast
 
 from .scientific_sandbox import PROTOCOL, SandboxExecutionResult
 
-RESULT_SCHEMA = "bosscrafts-humaneval-sandbox-result-v1"
-RECEIPT_SCHEMA = "bosscrafts-humaneval-sandbox-receipt-v1"
+RESULT_SCHEMA = "bosscrafts-humaneval-sandbox-result-v2"
+RECEIPT_SCHEMA = "bosscrafts-humaneval-sandbox-receipt-v2"
 MAX_RESULT_LINE_BYTES = 512 * 1024
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _RESULT_FIELDS = frozenset(
@@ -33,6 +33,7 @@ _SANDBOX_FIELDS = frozenset(
     {
         "protocol",
         "language",
+        "mode",
         "status",
         "phase",
         "exit_code",
@@ -107,6 +108,7 @@ class SandboxExecutor(Protocol):
         language: str,
         source: str,
         stdin_text: str,
+        mode: str = "program",
     ) -> SandboxExecutionResult: ...
 
 
@@ -166,7 +168,12 @@ def evaluate_sample(
     ):
         raise ValueError("HumanEval task and sample do not match")
     source = task_source(task, completion)
-    result = sandbox.execute(language="python", source=source, stdin_text="")
+    result = sandbox.execute(
+        language="python",
+        source=source,
+        stdin_text="",
+        mode="test",
+    )
     result_text = _result_text(result)
     return {
         "schema_version": RESULT_SCHEMA,
@@ -239,6 +246,7 @@ def validate_result(
         {
             "protocol": PROTOCOL,
             "language": "python",
+            "mode": "test",
             "source": source,
             "stdin": "",
         }
@@ -249,6 +257,7 @@ def validate_result(
         for key in (
             "protocol",
             "language",
+            "mode",
             "status",
             "phase",
             "exit_code",
@@ -262,6 +271,7 @@ def validate_result(
     if (
         sandbox.get("protocol") != PROTOCOL
         or sandbox.get("language") != "python"
+        or sandbox.get("mode") != "test"
         or sandbox.get("request_sha256") != request_sha256
         or sandbox.get("response_sha256") != hashlib.sha256(canonical_json(response)).hexdigest()
         or type(sandbox.get("container_name")) is not str
@@ -389,7 +399,7 @@ def _validate_attestation(attestation: dict[str, object], request_sha256: str) -
         or attestation.get("cgroupns_mode") != "private"
         or attestation.get("mount_count") != 0
         or attestation.get("tmpfs")
-        != "rw,exec,nosuid,nodev,size=134217728,mode=1777"
+        != "rw,exec,nosuid,nodev,size=268435456,mode=1777"
         or attestation.get("log_driver") != "none"
     ):
         raise ValueError("HumanEval sandbox isolation policy is invalid")
@@ -408,7 +418,7 @@ def _validate_attestation(attestation: dict[str, object], request_sha256: str) -
         "ipc_mode": "none",
         "cgroupns_mode": "private",
         "mount_count": 0,
-        "tmpfs": "rw,exec,nosuid,nodev,size=134217728,mode=1777",
+        "tmpfs": "rw,exec,nosuid,nodev,size=268435456,mode=1777",
         "log_driver": "none",
         "attach_stdin": True,
         "open_stdin": True,

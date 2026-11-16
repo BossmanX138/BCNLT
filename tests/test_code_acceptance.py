@@ -48,12 +48,15 @@ def _execution(
     source: str,
     stdin_text: str,
     stdout: bytes,
+    stderr: bytes = b"",
+    mode: str = "program",
 ) -> SandboxExecutionResult:
     request_sha256 = hashlib.sha256(
         canonical_json(
             {
                 "protocol": PROTOCOL,
                 "language": language,
+                "mode": mode,
                 "source": source,
                 "stdin": stdin_text,
             }
@@ -75,7 +78,7 @@ def _execution(
         "ipc_mode": "none",
         "cgroupns_mode": "private",
         "mount_count": 0,
-        "tmpfs": "rw,exec,nosuid,nodev,size=134217728,mode=1777",
+        "tmpfs": "rw,exec,nosuid,nodev,size=268435456,mode=1777",
         "log_driver": "none",
         "attach_stdin": True,
         "open_stdin": True,
@@ -89,11 +92,12 @@ def _execution(
     response = {
         "protocol": PROTOCOL,
         "language": language,
+        "mode": mode,
         "status": "passed",
         "phase": "run",
         "exit_code": 0,
         "stdout_b64": base64.b64encode(stdout).decode("ascii"),
-        "stderr_b64": "",
+        "stderr_b64": base64.b64encode(stderr).decode("ascii"),
         "timed_out": False,
         "output_limited": False,
         "duration_ms": 1,
@@ -101,11 +105,12 @@ def _execution(
     return SandboxExecutionResult(
         protocol=PROTOCOL,
         language=language,
+        mode=mode,
         status="passed",
         phase="run",
         exit_code=0,
         stdout_bytes=stdout,
-        stderr_bytes=b"",
+        stderr_bytes=stderr,
         timed_out=False,
         output_limited=False,
         duration_ms=1,
@@ -130,13 +135,13 @@ def _execution(
             ipc_mode="none",
             cgroupns_mode="private",
             mount_count=0,
-            tmpfs="rw,exec,nosuid,nodev,size=134217728,mode=1777",
+            tmpfs="rw,exec,nosuid,nodev,size=268435456,mode=1777",
             log_driver="none",
         ),
     )
 
 
-def _result(category: str) -> CodeAcceptanceBatchResult:
+def _result(category: str, *, stderr: bytes = b"") -> CodeAcceptanceBatchResult:
     binding = NativeTokenizerBinding.load()
     source = "print(int(input()) + 1)\n"
     payload_ids = binding.encode_payload(source)
@@ -150,23 +155,44 @@ def _result(category: str) -> CodeAcceptanceBatchResult:
     ]
     stdin_text = "1\n" if category == "execution_correctness" else ""
     expected_stdout = "2\n" if category == "execution_correctness" else None
+    execution_mode = (
+        "stdin_stdout" if category == "execution_correctness" else None
+    )
     sandbox = _execution(
         language="python",
         source=source,
         stdin_text=stdin_text,
         stdout=b"2\n" if category == "execution_correctness" else b"",
+        stderr=stderr,
     ).to_dict()
     example_id = "e" * 64
     detail: dict[str, object] = {
         "example_id": example_id,
-        "task_example_id": "a" * 64,
+        "task_example_id": (
+            "a" * 64 if category == "raw_code" else None
+        ),
+        "source_task_id": (
+            None if category == "raw_code" else "fixture/execution-0"
+        ),
         "language": "python",
-        "task_input_ids_sha256": "b" * 64,
+        "inference_task": (
+            "semantic_to_code"
+            if category == "raw_code"
+            else "instruction_to_code"
+        ),
+        "task_input_ids_sha256": (
+            "b" * 64 if category == "raw_code" else None
+        ),
+        "generation_prompt_sha256": "f" * 64,
         "generated_ids": generated_ids,
         "generated_ids_sha256": _sha256(generated_ids),
         "protocol_complete": True,
         "payload_ids_sha256": _sha256(payload_ids),
         "generated_source_sha256": hashlib.sha256(source.encode()).hexdigest(),
+        "execution_mode": execution_mode,
+        "harness_prefix": "",
+        "harness_suffix": "",
+        "execution_source_sha256": hashlib.sha256(source.encode()).hexdigest(),
         "stdin": stdin_text,
         "expected_stdout": expected_stdout,
         "sandbox": sandbox,
@@ -185,7 +211,7 @@ def _result(category: str) -> CodeAcceptanceBatchResult:
             "example_id": example_id,
             "language": "python",
             "sandbox_executed": True,
-            "expected_output_exact": True,
+            "expected_output_exact": stderr == b"",
             "compile_passed": True,
             "sandbox_escape": False,
         }
@@ -245,6 +271,17 @@ def test_receipt_recomputes_execution_result_instead_of_trusting_boolean() -> No
         validate_code_acceptance_receipt(forged)
 
 
+def test_execution_output_is_not_exact_when_stderr_contains_failure_evidence() -> None:
+    receipt = build_code_acceptance_receipt(
+        _result("execution_correctness", stderr=b"Assertion failed\n"),
+        checkpoint_sha256="3" * 64,
+        checkpoint_step=17,
+    )
+
+    assert receipt["records"][0]["expected_output_exact"] is False
+    assert validate_code_acceptance_receipt(receipt) == receipt
+
+
 def test_receipt_rejects_sandbox_policy_substitution_even_when_rehashed() -> None:
     receipt = build_code_acceptance_receipt(
         _result("raw_code"),
@@ -258,6 +295,30 @@ def test_receipt_rejects_sandbox_policy_substitution_even_when_rehashed() -> Non
     forged["receipt_sha256"] = _sha256(body)
 
     with pytest.raises(ValueError, match="isolation policy"):
+        validate_code_acceptance_receipt(forged)
+
+
+def test_receipt_binds_execution_harness_to_sandbox_request() -> None:
+    receipt = build_code_acceptance_receipt(
+        _result("execution_correctness"),
+        checkpoint_sha256="3" * 64,
+        checkpoint_step=17,
+    )
+    forged = json.loads(json.dumps(receipt))
+    detail = forged["details"][0]
+    suffix = "\nraise AssertionError('forged harness')\n"
+    source = "print(int(input()) + 1)\n" + suffix
+    detail["execution_mode"] = "test_harness"
+    detail["harness_suffix"] = suffix
+    detail["expected_stdout"] = ""
+    detail["execution_source_sha256"] = hashlib.sha256(
+        source.encode()
+    ).hexdigest()
+    forged["details_sha256"] = _sha256(forged["details"])
+    body = {key: value for key, value in forged.items() if key != "receipt_sha256"}
+    forged["receipt_sha256"] = _sha256(body)
+
+    with pytest.raises(ValueError, match="identity"):
         validate_code_acceptance_receipt(forged)
 
 

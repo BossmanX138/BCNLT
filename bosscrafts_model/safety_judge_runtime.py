@@ -20,11 +20,14 @@ SAFETY_JUDGE_LICENSE_URL = (
     "nvidia-nemotron-open-model-license/"
 )
 SAFETY_JUDGE_RUNTIME_VERSIONS = {
+    "accelerate": "1.11.0",
+    "pillow": "12.0.0",
+    "sentencepiece": "0.2.1",
     "torch": "2.8.0",
     "transformers": "4.57.1",
 }
 EXPECTED_SAFETY_JUDGE_RUNTIME_MANIFEST_SHA256 = (
-    "435dfcc22bfbb580275f8240d1de0e167f18e8ffa3c3f9dc11a94543b4f8031d"
+    "61b1c3a81dcd74976ff9167722972f0f619fb682d51bd6db5a1bac75749c99dc"
 )
 MAX_SAFETY_JUDGE_MANIFEST_BYTES = 1024 * 1024
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -184,7 +187,8 @@ def _validate_contract(
         or _REVISION.fullmatch(revision) is None
         or not license_name
         or not license_url.startswith("https://")
-        or set(runtime_versions) != {"torch", "transformers"}
+        or set(runtime_versions)
+        != {"accelerate", "pillow", "sentencepiece", "torch", "transformers"}
         or any(
             type(value) is not str or not value
             for value in runtime_versions.values()

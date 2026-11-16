@@ -69,6 +69,10 @@ def main() -> int:
         "--semantic-wire", choices=("compact_v2", "full_v3"), default="compact_v2"
     )
     parser.add_argument("--status-only", action="store_true")
+    parser.add_argument("--worker-index", type=int, default=0)
+    parser.add_argument("--worker-count", type=int, default=1)
+    parser.add_argument("--commit-interval", type=int, default=1)
+    parser.add_argument("--defer-cell-index", action="store_true")
     arguments = parser.parse_args()
     admission = (
         arguments.admission.resolve()
@@ -109,11 +113,17 @@ def main() -> int:
         eligibility_root=eligibility,
         expected_eligibility_manifest_sha256=arguments.eligibility_manifest_sha256,
         forced_split=task_split,
+        defer_cell_index=arguments.defer_cell_index,
     )
     status = (
         packing.status()
         if arguments.status_only
-        else packing.process(max_documents=arguments.max_documents)
+        else packing.process(
+            max_documents=arguments.max_documents,
+            worker_index=arguments.worker_index,
+            worker_count=arguments.worker_count,
+            commit_interval=arguments.commit_interval,
+        )
     )
     payload: dict[str, object] = {
         **asdict(status),
@@ -123,6 +133,10 @@ def main() -> int:
         "semantic_wire": arguments.semantic_wire,
         "eligibility_manifest_sha256": arguments.eligibility_manifest_sha256,
         "training_ready": False,
+        "worker_index": arguments.worker_index,
+        "worker_count": arguments.worker_count,
+        "commit_interval": arguments.commit_interval,
+        "defer_cell_index": arguments.defer_cell_index,
     }
     if status.packing_complete:
         receipt = audit_task_database(binding, status.database_path)

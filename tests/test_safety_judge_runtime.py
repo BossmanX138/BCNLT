@@ -14,6 +14,14 @@ from bosscrafts_model.safety_judge_runtime import (
     _verify_pinned_safety_judge_runtime,
 )
 
+FIXTURE_RUNTIME_VERSIONS = {
+    "accelerate": "1.11.0",
+    "pillow": "12.0.0",
+    "sentencepiece": "0.2.1",
+    "torch": "2.8.0",
+    "transformers": "4.57.1",
+}
+
 
 def _pin(content: bytes) -> SafetyJudgeFilePin:
     return SafetyJudgeFilePin(
@@ -43,7 +51,7 @@ def test_seals_exact_inventory_and_rejects_tamper_or_extra_file(
         revision="a" * 40,
         license_name="fixture-license",
         license_url="https://example.invalid/license",
-        runtime_versions={"torch": "2.8.0", "transformers": "4.57.1"},
+        runtime_versions=FIXTURE_RUNTIME_VERSIONS,
         file_pins=pins,
     )
     verified = _verify_pinned_safety_judge_runtime(
@@ -52,7 +60,7 @@ def test_seals_exact_inventory_and_rejects_tamper_or_extra_file(
         revision="a" * 40,
         license_name="fixture-license",
         license_url="https://example.invalid/license",
-        runtime_versions={"torch": "2.8.0", "transformers": "4.57.1"},
+        runtime_versions=FIXTURE_RUNTIME_VERSIONS,
         file_pins=pins,
     )
 
@@ -66,7 +74,7 @@ def test_seals_exact_inventory_and_rejects_tamper_or_extra_file(
             revision="a" * 40,
             license_name="fixture-license",
             license_url="https://example.invalid/license",
-            runtime_versions={"torch": "2.8.0", "transformers": "4.57.1"},
+            runtime_versions=FIXTURE_RUNTIME_VERSIONS,
             file_pins=pins,
         )
 
@@ -78,7 +86,7 @@ def test_seals_exact_inventory_and_rejects_tamper_or_extra_file(
             revision="a" * 40,
             license_name="fixture-license",
             license_url="https://example.invalid/license",
-            runtime_versions={"torch": "2.8.0", "transformers": "4.57.1"},
+            runtime_versions=FIXTURE_RUNTIME_VERSIONS,
             file_pins=pins,
         )
 
@@ -91,7 +99,7 @@ def test_seals_exact_inventory_and_rejects_tamper_or_extra_file(
             revision="a" * 40,
             license_name="fixture-license",
             license_url="https://example.invalid/license",
-            runtime_versions={"torch": "2.8.0", "transformers": "4.57.1"},
+            runtime_versions=FIXTURE_RUNTIME_VERSIONS,
             file_pins=pins,
         )
 
@@ -108,7 +116,7 @@ def test_rejects_nested_manifest_file_that_is_not_pinned(tmp_path: Path) -> None
         revision="a" * 40,
         license_name="fixture-license",
         license_url="https://example.invalid/license",
-        runtime_versions={"torch": "2.8.0", "transformers": "4.57.1"},
+        runtime_versions=FIXTURE_RUNTIME_VERSIONS,
         file_pins=pins,
     )
     nested_manifest = root / "untrusted" / "manifest.json"
@@ -122,7 +130,7 @@ def test_rejects_nested_manifest_file_that_is_not_pinned(tmp_path: Path) -> None
             revision="a" * 40,
             license_name="fixture-license",
             license_url="https://example.invalid/license",
-            runtime_versions={"torch": "2.8.0", "transformers": "4.57.1"},
+            runtime_versions=FIXTURE_RUNTIME_VERSIONS,
             file_pins=pins,
         )
 
@@ -139,7 +147,7 @@ def test_rejects_unexpected_empty_directory(tmp_path: Path) -> None:
         revision="a" * 40,
         license_name="fixture-license",
         license_url="https://example.invalid/license",
-        runtime_versions={"torch": "2.8.0", "transformers": "4.57.1"},
+        runtime_versions=FIXTURE_RUNTIME_VERSIONS,
         file_pins=pins,
     )
     (root / "unexpected-empty-directory").mkdir()
@@ -151,7 +159,7 @@ def test_rejects_unexpected_empty_directory(tmp_path: Path) -> None:
             revision="a" * 40,
             license_name="fixture-license",
             license_url="https://example.invalid/license",
-            runtime_versions={"torch": "2.8.0", "transformers": "4.57.1"},
+            runtime_versions=FIXTURE_RUNTIME_VERSIONS,
             file_pins=pins,
         )
 
@@ -168,7 +176,7 @@ def test_rejects_symbolic_link_runtime_root(tmp_path: Path) -> None:
         revision="a" * 40,
         license_name="fixture-license",
         license_url="https://example.invalid/license",
-        runtime_versions={"torch": "2.8.0", "transformers": "4.57.1"},
+        runtime_versions=FIXTURE_RUNTIME_VERSIONS,
         file_pins=pins,
     )
     link = tmp_path / "judge-link"
@@ -184,7 +192,7 @@ def test_rejects_symbolic_link_runtime_root(tmp_path: Path) -> None:
             revision="a" * 40,
             license_name="fixture-license",
             license_url="https://example.invalid/license",
-            runtime_versions={"torch": "2.8.0", "transformers": "4.57.1"},
+            runtime_versions=FIXTURE_RUNTIME_VERSIONS,
             file_pins=pins,
         )
 

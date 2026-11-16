@@ -22,7 +22,7 @@ from bosscrafts_model.model_category_evidence import (
 )
 from bosscrafts_model.resource_acceptance import MAX_RESOURCE_RECEIPT_BYTES
 from bosscrafts_model.resumable_task_packing import audit_task_database
-from bosscrafts_model.safety_judge_case_runner import MAX_SAFETY_BATCH_BYTES
+from bosscrafts_model.safety_judge_worker import MAX_SAFETY_BATCH_BYTES
 from bosscrafts_model.semantic_acceptance import (
     MAX_SEMANTIC_ACCEPTANCE_RECEIPT_BYTES,
 )

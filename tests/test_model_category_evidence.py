@@ -244,6 +244,7 @@ def test_failed_case_outcome_is_published_as_failed_not_promoted():
         _canonical([])
     ).hexdigest()
     details[0]["generated_source_sha256"] = hashlib.sha256(b"").hexdigest()
+    details[0]["execution_source_sha256"] = hashlib.sha256(b"").hexdigest()
     details[0]["sandbox"] = None
     records[0]["exact_roundtrip"] = False
     records[0]["compile_passed"] = False

@@ -81,7 +81,7 @@ class ScientificSandboxIntegrationTests(unittest.TestCase):
         self.assertTrue(result.attestation.no_new_privileges)
         self.assertEqual(
             result.attestation.image_id,
-            "sha256:eb71cb313a0ff8c86e79279efeb041e8d9aba13ede6165db997f611b0d4c6925",
+            "sha256:4ca37835c5cd68d5b61b66d84296f0e0b9e003de755e20472d35299af6751234",
         )
         inspected = subprocess.run(
             ["docker", "inspect", result.container_name],
@@ -201,6 +201,137 @@ class ScientificSandboxIntegrationTests(unittest.TestCase):
         self.assertEqual(result.attestation.network_mode, "none")
         self.assertTrue(result.attestation.read_only_rootfs)
         self.assertEqual(result.attestation.mount_count, 0)
+
+    def test_assertions_cannot_silently_pass_in_compiled_languages(self) -> None:
+        fixtures = {
+            "java": (
+                "public class Main { public static void main(String[] a) { "
+                "assert false : \"fixture\"; } }\n"
+            ),
+            "kotlin": "fun main() { assert(false) { \"fixture\" } }\n",
+            "swift": "assert(false, \"fixture\")\n",
+        }
+        sandbox = DockerScientificSandbox.load_default()
+        for language, source in fixtures.items():
+            with self.subTest(language=language):
+                result = sandbox.execute(
+                    language=language,
+                    source=source,
+                    stdin_text="",
+                )
+                self.assertEqual(result.status, "runtime_failed")
+                self.assertNotEqual(result.exit_code, 0)
+
+    def test_javascript_console_assertion_emits_failure_evidence(self) -> None:
+        result = DockerScientificSandbox.load_default().execute(
+            language="javascript",
+            source="console.assert(false, 'fixture');\n",
+            stdin_text="",
+        )
+
+        self.assertEqual(result.status, "passed")
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("Assertion failed", result.stderr_text)
+
+    def test_c_sharp_debug_assertion_emits_failure_evidence(self) -> None:
+        result = DockerScientificSandbox.load_default().execute(
+            language="c_sharp",
+            source=(
+                "using System; using System.Diagnostics; "
+                "class Program { static void Main() { "
+                "Debug.Listeners.Add(new TextWriterTraceListener(Console.Error)); "
+                "Debug.AutoFlush = true; Debug.Assert(false, \"fixture\"); } }\n"
+            ),
+            stdin_text="",
+        )
+
+        self.assertEqual(result.status, "passed")
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("Fail: fixture", result.stderr_text)
+
+    def test_go_test_mode_runs_the_real_test_runner_with_pinned_dependencies(self) -> None:
+        source = (
+            "package main\n"
+            "import (\n"
+            "  \"testing\"\n"
+            "  \"github.com/stretchr/testify/assert\"\n"
+            ")\n"
+            "func TestFixture(t *testing.T) { assert.Equal(t, 42, 42) }\n"
+        )
+        result = DockerScientificSandbox.load_default().execute(
+            language="go",
+            mode="test",
+            source=source,
+            stdin_text="",
+        )
+
+        self.assertEqual(result.status, "passed")
+        self.assertEqual(result.stderr_text, "")
+
+    def test_go_test_mode_reports_a_failed_assertion(self) -> None:
+        source = (
+            "package main\n"
+            "import \"testing\"\n"
+            "func TestFixture(t *testing.T) { t.Fatal(\"fixture\") }\n"
+        )
+        result = DockerScientificSandbox.load_default().execute(
+            language="go",
+            mode="test",
+            source=source,
+            stdin_text="",
+        )
+
+        self.assertEqual(result.status, "runtime_failed")
+
+    def test_rust_test_mode_runs_the_real_test_runner_with_pinned_dependencies(self) -> None:
+        source = (
+            "#[cfg(test)]\n"
+            "mod tests {\n"
+            "    use regex::Regex;\n"
+            "    #[test]\n"
+            "    fn fixture() {\n"
+            "        let _ = rand::random::<u8>();\n"
+            "        assert!(Regex::new(\"^ok$\").unwrap().is_match(\"ok\"));\n"
+            "        assert_eq!(format!(\"{:x}\", md5::compute(b\"a\")).len(), 32);\n"
+            "    }\n"
+            "}\n"
+        )
+        result = DockerScientificSandbox.load_default().execute(
+            language="rust",
+            mode="test",
+            source=source,
+            stdin_text="",
+        )
+
+        self.assertEqual(result.status, "passed")
+        self.assertEqual(result.stderr_text, "")
+
+    def test_rust_test_mode_reports_a_failed_assertion(self) -> None:
+        source = (
+            "#[cfg(test)]\n"
+            "mod tests {\n"
+            "    #[test]\n"
+            "    fn fixture() { assert!(false, \"fixture\"); }\n"
+            "}\n"
+        )
+        result = DockerScientificSandbox.load_default().execute(
+            language="rust",
+            mode="test",
+            source=source,
+            stdin_text="",
+        )
+
+        self.assertEqual(result.status, "runtime_failed")
+
+    def test_bash_image_includes_the_mceval_bc_dependency(self) -> None:
+        result = DockerScientificSandbox.load_default().execute(
+            language="bash",
+            source="test \"$(printf '6 * 7\\n' | bc)\" = 42\n",
+            stdin_text="",
+        )
+
+        self.assertEqual(result.status, "passed")
+        self.assertEqual(result.stderr_text, "")
 
 
 if __name__ == "__main__":

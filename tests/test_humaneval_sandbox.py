@@ -22,12 +22,13 @@ from bosscrafts_model.scientific_sandbox import (
 )
 
 
-def _execution(source: str) -> SandboxExecutionResult:
+def _execution(source: str, *, mode: str = "test") -> SandboxExecutionResult:
     request_sha256 = hashlib.sha256(
         canonical_json(
             {
                 "protocol": PROTOCOL,
                 "language": "python",
+                "mode": mode,
                 "source": source,
                 "stdin": "",
             }
@@ -49,7 +50,7 @@ def _execution(source: str) -> SandboxExecutionResult:
         "ipc_mode": "none",
         "cgroupns_mode": "private",
         "mount_count": 0,
-        "tmpfs": "rw,exec,nosuid,nodev,size=134217728,mode=1777",
+        "tmpfs": "rw,exec,nosuid,nodev,size=268435456,mode=1777",
         "log_driver": "none",
         "attach_stdin": True,
         "open_stdin": True,
@@ -63,6 +64,7 @@ def _execution(source: str) -> SandboxExecutionResult:
     response = {
         "protocol": PROTOCOL,
         "language": "python",
+        "mode": mode,
         "status": "passed",
         "phase": "run",
         "exit_code": 0,
@@ -75,6 +77,7 @@ def _execution(source: str) -> SandboxExecutionResult:
     return SandboxExecutionResult(
         protocol=PROTOCOL,
         language="python",
+        mode=mode,
         status="passed",
         phase="run",
         exit_code=0,
@@ -104,16 +107,23 @@ def _execution(source: str) -> SandboxExecutionResult:
             ipc_mode="none",
             cgroupns_mode="private",
             mount_count=0,
-            tmpfs="rw,exec,nosuid,nodev,size=134217728,mode=1777",
+            tmpfs="rw,exec,nosuid,nodev,size=268435456,mode=1777",
             log_driver="none",
         ),
     )
 
 
 class _Sandbox:
-    def execute(self, *, language: str, source: str, stdin_text: str):
-        assert (language, stdin_text) == ("python", "")
-        return _execution(source)
+    def execute(
+        self,
+        *,
+        language: str,
+        source: str,
+        stdin_text: str,
+        mode: str = "program",
+    ):
+        assert (language, stdin_text, mode) == ("python", "", "test")
+        return _execution(source, mode=mode)
 
 
 def test_common_sandbox_payload_validator_rejects_identity_and_policy_tamper(
@@ -123,6 +133,7 @@ def test_common_sandbox_payload_validator_rejects_identity_and_policy_tamper(
     stdout, stderr = validate_sandbox_execution_payload(
         payload,
         language="python",
+        mode="test",
         source=source,
         stdin_text="",
     )
@@ -134,6 +145,7 @@ def test_common_sandbox_payload_validator_rejects_identity_and_policy_tamper(
         validate_sandbox_execution_payload(
             forged_request,
             language="python",
+            mode="test",
             source=source,
             stdin_text="",
         )
@@ -144,6 +156,7 @@ def test_common_sandbox_payload_validator_rejects_identity_and_policy_tamper(
         validate_sandbox_execution_payload(
             forged_policy,
             language="python",
+            mode="test",
             source=source,
             stdin_text="",
         )
@@ -154,6 +167,7 @@ def test_common_sandbox_payload_validator_rejects_identity_and_policy_tamper(
         validate_sandbox_execution_payload(
             forged_status,
             language="python",
+            mode="test",
             source=source,
             stdin_text="",
         )

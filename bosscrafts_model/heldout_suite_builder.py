@@ -24,13 +24,12 @@ from .model_acceptance import (
 from .resumable_task_packing import ResumableTaskDataset, audit_task_database
 from .tokenizer import EXPECTED_TOKENIZER_SHA256, NativeTokenizerBinding
 
-CATEGORY_CASE_INVENTORY_SCHEMA = "bosscrafts-model-category-case-inventory-v2"
+CATEGORY_CASE_INVENTORY_SCHEMA = "bosscrafts-model-category-case-inventory-v3"
 MAX_CATEGORY_CASE_INVENTORY_BYTES = 16 * 1024 * 1024
 PACKED_ACCEPTANCE_CATEGORIES = (
     "tokenizer_fidelity",
     "semantic_fidelity",
     "raw_code",
-    "execution_correctness",
 )
 
 
@@ -164,7 +163,6 @@ def load_category_case_inventory(
             "tokenizer_fidelity": None,
             "semantic_fidelity": "code_to_semantic",
             "raw_code": "semantic_to_code",
-            "execution_correctness": "semantic_to_code",
         }[category]
         parsed: list[PackedTaskReference] = []
         task_ids: set[str] = set()

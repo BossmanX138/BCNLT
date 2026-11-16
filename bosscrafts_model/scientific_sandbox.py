@@ -14,7 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypedDict
 
-PROTOCOL = "bosscrafts-bcnlt-sandbox-v1"
+PROTOCOL = "bosscrafts-bcnlt-sandbox-v2"
+SANDBOX_MODES = frozenset({"program", "test"})
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_MANIFEST = _PROJECT_ROOT / "sandbox" / "images.json"
 _RUNNER = _PROJECT_ROOT / "sandbox" / "runner.py"
@@ -25,7 +26,7 @@ _MAX_DOCKER_STDERR_BYTES = 64 * 1024
 _MEMORY_BYTES = 512 * 1024 * 1024
 _NANO_CPUS = 500_000_000
 _PIDS_LIMIT = 64
-_TMPFS = "rw,exec,nosuid,nodev,size=134217728,mode=1777"
+_TMPFS = "rw,exec,nosuid,nodev,size=268435456,mode=1777"
 
 
 class SandboxExecutionError(RuntimeError):
@@ -90,6 +91,7 @@ class SandboxAttestation:
 class SandboxExecutionResult:
     protocol: str
     language: str
+    mode: str
     status: str
     phase: str
     exit_code: int | None
@@ -115,6 +117,7 @@ class SandboxExecutionResult:
         return {
             "protocol": self.protocol,
             "language": self.language,
+            "mode": self.mode,
             "status": self.status,
             "phase": self.phase,
             "exit_code": self.exit_code,
@@ -168,8 +171,11 @@ class DockerScientificSandbox:
         language: str,
         source: str,
         stdin_text: str,
+        mode: str = "program",
     ) -> SandboxExecutionResult:
         image = self._image_for_language(language)
+        if mode not in SANDBOX_MODES:
+            raise ValueError("sandbox mode must be program or test")
         if type(source) is not str or len(source.encode("utf-8")) > _MAX_SOURCE_BYTES:
             raise ValueError("source must be a string within the sandbox limit")
         if type(stdin_text) is not str or len(stdin_text.encode("utf-8")) > _MAX_STDIN_BYTES:
@@ -178,6 +184,7 @@ class DockerScientificSandbox:
             {
                 "protocol": PROTOCOL,
                 "language": language,
+                "mode": mode,
                 "source": source,
                 "stdin": stdin_text,
             }
@@ -216,10 +223,15 @@ class DockerScientificSandbox:
                     "sandbox container could not complete" + (f": {detail}" if detail else "")
                 )
             response_bytes = completed["stdout"]
-            response = self._parse_response(response_bytes, language=language)
+            response = self._parse_response(
+                response_bytes,
+                language=language,
+                mode=mode,
+            )
             result = SandboxExecutionResult(
                 protocol=PROTOCOL,
                 language=language,
+                mode=mode,
                 status=response["status"],
                 phase=response["phase"],
                 exit_code=response["exit_code"],
@@ -236,6 +248,7 @@ class DockerScientificSandbox:
             validate_sandbox_execution_result(
                 result,
                 language=language,
+                mode=mode,
                 source=source,
                 stdin_text=stdin_text,
             )
@@ -482,18 +495,28 @@ class DockerScientificSandbox:
             log_driver="none",
         )
 
-    def _parse_response(self, raw: bytes, *, language: str) -> dict[str, Any]:
+    def _parse_response(
+        self,
+        raw: bytes,
+        *,
+        language: str,
+        mode: str,
+    ) -> dict[str, Any]:
         try:
             payload = json.loads(raw)
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
             raise SandboxExecutionError("sandbox response is not valid UTF-8 JSON") from error
         keys = {
-            "protocol", "language", "status", "phase", "exit_code",
+            "protocol", "language", "mode", "status", "phase", "exit_code",
             "stdout_b64", "stderr_b64", "timed_out", "output_limited", "duration_ms",
         }
         if type(payload) is not dict or set(payload) != keys:
             raise SandboxExecutionError("sandbox response keys mismatch")
-        if payload["protocol"] != PROTOCOL or payload["language"] != language:
+        if (
+            payload["protocol"] != PROTOCOL
+            or payload["language"] != language
+            or payload["mode"] != mode
+        ):
             raise SandboxExecutionError("sandbox response identity mismatch")
         if payload["status"] not in {
             "passed", "compile_failed", "runtime_failed", "timed_out", "output_limited"
@@ -641,6 +664,7 @@ def _canonical_json(value: object) -> bytes:
 _SANDBOX_RESULT_FIELDS = {
     "protocol",
     "language",
+    "mode",
     "status",
     "phase",
     "exit_code",
@@ -689,6 +713,7 @@ def validate_sandbox_execution_payload(
     payload: Mapping[str, object],
     *,
     language: str,
+    mode: str = "program",
     source: str,
     stdin_text: str,
 ) -> tuple[bytes, bytes]:
@@ -698,6 +723,7 @@ def validate_sandbox_execution_payload(
         or set(payload) != _SANDBOX_RESULT_FIELDS
         or type(language) is not str
         or not language
+        or mode not in SANDBOX_MODES
         or type(source) is not str
         or len(source.encode("utf-8")) > _MAX_SOURCE_BYTES
         or type(stdin_text) is not str
@@ -713,6 +739,7 @@ def validate_sandbox_execution_payload(
     if (
         payload.get("protocol") != PROTOCOL
         or payload.get("language") != language
+        or payload.get("mode") != mode
         or status
         not in {
             "passed",
@@ -730,7 +757,7 @@ def validate_sandbox_execution_payload(
         or type(payload.get("container_name")) is not str
         or not str(payload["container_name"]).startswith("bcnlt-science-")
     ):
-        raise ValueError("sandbox execution result is invalid")
+        raise ValueError("sandbox execution identity or status is invalid")
     if (
         (status == "passed")
         != (
@@ -760,6 +787,7 @@ def validate_sandbox_execution_payload(
     request = {
         "protocol": PROTOCOL,
         "language": language,
+        "mode": mode,
         "source": source,
         "stdin": stdin_text,
     }
@@ -769,6 +797,7 @@ def validate_sandbox_execution_payload(
         for key in (
             "protocol",
             "language",
+            "mode",
             "status",
             "phase",
             "exit_code",
@@ -865,6 +894,7 @@ def validate_sandbox_execution_result(
     result: SandboxExecutionResult,
     *,
     language: str,
+    mode: str = "program",
     source: str,
     stdin_text: str,
 ) -> None:
@@ -873,6 +903,7 @@ def validate_sandbox_execution_result(
     stdout, stderr = validate_sandbox_execution_payload(
         result.to_dict(),
         language=language,
+        mode=mode,
         source=source,
         stdin_text=stdin_text,
     )

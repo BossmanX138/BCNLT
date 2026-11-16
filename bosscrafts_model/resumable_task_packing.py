@@ -640,6 +640,7 @@ class ResumableCurrentTaskPacking:
         eligibility_root: str | Path | None = None,
         expected_eligibility_manifest_sha256: str | None = None,
         forced_split: str | None = None,
+        defer_cell_index: bool = False,
     ) -> None:
         if type(binding) is not NativeTokenizerBinding:
             raise TypeError("binding must be a verified NativeTokenizerBinding")
@@ -649,6 +650,8 @@ class ResumableCurrentTaskPacking:
             raise ValueError("semantic_wire must be full_v3 or compact_v2")
         if forced_split not in {None, "train", "validation", "test"}:
             raise ValueError("forced_split must be train, validation, test or None")
+        if type(defer_cell_index) is not bool:
+            raise TypeError("defer_cell_index must be a boolean")
         if (eligibility_root is None) != (expected_eligibility_manifest_sha256 is None):
             raise ValueError(
                 "eligibility_root and expected eligibility manifest SHA-256 must be supplied together"
@@ -666,6 +669,7 @@ class ResumableCurrentTaskPacking:
         self.source_catalog = Path(source_catalog).resolve()
         self.database_path = Path(task_database).resolve()
         self._forced_split = forced_split
+        self._defer_cell_index = defer_cell_index
         if not self.admission_database.is_file():
             raise ValueError("admission database does not exist")
         if not self.source_catalog.is_file():
@@ -906,9 +910,10 @@ class ResumableCurrentTaskPacking:
                        source_sha256 TEXT NOT NULL
                    )"""
             )
-            connection.execute(
-                "CREATE INDEX IF NOT EXISTS tasks_cell ON tasks(split, language, family)"
-            )
+            if not self._defer_cell_index:
+                connection.execute(
+                    "CREATE INDEX IF NOT EXISTS tasks_cell ON tasks(split, language, family)"
+                )
             connection.execute(
                 """CREATE TABLE IF NOT EXISTS rejections (
                        rejection_id TEXT PRIMARY KEY,
@@ -964,12 +969,28 @@ class ResumableCurrentTaskPacking:
         )
 
     def process(
-        self, *, max_documents: int | None = None
+        self,
+        *,
+        max_documents: int | None = None,
+        worker_index: int = 0,
+        worker_count: int = 1,
+        commit_interval: int = 1,
     ) -> ResumableTaskPackingStatus:
         if max_documents is not None and (
             type(max_documents) is not int or max_documents < 1
         ):
             raise ValueError("max_documents must be a positive integer or None")
+        if (
+            type(worker_count) is not int
+            or not 1 <= worker_count <= 16
+            or type(worker_index) is not int
+            or not 0 <= worker_index < worker_count
+        ):
+            raise ValueError("worker index and count must define a valid 1-to-16 partition")
+        if type(commit_interval) is not int or not 1 <= commit_interval <= 64:
+            raise ValueError("commit_interval must be an integer from 1 through 64")
+        if worker_count > 1 and commit_interval != 1:
+            raise ValueError("parallel workers require per-document commits")
         task_connection = self._connect()
         admission = self._ro_connect(self.admission_database)
         catalog = self._ro_connect(self.source_catalog)
@@ -995,6 +1016,12 @@ class ResumableCurrentTaskPacking:
                     self._eligible_ids is not None
                     and document_id not in self._eligible_ids
                 ):
+                    continue
+                worker_bucket = int(
+                    hashlib.sha256(document_id.encode("utf-8")).hexdigest()[:16],
+                    16,
+                ) % worker_count
+                if worker_bucket != worker_index:
                     continue
                 if document_id in completed_ids:
                     continue
@@ -1107,13 +1134,19 @@ class ResumableCurrentTaskPacking:
                     "INSERT INTO documents VALUES(?,?,?)",
                     (document_id, len(examples), len(rejections)),
                 )
-                task_connection.commit()
                 completed_ids.add(document_id)
                 processed += 1
+                if processed % commit_interval == 0:
+                    task_connection.commit()
+            task_connection.commit()
             processed_total = task_connection.execute(
                 "SELECT COUNT(*) FROM documents"
             ).fetchone()[0]
             if int(processed_total) == self._admitted_count:
+                task_connection.execute(
+                    "CREATE INDEX IF NOT EXISTS tasks_cell "
+                    "ON tasks(split, language, family)"
+                )
                 task_connection.execute(
                     "UPDATE metadata SET value='true' WHERE key='packing_complete'"
                 )

@@ -16,8 +16,8 @@ from typing import Any
 
 from .immutable_artifacts import publish_new_files
 
-REGRESSION_WORKER_SCHEMA = "bosscrafts-regression-worker-v1"
-REGRESSION_RECEIPT_SCHEMA = "bosscrafts-regression-receipt-v1"
+REGRESSION_WORKER_SCHEMA = "bosscrafts-regression-worker-v2"
+REGRESSION_RECEIPT_SCHEMA = "bosscrafts-regression-receipt-v2"
 REGRESSION_SUITE_ID = "bosscrafts-pre-model-full-regression-v1"
 MAX_REGRESSION_OUTPUT_BYTES = 32 * 1024 * 1024
 MAX_REGRESSION_RECORDS = 100_000
@@ -176,9 +176,18 @@ def _validated_records(value: object) -> list[dict[str, object]]:
         or len(value) > MAX_REGRESSION_RECORDS
     ):
         raise ValueError("regression result inventory is invalid")
-    fields = {"record_id", "kind", "nodeid", "phase", "outcome", "context"}
+    fields = {
+        "record_id",
+        "sequence",
+        "kind",
+        "nodeid",
+        "phase",
+        "outcome",
+        "context",
+    }
     records: list[dict[str, object]] = []
     ids: set[str] = set()
+    sequences: set[int] = set()
     for item in value:
         if type(item) is not dict or set(item) != fields:
             raise ValueError("regression result record fields are invalid")
@@ -188,6 +197,9 @@ def _validated_records(value: object) -> list[dict[str, object]]:
             not _is_sha256(record_id)
             or record_id != _sha256(body)
             or record_id in ids
+            or type(item.get("sequence")) is not int
+            or int(item["sequence"]) < 1
+            or int(item["sequence"]) in sequences
             or item.get("kind") not in {"test", "subtest", "collection"}
             or type(item.get("nodeid")) is not str
             or not str(item["nodeid"])
@@ -197,6 +209,7 @@ def _validated_records(value: object) -> list[dict[str, object]]:
         ):
             raise ValueError("regression result record is invalid")
         ids.add(str(record_id))
+        sequences.add(int(item["sequence"]))
         records.append(item)
     if [str(item["record_id"]) for item in records] != sorted(ids):
         raise ValueError("regression result records are not canonically ordered")
@@ -410,6 +423,7 @@ def publish_regression_receipt(output: str | Path, payload: dict[str, object]) -
 class _RegressionPlugin:
     def __init__(self) -> None:
         self.records: list[dict[str, object]] = []
+        self._sequence = 0
 
     def _append(
         self,
@@ -420,7 +434,9 @@ class _RegressionPlugin:
         outcome: str,
         context: str | None,
     ) -> None:
+        self._sequence += 1
         body: dict[str, object] = {
+            "sequence": self._sequence,
             "kind": kind,
             "nodeid": nodeid,
             "phase": phase,

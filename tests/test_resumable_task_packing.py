@@ -323,6 +323,74 @@ class ResumableTaskPackingTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "example identity"):
                 audit_task_database(self.binding, tasks_path)
 
+    def test_worker_partitions_produce_the_same_complete_database_identity(self):
+        module = importlib.import_module("bosscrafts_model.resumable_task_packing")
+        candidates = tuple(
+            _candidate(
+                f"partition-doc-{index}",
+                f"value_{index} = {index}\nprint(value_{index})\n",
+            )
+            for index in range(8)
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            catalog_path = root / "catalog.sqlite"
+            admission_path = root / "admission.sqlite"
+            partitioned_path = root / "partitioned.sqlite"
+            serial_path = root / "serial.sqlite"
+            _write_catalog(catalog_path, candidates)
+            catalog_sha256 = hashlib.sha256(catalog_path.read_bytes()).hexdigest()
+            admission = ResumableCurrentCorpusAdmission(
+                self.pipeline,
+                admission_path,
+                source_catalog_sha256=catalog_sha256,
+                review_manifest_sha256="a" * 64,
+                host_code_identity_sha256="b" * 64,
+            )
+            self.assertTrue(admission.process(candidates).catalog_exhausted)
+            partitioned = module.ResumableCurrentTaskPacking(
+                self.binding,
+                admission_path,
+                catalog_path,
+                partitioned_path,
+            )
+            first = partitioned.process(worker_index=0, worker_count=2)
+            second = partitioned.process(worker_index=1, worker_count=2)
+            self.assertEqual(
+                first.processed_this_run + second.processed_this_run,
+                len(candidates),
+            )
+            self.assertTrue(second.packing_complete)
+            serial = module.ResumableCurrentTaskPacking(
+                self.binding,
+                admission_path,
+                catalog_path,
+                serial_path,
+                defer_cell_index=True,
+            )
+            self.assertTrue(serial.process(commit_interval=4).packing_complete)
+            partitioned_audit = module.audit_task_database(
+                self.binding, partitioned_path
+            )
+            serial_audit = module.audit_task_database(self.binding, serial_path)
+            self.assertEqual(
+                partitioned_audit.database_identity_sha256,
+                serial_audit.database_identity_sha256,
+            )
+            serial_connection = sqlite3.connect(serial_path)
+            try:
+                indexes = {
+                    str(row[1])
+                    for row in serial_connection.execute("PRAGMA index_list(tasks)")
+                }
+            finally:
+                serial_connection.close()
+            self.assertIn("tasks_cell", indexes)
+            with self.assertRaisesRegex(ValueError, "worker index and count"):
+                partitioned.process(worker_index=2, worker_count=2)
+            with self.assertRaisesRegex(ValueError, "per-document commits"):
+                partitioned.process(worker_count=2, commit_interval=2)
+
     def test_resumable_packer_script_runs_from_project_root(self):
         project_root = Path(__file__).resolve().parents[1]
         completed = subprocess.run(

@@ -6,8 +6,15 @@ from pathlib import Path
 
 import torch
 
-from .category_case_inventory import load_category_case_bundle
-from .inference_protocol import INFERENCE_TASKS, task_end_token_id
+from .category_case_inventory import (
+    load_category_case_bundle,
+    load_category_case_records,
+)
+from .inference_protocol import (
+    INFERENCE_TASKS,
+    build_inference_prompt,
+    task_end_token_id,
+)
 from .model import EngineeringModel
 from .model_acceptance import ACCEPTANCE_CATEGORIES
 from .resumable_task_packing import ResumableTaskDataset, audit_task_database
@@ -26,7 +33,7 @@ def generate_frozen_category_candidates(
     test_task_database: str | Path,
     maximum_new_tokens: int = MAX_FROZEN_GENERATED_TOKENS,
 ) -> dict[str, list[int]]:
-    """Greedily generate every exact packed reference for one frozen category."""
+    """Greedily generate every exact packed or benchmark category case."""
     if type(model) is not EngineeringModel or type(binding) is not NativeTokenizerBinding:
         raise TypeError("frozen generation requires the production model and binding")
     if category not in ACCEPTANCE_CATEGORIES:
@@ -45,9 +52,6 @@ def generate_frozen_category_candidates(
         raise ValueError("frozen generation model binding mismatch")
 
     bundle = load_category_case_bundle(case_bundle_root)
-    references = bundle.inventory.packed_task_references[category]
-    if not references:
-        raise ValueError("frozen generation category has no packed cases")
     audit_before = audit_task_database(binding, test_task_database)
     if (
         not audit_before.audit_passed
@@ -55,29 +59,56 @@ def generate_frozen_category_candidates(
         != bundle.inventory.test_task_database_identity_sha256
     ):
         raise ValueError("frozen generation test database lineage mismatch")
-    dataset = ResumableTaskDataset(binding, test_task_database)
-    task_ids = tuple(reference.task_example_id for reference in references)
-    tasks = {
-        task["example_id"]: task
-        for task in dataset.iter_examples_by_id(task_ids, split="test")
-    }
+    generation_prompts: list[tuple[str, list[int]]] = []
+    if category == "execution_correctness":
+        if family != "instruction_to_code":
+            raise ValueError(
+                "execution correctness requires instruction_to_code generation"
+            )
+        for record in load_category_case_records(bundle, category):
+            case = record.get("case")
+            if type(case) is not dict or type(case.get("prompt")) is not str:
+                raise ValueError("frozen benchmark case is invalid")
+            generation_prompts.append(
+                (
+                    str(record["example_id"]),
+                    build_inference_prompt(
+                        binding,
+                        task=family,
+                        prompt=str(case["prompt"]),
+                    ),
+                )
+            )
+    else:
+        references = bundle.inventory.packed_task_references.get(category)
+        if not references:
+            raise ValueError("frozen generation category has no packed cases")
+        dataset = ResumableTaskDataset(binding, test_task_database)
+        task_ids = tuple(reference.task_example_id for reference in references)
+        tasks = {
+            task["example_id"]: task
+            for task in dataset.iter_examples_by_id(task_ids, split="test")
+        }
+        for reference in references:
+            task = tasks.get(reference.task_example_id)
+            if (
+                task is None
+                or reference.family != family
+                or task["family"] != family
+                or task["language"] != reference.language
+            ):
+                raise ValueError("frozen generation task lineage mismatch")
+            input_ids = task["input_ids"]
+            loss_start = task["loss_start_index"]
+            if not 0 < loss_start < len(input_ids):
+                raise ValueError("frozen generation prompt is invalid")
+            generation_prompts.append(
+                (reference.category_example_id, input_ids[:loss_start])
+            )
     generated_by_example_id: dict[str, list[int]] = {}
     end_token = task_end_token_id(binding, family)
     device = model.embedding.weight.device
-    for reference in references:
-        task = tasks.get(reference.task_example_id)
-        if (
-            task is None
-            or reference.family != family
-            or task["family"] != family
-            or task["language"] != reference.language
-        ):
-            raise ValueError("frozen generation task lineage mismatch")
-        input_ids = task["input_ids"]
-        loss_start = task["loss_start_index"]
-        if not 0 < loss_start < len(input_ids):
-            raise ValueError("frozen generation prompt is invalid")
-        prompt_ids = input_ids[:loss_start]
+    for category_example_id, prompt_ids in generation_prompts:
         per_case_limit = min(
             maximum_new_tokens,
             model.config.max_sequence - len(prompt_ids),
@@ -93,7 +124,7 @@ def generate_frozen_category_candidates(
         response_ids = generated[0, len(prompt_ids) :].tolist()
         if len(response_ids) > MAX_FROZEN_GENERATED_TOKENS:
             raise ValueError("frozen generation exceeded its receipt bound")
-        generated_by_example_id[reference.category_example_id] = response_ids
+        generated_by_example_id[category_example_id] = response_ids
 
     audit_after = audit_task_database(binding, test_task_database)
     bundle_after = load_category_case_bundle(case_bundle_root)

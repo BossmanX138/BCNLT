@@ -30,7 +30,12 @@ def _canonical(value: object) -> bytes:
 def _record(
     kind: str, nodeid: str, *, context: str | None = None
 ) -> dict[str, object]:
+    sequence = int.from_bytes(
+        hashlib.sha256(f"{kind}\0{nodeid}\0{context}".encode()).digest()[:8],
+        "big",
+    ) + 1
     body: dict[str, object] = {
+        "sequence": sequence,
         "kind": kind,
         "nodeid": nodeid,
         "phase": "call",
@@ -136,6 +141,24 @@ def test_plugin_records_tests_subtests_and_collection_failures() -> None:
         "subtest",
         "collection",
     ]
+    assert [record["sequence"] for record in plugin.records] == [1, 2, 3]
+
+
+def test_plugin_assigns_distinct_sequences_to_identical_subtest_reports() -> None:
+    plugin = _RegressionPlugin()
+    report = SimpleNamespace(
+        nodeid="tests/test_a.py::test_a",
+        when="call",
+        outcome="passed",
+        failed=False,
+        context="truncated-identical-context",
+    )
+
+    plugin.pytest_runtest_logreport(report)
+    plugin.pytest_runtest_logreport(report)
+
+    assert [record["sequence"] for record in plugin.records] == [1, 2]
+    assert plugin.records[0]["record_id"] != plugin.records[1]["record_id"]
 
 
 def test_regression_acceptance_script_exposes_fixed_inputs() -> None:

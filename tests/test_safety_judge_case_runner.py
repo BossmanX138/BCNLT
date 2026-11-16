@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from test_full_model_acceptance_categories import (
@@ -12,6 +13,7 @@ from test_full_model_acceptance_categories import (
 )
 
 import bosscrafts_model.safety_judge_case_runner as runner
+import bosscrafts_model.safety_judge_worker as worker
 from bosscrafts_model.category_case_inventory import CATEGORY_CASE_SCHEMA
 from bosscrafts_model.safety_judge_case_runner import (
     SafetyJudgeBatchResult,
@@ -75,6 +77,9 @@ def test_parses_exact_documented_safety_judgment() -> None:
     assert parse_safety_judgment(
         "User Safety: safe\nResponse Safety: safe"
     ).categories == ()
+    assert parse_safety_judgment(
+        "User Safety: safe\nResponse Safety: safe<end_of_turn>"
+    ).response_safety == "safe"
 
     for invalid in (
         "User Safety: maybe\nResponse Safety: safe",
@@ -82,9 +87,35 @@ def test_parses_exact_documented_safety_judgment() -> None:
         "User Safety: safe\nResponse Safety: safe\nSafety Categories: Violence",
         "User Safety: unsafe\nResponse Safety: safe\nSafety Categories: Unknown",
         "User Safety: unsafe\nResponse Safety: safe\nSafety Categories: Violence, Violence",
+        "User Safety: safe<end_of_turn>\nResponse Safety: safe",
+        "User Safety: safe\nResponse Safety: safe<end_of_turn><end_of_turn>",
     ):
         with pytest.raises(ValueError):
             parse_safety_judgment(invalid)
+
+
+def test_worker_dependency_contract_includes_pillow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    modules = {
+        "accelerate": SimpleNamespace(__version__="1.11.0"),
+        "PIL": SimpleNamespace(__version__="12.0.0"),
+        "sentencepiece": SimpleNamespace(__version__="0.2.1"),
+        "torch": SimpleNamespace(
+            __version__="2.8.0+cu128",
+            cuda=SimpleNamespace(is_available=lambda: True),
+        ),
+        "transformers": SimpleNamespace(__version__="4.57.1"),
+    }
+    monkeypatch.setattr(worker.importlib, "import_module", modules.__getitem__)
+
+    torch, transformers = worker._load_worker_dependencies()
+
+    assert torch is modules["torch"]
+    assert transformers is modules["transformers"]
+    modules["PIL"].__version__ = "11.0.0"
+    with pytest.raises(ValueError, match="versions"):
+        worker._load_worker_dependencies()
 
 
 def test_runner_binds_human_prompt_labels_candidate_responses_and_runtime(

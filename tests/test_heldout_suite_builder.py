@@ -56,7 +56,6 @@ def _category_inventory(manifest: dict[str, object]) -> dict[str, object]:
             "tokenizer_fidelity",
             "semantic_fidelity",
             "raw_code",
-            "execution_correctness",
         )
     }
     for entry in packed_task_references.values():

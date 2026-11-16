@@ -80,7 +80,7 @@ _SIDECAR = _RUNTIME_ROOT / "bcnlt_source_sidecar.py"
 _DEFAULT_PYTHON_313 = Path(sys.executable).resolve()
 _RUNTIME_MANIFEST = _RUNTIME_ROOT / "runtime-manifest.json"
 _EXPECTED_RUNTIME_IDENTITY = {
-    "source": "c5623e97f3f1e1e884e1d54a316d174292fbcbf61da3ddfdbf3b432418e0450a",
+    "source": "d791c0eb80c9a65191be3b15877f6a7153e434bbe5f8cd4a6060f57af2fca14e",
     "sidecar": "5eb8df0226ada9b5ba9d7d5b845d86abb6b4dbd22423c35a7ba6bff1f31be1f3",
     "tree_sitter": "d8efa5533a1c79cc404df3a0ff03d76626ad50d54b74d97e4cf6e30ab85bebe4",
     "language_pack": "18fda57fbe2f52f85cf09fd1fc5af6509bfe0a8c6d3d425cafe3d7b63f8dca6e",
@@ -88,10 +88,10 @@ _EXPECTED_RUNTIME_IDENTITY = {
     "site_packages": "3daa4575bdd757c649febf2c8514c80ab1311641c0205463b1c89b1e928b262c",
 }
 _EXPECTED_RUNTIME_MANIFEST_SHA256 = (
-    "cb7b0df010bbe162b0b9c0877addded2f5b06f3bc0fbbd9b39b58a7bdad6ed20"
+    "5c5d62cd1b0d8c2933b1da0682c8eeb1588f38453a9765263eaf2cc003abb041"
 )
 PARSER_RUNTIME_IDENTITY_SHA256 = (
-    "c1ca753bf4d1dbabf841fdcd120e5c3eec026b7211ca5c0f08d066074acee938"
+    "7440ef6263537ded8bceec9a3d2fdb72cbaf7a324e6deea552dc18e4d6891dfc"
 )
 PARSER_RUNTIME_NOT_APPLICABLE = "not_applicable"
 _FIELD_ORDER = (

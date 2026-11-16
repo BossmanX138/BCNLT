@@ -1,0 +1,23 @@
+{
+  "schema_version": "bosscrafts-mceval-generation-sources-v1",
+  "source": "hf://datasets/Multilingual-Multimodal-NLP/McEval",
+  "revision": "c4767fec950de7decd487a40a4dab2795df4a094",
+  "license": "CC-BY-SA-4.0",
+  "attribution": "McEval; Chai et al., 2024",
+  "languages": {
+    "bash": {"file": "Shell.jsonl", "sha256": "dd6c04fdb7c4c3aa4d535ca3885ce5ed79dd8299ec32f23cea42a1635aaac4ae"},
+    "c": {"file": "C.jsonl", "sha256": "4a271d265fab3e8bf9cf004febbba9f4002b22189c7774d48cff89bce82b0591"},
+    "c_sharp": {"file": "C#.jsonl", "sha256": "10b66a49ea0e2136b8e8e1a1c17f2c2c93a63a1d72ad4f0876b744ccecf2b25c"},
+    "cpp": {"file": "CPP.jsonl", "sha256": "67bf1a5f45b8122cd940f4c4a9becd1cf394380c1cb10ec77e813afd077935d0"},
+    "go": {"file": "Go.jsonl", "sha256": "d09c9e6c3c78fd3d7aace642d27f2461511a2300ea967a5b838e2721bf528a4f"},
+    "java": {"file": "Java.jsonl", "sha256": "738af67a892d2dfe33ad8d57904b3432f78cf3178bcfce2aad872e473e21b0c9"},
+    "javascript": {"file": "JavaScript.jsonl", "sha256": "9378a72499e685accd4324bb14c472d917f5c4b73bf0e3425f604b5295a83eff"},
+    "kotlin": {"file": "Kotlin.jsonl", "sha256": "d54a5a8fbcba485368e3772289d4f48f25ea842460189ab8e138f9ebebd4cef2"},
+    "php": {"file": "PHP.jsonl", "sha256": "ad68bca7e1ec622e4952bd201dbaba494e1ad47c4e238833512d1fa51b212bd2"},
+    "python": {"file": "Python.jsonl", "sha256": "526c4299437ddc22eed04580e808f5823ce672253fbdf6f79d88eb2d05e1aff3"},
+    "ruby": {"file": "Ruby.jsonl", "sha256": "07ba2520763ac0f45e8bce9d48f2c3fa2c598e0f2813de7387b8019d217da4a2"},
+    "rust": {"file": "Rust.jsonl", "sha256": "df255e9089d6c55151d6d5a6a3a3c7edeed991cb39cfa222d6d6fbe114111ef5"},
+    "swift": {"file": "Swift.jsonl", "sha256": "5db3a0b537444915318a70cca1303f9f196b766ddfed944367d5b278952747b3"},
+    "typescript": {"file": "TypeScript.jsonl", "sha256": "18a409d3170fa86b909fa1ad0a65ea794c624c2922e6479874aed00def05c898"}
+  }
+}

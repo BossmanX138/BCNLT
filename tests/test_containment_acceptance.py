@@ -27,16 +27,23 @@ from bosscrafts_model.scientific_sandbox import (
 
 class _FakeSandbox:
     def execute(
-        self, *, language: str, source: str, stdin_text: str
+        self,
+        *,
+        language: str,
+        source: str,
+        stdin_text: str,
+        mode: str = "program",
     ) -> SandboxExecutionResult:
         probe = next(item for item in CONTAINMENT_PROBES if item.source == source)
         assert language == "python"
         assert stdin_text == ""
+        assert mode == "program"
         request_sha256 = hashlib.sha256(
             canonical_json(
                 {
                     "protocol": PROTOCOL,
                     "language": language,
+                    "mode": mode,
                     "source": source,
                     "stdin": stdin_text,
                 }
@@ -57,7 +64,7 @@ class _FakeSandbox:
             "ipc_mode": "none",
             "cgroupns_mode": "private",
             "mount_count": 0,
-            "tmpfs": "rw,exec,nosuid,nodev,size=134217728,mode=1777",
+            "tmpfs": "rw,exec,nosuid,nodev,size=268435456,mode=1777",
             "log_driver": "none",
             "attach_stdin": True,
             "open_stdin": True,
@@ -72,6 +79,7 @@ class _FakeSandbox:
         response = {
             "protocol": PROTOCOL,
             "language": language,
+            "mode": mode,
             "status": "passed",
             "phase": "run",
             "exit_code": 0,
@@ -84,6 +92,7 @@ class _FakeSandbox:
         return SandboxExecutionResult(
             protocol=PROTOCOL,
             language=language,
+            mode=mode,
             status="passed",
             phase="run",
             exit_code=0,
@@ -113,7 +122,7 @@ class _FakeSandbox:
                 ipc_mode="none",
                 cgroupns_mode="private",
                 mount_count=0,
-                tmpfs="rw,exec,nosuid,nodev,size=134217728,mode=1777",
+                tmpfs="rw,exec,nosuid,nodev,size=268435456,mode=1777",
                 log_driver="none",
             ),
         )

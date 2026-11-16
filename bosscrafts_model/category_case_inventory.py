@@ -24,18 +24,23 @@ from .model_acceptance import (
     MINIMUM_CATEGORY_EXAMPLES,
 )
 
-CATEGORY_CASE_SCHEMA = "bosscrafts-model-category-case-v3"
+CATEGORY_CASE_SCHEMA = "bosscrafts-model-category-case-v4"
 CATEGORY_CASE_BUNDLE_SCHEMA = "bosscrafts-model-category-case-bundle-v1"
 MAX_CATEGORY_CASE_FILE_BYTES = 128 * 1024 * 1024
 MAX_CATEGORY_CASE_BUNDLE_MANIFEST_BYTES = 16 * 1024 * 1024
 MAX_EXECUTION_STDIN_BYTES = 16 * 1024
 MAX_EXECUTION_STDOUT_BYTES = 64 * 1024
+MAX_EXECUTION_HARNESS_BYTES = 48 * 1024
+MAX_EXECUTION_PROMPT_BYTES = 32 * 1024
 _BUNDLE_INVENTORY_FILE = "inventory.json"
 _BUNDLE_MANIFEST_FILE = "manifest.json"
 _PACKED_CATEGORIES = {
     "tokenizer_fidelity",
     "semantic_fidelity",
     "raw_code",
+}
+_LANGUAGE_COVERED_CATEGORIES = {
+    *_PACKED_CATEGORIES,
     "execution_correctness",
 }
 _IFEVAL_INSTRUCTION_IDS = {
@@ -180,8 +185,6 @@ def _validate_packed_case(category: str, case: dict[str, object]) -> str:
     }
     if category != "tokenizer_fidelity":
         required.add("family")
-    if category == "execution_correctness":
-        required.update({"stdin", "expected_stdout"})
     if set(case) != required:
         raise ValueError(f"{category} packed case fields are invalid")
     if (
@@ -194,20 +197,65 @@ def _validate_packed_case(category: str, case: dict[str, object]) -> str:
     expected_family = {
         "semantic_fidelity": "code_to_semantic",
         "raw_code": "semantic_to_code",
-        "execution_correctness": "semantic_to_code",
     }.get(category)
     if expected_family is not None and case.get("family") != expected_family:
         raise ValueError(f"{category} packed case family is invalid")
-    if category == "execution_correctness":
-        stdin = case.get("stdin")
-        expected_stdout = case.get("expected_stdout")
-        if (
-            type(stdin) is not str
-            or len(stdin.encode("utf-8")) > MAX_EXECUTION_STDIN_BYTES
-            or type(expected_stdout) is not str
-            or len(expected_stdout.encode("utf-8")) > MAX_EXECUTION_STDOUT_BYTES
-        ):
-            raise ValueError("execution_correctness oracle is invalid")
+    return str(case["language"])
+
+
+def _validate_execution_case(case: dict[str, object]) -> str:
+    prompt = case.get("prompt")
+    harness_prefix = case.get("harness_prefix")
+    harness_suffix = case.get("harness_suffix")
+    stdin = case.get("stdin")
+    expected_stdout = case.get("expected_stdout")
+    source_task_id = case.get("source_task_id")
+    if (
+        set(case)
+        != {
+            "source_task_id",
+            "split",
+            "language",
+            "inference_task",
+            "prompt",
+            "execution_mode",
+            "harness_prefix",
+            "harness_suffix",
+            "stdin",
+            "expected_stdout",
+        }
+        or type(source_task_id) is not str
+        or not source_task_id.strip()
+        or len(source_task_id.encode("utf-8")) > 512
+        or case.get("split") != "test"
+        or case.get("language") not in EXPECTED_LANGUAGES
+        or case.get("inference_task") != "instruction_to_code"
+        or type(prompt) is not str
+        or not prompt.strip()
+        or len(prompt.encode("utf-8")) > MAX_EXECUTION_PROMPT_BYTES
+        or case.get("execution_mode") not in {"stdin_stdout", "test_harness"}
+        or type(harness_prefix) is not str
+        or type(harness_suffix) is not str
+        or len((harness_prefix + harness_suffix).encode("utf-8"))
+        > MAX_EXECUTION_HARNESS_BYTES
+        or type(stdin) is not str
+        or len(stdin.encode("utf-8")) > MAX_EXECUTION_STDIN_BYTES
+        or type(expected_stdout) is not str
+        or len(expected_stdout.encode("utf-8")) > MAX_EXECUTION_STDOUT_BYTES
+        or (
+            case.get("execution_mode") == "stdin_stdout"
+            and (
+                harness_prefix != ""
+                or harness_suffix != ""
+                or expected_stdout == ""
+            )
+        )
+        or (
+            case.get("execution_mode") == "test_harness"
+            and harness_prefix == harness_suffix == ""
+        )
+    ):
+        raise ValueError("execution_correctness benchmark case is invalid")
     return str(case["language"])
 
 
@@ -346,6 +394,10 @@ def _validate_case_payload(
         if case_kind != expected_kind:
             raise ValueError(f"{category} case kind is invalid")
         return _validate_packed_case(category, case)
+    if category == "execution_correctness":
+        if case_kind != "benchmark_function_completion":
+            raise ValueError("execution_correctness case kind is invalid")
+        return _validate_execution_case(case)
     if category == "ordinary_instruction":
         if case_kind != "ifeval_instruction" or not _valid_ifeval_case(case):
             raise ValueError("ordinary_instruction case payload is invalid")
@@ -440,6 +492,7 @@ def _build_category_case_inventory_from_contents(
             )
             if language is not None:
                 observed_languages.add(language)
+            if category in PACKED_ACCEPTANCE_CATEGORIES:
                 packed_case = record["case"]
                 if type(packed_case) is not dict:
                     raise AssertionError("validated packed case is not an object")
@@ -465,7 +518,7 @@ def _build_category_case_inventory_from_contents(
             example_ids.append(example_id)
         if example_ids != sorted(example_ids):
             raise ValueError(f"{category} category cases are not sorted by identity")
-        if category in _PACKED_CATEGORIES and observed_languages != set(
+        if category in _LANGUAGE_COVERED_CATEGORIES and observed_languages != set(
             EXPECTED_LANGUAGES
         ):
             raise ValueError(f"{category} category cases do not cover every language")

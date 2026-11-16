@@ -907,6 +907,9 @@ def _cached_code_receipt_payload(category: str) -> dict[str, object]:
         expected_stdout = (
             "2\n" if category == "execution_correctness" else None
         )
+        execution_mode = (
+            "stdin_stdout" if category == "execution_correctness" else None
+        )
         sandbox = _code_execution(
             language=language,
             source=source,
@@ -918,12 +921,33 @@ def _cached_code_receipt_payload(category: str) -> dict[str, object]:
         details.append(
             {
                 "example_id": example_id,
-                "task_example_id": hashlib.sha256(
-                    f"code-task:{example_id}".encode()
-                ).hexdigest(),
+                "task_example_id": (
+                    hashlib.sha256(
+                        f"code-task:{example_id}".encode()
+                    ).hexdigest()
+                    if category == "raw_code"
+                    else None
+                ),
+                "source_task_id": (
+                    None
+                    if category == "raw_code"
+                    else f"fixture/{example_id}"
+                ),
                 "language": language,
-                "task_input_ids_sha256": hashlib.sha256(
-                    f"code-input:{example_id}".encode()
+                "inference_task": (
+                    "semantic_to_code"
+                    if category == "raw_code"
+                    else "instruction_to_code"
+                ),
+                "task_input_ids_sha256": (
+                    hashlib.sha256(
+                        f"code-input:{example_id}".encode()
+                    ).hexdigest()
+                    if category == "raw_code"
+                    else None
+                ),
+                "generation_prompt_sha256": hashlib.sha256(
+                    f"code-prompt:{example_id}".encode()
                 ).hexdigest(),
                 "generated_ids": generated_ids,
                 "generated_ids_sha256": hashlib.sha256(
@@ -934,6 +958,12 @@ def _cached_code_receipt_payload(category: str) -> dict[str, object]:
                     _canonical(payload_ids)
                 ).hexdigest(),
                 "generated_source_sha256": hashlib.sha256(
+                    source.encode()
+                ).hexdigest(),
+                "execution_mode": execution_mode,
+                "harness_prefix": "",
+                "harness_suffix": "",
+                "execution_source_sha256": hashlib.sha256(
                     source.encode()
                 ).hexdigest(),
                 "stdin": stdin_text,

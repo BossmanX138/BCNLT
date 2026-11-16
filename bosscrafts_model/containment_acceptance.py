@@ -15,7 +15,7 @@ from .humaneval_sandbox import _validate_attestation
 from .immutable_artifacts import publish_new_files
 from .scientific_sandbox import PROTOCOL, SandboxExecutionResult
 
-CONTAINMENT_RECEIPT_SCHEMA = "bosscrafts-containment-receipt-v1"
+CONTAINMENT_RECEIPT_SCHEMA = "bosscrafts-containment-receipt-v2"
 MAX_CONTAINMENT_RECEIPT_BYTES = 16 * 1024 * 1024
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -84,7 +84,12 @@ CONTAINMENT_PROBES = (
 
 class SandboxExecutor(Protocol):
     def execute(
-        self, *, language: str, source: str, stdin_text: str
+        self,
+        *,
+        language: str,
+        source: str,
+        stdin_text: str,
+        mode: str = "program",
     ) -> SandboxExecutionResult: ...
 
 
@@ -125,6 +130,7 @@ def _sandbox_request_sha256(probe: ContainmentProbe) -> str:
     request = {
         "protocol": PROTOCOL,
         "language": "python",
+        "mode": "program",
         "source": probe.source,
         "stdin": "",
     }
@@ -137,6 +143,7 @@ def _sandbox_response_sha256(sandbox: Mapping[str, object]) -> str:
         for key in (
             "protocol",
             "language",
+            "mode",
             "status",
             "phase",
             "exit_code",
@@ -156,6 +163,7 @@ def _validate_sandbox_result(
     fields = {
         "protocol",
         "language",
+        "mode",
         "status",
         "phase",
         "exit_code",
@@ -176,6 +184,7 @@ def _validate_sandbox_result(
     if (
         sandbox.get("protocol") != PROTOCOL
         or sandbox.get("language") != "python"
+        or sandbox.get("mode") != "program"
         or sandbox.get("request_sha256") != request_sha256
         or sandbox.get("response_sha256") != _sandbox_response_sha256(sandbox)
         or type(sandbox.get("container_name")) is not str
