@@ -91,6 +91,30 @@ def test_v3_runtime_repair_controllers_have_executable_help() -> None:
         assert "--status-only" in completed.stdout
 
 
+def test_v3_task_packing_controllers_expose_parallel_controls() -> None:
+    names = (
+        "pack_v10_audited_training_tasks_v3_runtime_repair.py",
+        "pack_v10_frozen_evaluation_tasks_v3_runtime_repair.py",
+    )
+    for name in names:
+        completed = subprocess.run(
+            [sys.executable, str(PROJECT_ROOT / "scripts" / name), "--help"],
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+        assert completed.returncode == 0, f"{name}: {completed.stderr}"
+        for option in (
+            "--worker-index",
+            "--worker-count",
+            "--commit-interval",
+            "--defer-cell-index",
+        ):
+            assert option in completed.stdout
+
+
 def test_training_lineage_is_shared_exactly() -> None:
     assert train_eligibility.DEFAULT_ADMISSION == train_audit.DEFAULT_ADMISSION
     assert train_eligibility.DEFAULT_AUDIT == train_audit.DEFAULT_AUDIT
