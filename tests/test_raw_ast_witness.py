@@ -471,6 +471,36 @@ def test_raw_ast_witness_distinguishes_scope_entry_parent_from_exit_owner():
     assert by_id["exit"]["scope_match"] is True
 
 
+def test_raw_ast_witness_normalizes_crlf_inside_scope_names():
+    source = (
+        "static int * f(int x,\r\n"
+        "             int y) {\r\n"
+        "    return x + y;\r\n"
+        "}\r\n"
+    )
+    response = _feature().RawAstWitnessClient().inspect(
+        source,
+        language="c",
+        path="crlf-scope.c",
+        dialect=None,
+        queries=(
+            {
+                "query_id": "storage-class",
+                "span": [1, 0, 1, 6],
+                "ast_relation": "storage_class_specifier.self",
+                "scope": "module.f(int x,\n             int y)",
+                "surface": "static",
+            },
+        ),
+    )
+
+    witness = response["witnesses"][0]
+    assert witness["relation_span_match"] is True
+    assert witness["surface_match"] is True
+    assert witness["derived_scope"] == "module.f(int x,\n             int y)"
+    assert witness["scope_match"] is True
+
+
 def test_raw_ast_witness_derives_decorated_scope_surface_without_line_window():
     annotations = "\n".join(f"@Marker{i}(value = {i})" for i in range(24))
     source = f"{annotations}\npublic class Actual {{}}\n"

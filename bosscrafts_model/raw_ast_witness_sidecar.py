@@ -494,9 +494,7 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
                 else None
             )
             name = (
-                source_bytes[name_node.start_byte : name_node.end_byte].decode(
-                    "utf-8", errors="replace"
-                )
+                canonical_surface(name_node)
                 if name_node is not None
                 else str(node.type)
             )
