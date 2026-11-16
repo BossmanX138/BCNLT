@@ -58,20 +58,20 @@ from .tokenizer import NativeTokenizerBinding
 
 SIDECAR_PROTOCOL = "bosscrafts-bcnlt-source-sidecar-v4"
 CURRENT_RUNTIME_SPEC_SHA256 = {
-    "bash": "da1bb0468fb23c5a6eaa8af1eb0e9eeea4b9e295e7ffbc0d4aeb073c671810ca",
+    "bash": "ab4732dda01f958ec3f06bfb88a8d5b95879e226143bb01a5474587460ee3b36",
     "c": "f3765a6dd8687810a0d51f0ea9067af9bbee6642b98f23419168cd34d75e37f5",
     "c_sharp": "f11b7bec87537d6d7acab18156bc92b6fe262e935f13df421b805b6a5ebef105",
     "cpp": "c499bd19f76c84e522d6a8370a5d5e6ae26a96c7ca6bddf54b8f01e177182378",
     "go": "23f3a60f689ae22f34e5b819066d8e29ce823d4535cfca915e945ba2f2f3e6c2",
     "java": "c20f4e36ab239b8ed7f75428587f72d56f7e85c2f0a46a5a38a853f0ba033e4b",
-    "javascript": "b300189c01eb2607a1d6597e9fef5b5d74795d7283f5194ca1b11712673c96c3",
+    "javascript": "45cabfe829b613869c0fc49a72fb78a5e58dd9b3d7449fb61560d6e593253c64",
     "kotlin": "02568b22e74dc1a05d3c4cf84c23808eec19f818ee312f497107782bbf3be9a5",
     "php": "6f5aaff7714b1893ff7966d671700d6fc55a641b7665dcdd98701e11904e57ed",
     "python": "9dec2e498ca82f936d4d454a650de48f55dcea094000f27507dbbaf0cd408381",
     "ruby": "59ecd18636cc23219ce4e0a50bebe5b5904db420dca47b2666e108387d77ae57",
     "rust": "d0df302624a6374508c715ea95e4351a5479e7fbced804784b0c19df4831d66b",
     "swift": "d553d2c3df05cc7448e833ecf54266fb73a297d74b57db1bea0be1a099e3dd5a",
-    "typescript": "7124ea196695ceb20d9657f9cd4f144c97a872632ec07a7c55a90de23dbf6e2b",
+    "typescript": "26a18950bff376a5403e59d24bef1a469e213f19316cb9556e730a587e394f9b",
 }
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -80,7 +80,7 @@ _SIDECAR = _RUNTIME_ROOT / "bcnlt_source_sidecar.py"
 _DEFAULT_PYTHON_313 = Path(sys.executable).resolve()
 _RUNTIME_MANIFEST = _RUNTIME_ROOT / "runtime-manifest.json"
 _EXPECTED_RUNTIME_IDENTITY = {
-    "source": "d791c0eb80c9a65191be3b15877f6a7153e434bbe5f8cd4a6060f57af2fca14e",
+    "source": "d04cd2cd17d7c53498a11b12e5593d6bcb5c81ee8c6373e4843cc03006eb0e1a",
     "sidecar": "5eb8df0226ada9b5ba9d7d5b845d86abb6b4dbd22423c35a7ba6bff1f31be1f3",
     "tree_sitter": "d8efa5533a1c79cc404df3a0ff03d76626ad50d54b74d97e4cf6e30ab85bebe4",
     "language_pack": "18fda57fbe2f52f85cf09fd1fc5af6509bfe0a8c6d3d425cafe3d7b63f8dca6e",
@@ -88,10 +88,10 @@ _EXPECTED_RUNTIME_IDENTITY = {
     "site_packages": "3daa4575bdd757c649febf2c8514c80ab1311641c0205463b1c89b1e928b262c",
 }
 _EXPECTED_RUNTIME_MANIFEST_SHA256 = (
-    "5c5d62cd1b0d8c2933b1da0682c8eeb1588f38453a9765263eaf2cc003abb041"
+    "bbdeee4bf553a0fd53d79d3dd709e7563e0f9efb2c59b62e2c873003445b042d"
 )
 PARSER_RUNTIME_IDENTITY_SHA256 = (
-    "7440ef6263537ded8bceec9a3d2fdb72cbaf7a324e6deea552dc18e4d6891dfc"
+    "5b8f0b043d8d749449b468fd479564aba6193785081336f7d011f3c5079f3511"
 )
 PARSER_RUNTIME_NOT_APPLICABLE = "not_applicable"
 _FIELD_ORDER = (

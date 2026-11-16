@@ -626,6 +626,228 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
             )
             self.assertEqual(body_reference["defines"], definition["symbol_id"])
 
+    def test_go_grouped_parameters_define_every_name(self):
+        prepared = self.pipeline.prepare_semantic(
+            "package p\nfunc f(a, b int) { use(a, b) }\n",
+            language="go",
+            path="grouped.go",
+        )
+        records = [json.loads(line) for line in prepared.canonical_jsonl.splitlines()]
+        definitions = {
+            record["surface"]: record
+            for record in records
+            if record["event"] == "DEFINE" and record["surface"] in {"a", "b"}
+        }
+        self.assertEqual(set(definitions), {"a", "b"})
+        self.assertTrue(
+            all(record["scope"] == "module.f" for record in definitions.values())
+        )
+        for name, definition in definitions.items():
+            body_reference = next(
+                record
+                for record in records
+                if record["event"] == "REFERENCE"
+                and record["surface"] == name
+                and record["span"][1] > definition["span"][1]
+            )
+            self.assertEqual(body_reference["defines"], definition["symbol_id"])
+
+    def test_go_range_declaration_defines_each_loop_binding(self):
+        prepared = self.pipeline.prepare_semantic(
+            "package p\n"
+            "func f(xs []int) { for i, value := range xs { use(i, value) } }\n",
+            language="go",
+            path="range.go",
+        )
+        records = [json.loads(line) for line in prepared.canonical_jsonl.splitlines()]
+        definitions = {
+            record["surface"]: record
+            for record in records
+            if record["event"] == "DEFINE"
+            and record["surface"] in {"i", "value"}
+        }
+        self.assertEqual(set(definitions), {"i", "value"})
+        self.assertTrue(
+            all(
+                record["scope"] == "module.f.for_statement"
+                for record in definitions.values()
+            )
+        )
+        for name, definition in definitions.items():
+            body_reference = next(
+                record
+                for record in records
+                if record["event"] == "REFERENCE"
+                and record["surface"] == name
+                and record["span"][1] > definition["span"][1]
+            )
+            self.assertEqual(body_reference["defines"], definition["symbol_id"])
+        self.assertFalse(
+            any(
+                record["event"] == "UNKNOWN_SEMANTIC"
+                and record["metadata"].get("unknown_node") == "range_clause"
+                for record in records
+            )
+        )
+
+    def test_go_range_assignment_resolves_without_creating_a_binding(self):
+        prepared = self.pipeline.prepare_semantic(
+            "package p\n"
+            "func f(xs []int) { var i int; for i = range xs { use(i) } }\n",
+            language="go",
+            path="range-assignment.go",
+        )
+        records = [json.loads(line) for line in prepared.canonical_jsonl.splitlines()]
+        definitions = [
+            record
+            for record in records
+            if record["event"] == "DEFINE" and record["surface"] == "i"
+        ]
+        self.assertEqual(len(definitions), 1)
+        range_reference = next(
+            record
+            for record in records
+            if record["event"] == "REFERENCE"
+            and record["surface"] == "i"
+            and record["span"][1] > definitions[0]["span"][1]
+        )
+        self.assertEqual(range_reference["defines"], definitions[0]["symbol_id"])
+        self.assertFalse(
+            any(record["ast_relation"] == "range_clause.binding" for record in records)
+        )
+
+    def test_ruby_complex_parameters_define_each_binding(self):
+        prepared = self.pipeline.prepare_semantic(
+            "def f((a, b), c:, **kw, &block)\n"
+            "  use(a, b, c, kw, block)\n"
+            "end\n",
+            language="ruby",
+            path="parameters.rb",
+        )
+        records = [json.loads(line) for line in prepared.canonical_jsonl.splitlines()]
+        expected = {"a", "b", "c", "kw", "block"}
+        definitions = {
+            record["surface"]: record
+            for record in records
+            if record["event"] == "DEFINE" and record["surface"] in expected
+        }
+        self.assertEqual(set(definitions), expected)
+        self.assertTrue(
+            all(record["scope"] == "module.f" for record in definitions.values())
+        )
+        for name, definition in definitions.items():
+            body_reference = next(
+                record
+                for record in records
+                if record["event"] == "REFERENCE"
+                and record["surface"] == name
+                and record["span"][0] == 2
+            )
+            self.assertEqual(body_reference["defines"], definition["symbol_id"])
+        self.assertFalse(
+            any(
+                record["event"] == "UNKNOWN_SEMANTIC"
+                and record["metadata"].get("unknown_node")
+                in {
+                    "method_parameters",
+                    "destructured_parameter",
+                    "keyword_parameter",
+                    "hash_splat_parameter",
+                    "block_parameter",
+                }
+                for record in records
+            )
+        )
+
+    def test_ruby_parameter_defaults_see_only_earlier_bindings(self):
+        prepared = self.pipeline.prepare_semantic(
+            "def f(a, b = a, c = c)\n  use(a, b, c)\nend\n",
+            language="ruby",
+            path="defaults.rb",
+        )
+        records = [json.loads(line) for line in prepared.canonical_jsonl.splitlines()]
+        definitions = {
+            record["surface"]: record
+            for record in records
+            if record["event"] == "DEFINE" and record["surface"] in {"a", "b", "c"}
+        }
+        self.assertEqual(set(definitions), {"a", "b", "c"})
+        default_a = next(
+            record
+            for record in records
+            if record["event"] == "REFERENCE"
+            and record["surface"] == "a"
+            and record["span"][0] == 1
+        )
+        default_c = next(
+            record
+            for record in records
+            if record["event"] == "REFERENCE"
+            and record["surface"] == "c"
+            and record["span"][0] == 1
+        )
+        self.assertEqual(default_a["defines"], definitions["a"]["symbol_id"])
+        self.assertIsNone(default_c["defines"])
+
+    def test_bash_implicit_parameters_are_known_references_not_definitions(self):
+        prepared = self.pipeline.prepare_semantic(
+            "f() { echo $1 $2 $# $@ $?; }\n",
+            language="bash",
+            path="parameters.sh",
+        )
+        records = [json.loads(line) for line in prepared.canonical_jsonl.splitlines()]
+        expected = {"1", "2", "#", "@", "?"}
+        parameters = [
+            record
+            for record in records
+            if record["surface"] in expected
+            and record["ast_relation"]
+            in {"variable_name.self", "special_variable_name.self"}
+        ]
+        self.assertEqual({record["surface"] for record in parameters}, expected)
+        self.assertTrue(all(record["event"] == "REFERENCE" for record in parameters))
+        self.assertTrue(
+            all(record["metadata"].get("implicit_binding") is True for record in parameters)
+        )
+        self.assertTrue(
+            all(
+                "missing definition"
+                not in record["metadata"].get("uncertainty_signals", [])
+                for record in parameters
+            )
+        )
+
+    def test_javascript_static_block_var_does_not_escape_its_static_scope(self):
+        prepared = self.pipeline.prepare_semantic(
+            "class C { static { var value = 1; use(value); } }\nuse(value);\n",
+            language="javascript",
+            path="static-block.js",
+        )
+        records = [json.loads(line) for line in prepared.canonical_jsonl.splitlines()]
+        definition = next(
+            record
+            for record in records
+            if record["event"] == "DEFINE" and record["surface"] == "value"
+        )
+        self.assertEqual(definition["scope"], "module.C.class_static_block")
+        inner_reference = next(
+            record
+            for record in records
+            if record["event"] == "REFERENCE"
+            and record["surface"] == "value"
+            and record["span"][0] == 1
+            and record["span"][1] > 35
+        )
+        outer_reference = next(
+            record
+            for record in records
+            if record["event"] == "REFERENCE"
+            and record["surface"] == "value"
+            and record["span"][0] == 2
+        )
+        self.assertEqual(inner_reference["defines"], definition["symbol_id"])
+        self.assertIsNone(outer_reference["defines"])
+
     def test_isolated_sidecar_roundtrips_non_ascii_source_over_utf8_transport(self):
         source = "// 背景色\nconst value = 'Grüße';\n"
         prepared = self.pipeline.prepare_semantic(

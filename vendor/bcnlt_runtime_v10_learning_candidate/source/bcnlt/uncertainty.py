@@ -81,7 +81,11 @@ class HeuristicUncertaintyScorer:
         if unit.event == "UNKNOWN_SEMANTIC":
             uncertainty += 0.55
             signals.append("unknown semantic")
-        if unit.event in {"REFERENCE", "CALL"} and unit.defines is None:
+        if (
+            unit.event in {"REFERENCE", "CALL"}
+            and unit.defines is None
+            and unit.metadata.get("implicit_binding") is not True
+        ):
             builtins = {"print", "len", "range", "getattr", "setattr", "eval", "exec"}
             if unit.surface not in builtins:
                 uncertainty += 0.25

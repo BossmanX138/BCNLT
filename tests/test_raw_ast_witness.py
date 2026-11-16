@@ -202,6 +202,138 @@ def test_raw_ast_witness_validates_go_short_declaration_binding_contract():
     assert witness["scope_match"] is True
 
 
+def test_raw_ast_witness_validates_go_range_binding_contract():
+    source = (
+        "package p\n"
+        "func f(xs []int) { for i, value := range xs { use(i, value) } }\n"
+    )
+    start = source.splitlines()[1].index("value")
+    response = _feature().RawAstWitnessClient().inspect(
+        source,
+        language="go",
+        path="range.go",
+        dialect=None,
+        queries=(
+            {
+                "query_id": "range-binding",
+                "span": [2, start, 2, start + len("value")],
+                "ast_relation": "range_clause.binding",
+                "scope": "module.f.for_statement",
+                "surface": "value",
+            },
+        ),
+    )
+
+    witness = response["witnesses"][0]
+    assert witness["relation_span_match"] is True
+    assert witness["derived_scope"] == "module.f.for_statement"
+    assert witness["scope_match"] is True
+    assert witness["derived_surface"] == "value"
+    assert witness["surface_match"] is True
+
+
+def test_raw_ast_witness_validates_each_go_grouped_parameter_name():
+    source = "package p\nfunc f(a, b int) { use(b) }\n"
+    start = source.splitlines()[1].index("b")
+    response = _feature().RawAstWitnessClient().inspect(
+        source,
+        language="go",
+        path="grouped.go",
+        dialect=None,
+        queries=(
+            {
+                "query_id": "second-parameter",
+                "span": [2, start, 2, start + 1],
+                "ast_relation": "parameter_declaration.name",
+                "scope": "module.f",
+                "surface": "b",
+            },
+        ),
+    )
+
+    witness = response["witnesses"][0]
+    assert witness["relation_span_match"] is True
+    assert witness["scope_match"] is True
+    assert witness["surface_match"] is True
+
+
+def test_raw_ast_witness_rejects_go_range_assignment_as_a_declaration():
+    source = "package p\nfunc f(xs []int) { var i int; for i = range xs {} }\n"
+    start = source.splitlines()[1].index("i =")
+    response = _feature().RawAstWitnessClient().inspect(
+        source,
+        language="go",
+        path="range-assignment.go",
+        dialect=None,
+        queries=(
+            {
+                "query_id": "not-a-declaration",
+                "span": [2, start, 2, start + 1],
+                "ast_relation": "range_clause.binding",
+                "scope": "module.f.for_statement",
+                "surface": "i",
+            },
+        ),
+    )
+
+    assert response["witnesses"][0]["relation_span_match"] is False
+
+
+def test_raw_ast_witness_validates_ruby_complex_parameter_binding_contract():
+    source = "def f((a, b), c:, **kw, &block)\n  use(block)\nend\n"
+    start = source.splitlines()[0].index("block")
+    response = _feature().RawAstWitnessClient().inspect(
+        source,
+        language="ruby",
+        path="parameters.rb",
+        dialect=None,
+        queries=(
+            {
+                "query_id": "block-parameter",
+                "span": [1, start, 1, start + len("block")],
+                "ast_relation": "method_parameters.binding",
+                "scope": "module.f",
+                "surface": "block",
+            },
+        ),
+    )
+
+    witness = response["witnesses"][0]
+    assert witness["relation_span_match"] is True
+    assert witness["derived_scope"] == "module.f"
+    assert witness["scope_match"] is True
+    assert witness["derived_surface"] == "block"
+    assert witness["surface_match"] is True
+
+
+def test_raw_ast_witness_rejects_ruby_default_expression_as_a_binding():
+    source = "def f(a = external)\n  use(a)\nend\n"
+    binding_start = source.splitlines()[0].index("a")
+    value_start = source.splitlines()[0].index("external")
+    response = _feature().RawAstWitnessClient().inspect(
+        source,
+        language="ruby",
+        path="default.rb",
+        dialect=None,
+        queries=(
+            {
+                "query_id": "binding",
+                "span": [1, binding_start, 1, binding_start + 1],
+                "ast_relation": "method_parameters.binding",
+            },
+            {
+                "query_id": "default-expression",
+                "span": [1, value_start, 1, value_start + len("external")],
+                "ast_relation": "method_parameters.binding",
+            },
+        ),
+    )
+
+    by_id = {row["query_id"]: row for row in response["witnesses"]}
+    assert by_id["binding"]["relation_span_match"] is True
+    assert by_id["default-expression"]["relation_span_match"] is False
+
+
 def test_raw_ast_witness_models_javascript_var_hoisting():
     source = "function f() { if (ready) { var value = 1; } }\n"
     start = source.index("value")
@@ -224,6 +356,32 @@ def test_raw_ast_witness_models_javascript_var_hoisting():
     assert witness["relation_span_match"] is True
     assert witness["derived_scope"] == "module.f"
     assert witness["scope_match"] is True
+
+
+def test_raw_ast_witness_models_javascript_static_block_var_scope():
+    source = "class C { static { var value = 1; use(value); } }\n"
+    start = source.index("value")
+    response = _feature().RawAstWitnessClient().inspect(
+        source,
+        language="javascript",
+        path="static-block.js",
+        dialect=None,
+        queries=(
+            {
+                "query_id": "static-var",
+                "span": [1, start, 1, start + len("value")],
+                "ast_relation": "variable_declarator.name",
+                "scope": "module.C.class_static_block",
+                "surface": "value",
+            },
+        ),
+    )
+
+    witness = response["witnesses"][0]
+    assert witness["relation_span_match"] is True
+    assert witness["derived_scope"] == "module.C.class_static_block"
+    assert witness["scope_match"] is True
+    assert witness["surface_match"] is True
 
 
 def test_raw_ast_witness_preserves_ancestor_blocks_before_var_owning_function():

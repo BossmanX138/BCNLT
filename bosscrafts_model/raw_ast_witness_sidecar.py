@@ -20,7 +20,7 @@ os.environ["BCNLT_PARSER_CACHE"] = str(RUNTIME_ROOT / "grammars")
 PROTOCOL = "bosscrafts-raw-ast-witness-v2"
 SIDECAR_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 PARSER_RUNTIME_IDENTITY_SHA256 = (
-    "7440ef6263537ded8bceec9a3d2fdb72cbaf7a324e6deea552dc18e4d6891dfc"
+    "5b8f0b043d8d749449b468fd479564aba6193785081336f7d011f3c5079f3511"
 )
 MAX_SOURCE_BYTES = 200 * 1024
 MAX_QUERIES = 16_384
@@ -53,6 +53,8 @@ class _Node(Protocol):
     def parent(self) -> _Node | None: ...
 
     def child_by_field_name(self, name: str) -> _Node | None: ...
+
+    def children_by_field_name(self, name: str) -> Sequence[_Node]: ...
 
 
 class _ScopeRule(Protocol):
@@ -316,6 +318,58 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
                 target_type == "identifier"
                 and left is not None
                 and is_within(target, left)
+            )
+        if relation == "range_clause.binding":
+            left = owner.child_by_field_name("left")
+            return (
+                target_type == "identifier"
+                and left is not None
+                and is_within(target, left)
+                and any(str(child.type) == ":=" for child in owner.children)
+            )
+        if relation == "method_parameters.binding":
+            if target_type != "identifier":
+                return False
+
+            def ruby_binding_contains(binding: _Node) -> bool:
+                binding_type = str(binding.type)
+                if binding_type == "identifier":
+                    return node_key(binding) == node_key(target)
+                if binding_type == "destructured_parameter":
+                    return any(
+                        ruby_binding_contains(child)
+                        for child in binding.children
+                        if bool(getattr(child, "is_named", False))
+                    )
+                if binding_type in {
+                    "block_parameter",
+                    "hash_splat_parameter",
+                    "keyword_parameter",
+                    "keyword_splat_parameter",
+                    "optional_parameter",
+                    "splat_parameter",
+                }:
+                    name = binding.child_by_field_name("name")
+                    return name is not None and is_within(target, name)
+                return False
+
+            return any(
+                ruby_binding_contains(child)
+                for child in owner.children
+                if bool(getattr(child, "is_named", False))
+            )
+        if (
+            relation
+            in {
+                "parameter_declaration.name",
+                "variadic_parameter_declaration.name",
+            }
+            and owner_type
+            in {"parameter_declaration", "variadic_parameter_declaration"}
+        ):
+            return any(
+                node_key(binding) == node_key(target)
+                for binding in owner.children_by_field_name("name")
             )
         if relation in {
             "variable_declarator.binding",

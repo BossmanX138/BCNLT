@@ -86,6 +86,7 @@ _METADATA_ALLOWED_KEYS = frozenset(
         "preprocessor_condition",
         "unknown_node",
         "surface_truncated",
+        "implicit_binding",
         "knowledge_state",
         "uyr_rounds",
         "uncertainty_signals",
@@ -286,6 +287,7 @@ def validate_canonical_record_payload(
         "macro_expansion",
         "overload_unresolved",
         "surface_truncated",
+        "implicit_binding",
     ):
         if field in metadata and type(metadata[field]) is not bool:
             raise ValueError(f"BCNLT {field} metadata must be boolean")
