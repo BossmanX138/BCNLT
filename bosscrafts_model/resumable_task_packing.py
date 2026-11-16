@@ -498,47 +498,24 @@ def audit_task_database(
             "task database maximum sequence metadata is invalid"
         ) from error
     example_id_policy = dataset.metadata.get("training_example_id_policy")
-    source_identities: dict[str, tuple[str, str]] | None = None
+    source_identity_connection: sqlite3.Connection | None = None
+    source_identity_cursor: sqlite3.Cursor | None = None
+    mapping_digest = hashlib.sha256()
     if example_id_policy is not None:
         if example_id_policy != SALTED_SOURCE_EXAMPLE_ID_POLICY:
             raise ValueError("task database example ID policy is unsupported")
-        connection = sqlite3.connect(
+        source_identity_connection = sqlite3.connect(
             f"{dataset.database_path.as_uri()}?mode=ro", uri=True, timeout=30
         )
-        connection.execute("PRAGMA query_only=ON")
+        source_identity_connection.execute("PRAGMA query_only=ON")
         try:
-            mapping_rows = connection.execute(
+            source_identity_cursor = source_identity_connection.execute(
                 "SELECT example_id,source_example_id,source_kind "
                 "FROM source_example_identity ORDER BY example_id"
-            ).fetchall()
-        except sqlite3.DatabaseError as error:
-            raise ValueError("task database source identity map is invalid") from error
-        finally:
-            connection.close()
-        mapping_digest = hashlib.sha256()
-        source_identities = {}
-        for example_id, source_example_id, source_kind in mapping_rows:
-            new_id = str(example_id)
-            source_id = str(source_example_id)
-            kind = str(source_kind)
-            if new_id in source_identities:
-                raise ValueError("task database source identity map is duplicated")
-            if salted_source_example_id(kind, source_id) != new_id:
-                raise ValueError("task database salted example identity mismatch")
-            source_identities[new_id] = (source_id, kind)
-            mapping_digest.update(
-                _canonical_json(
-                    {
-                        "example_id": new_id,
-                        "source_example_id": source_id,
-                        "source_kind": kind,
-                    }
-                ).encode("utf-8")
             )
-        if not source_identities or mapping_digest.hexdigest() != dataset.metadata.get(
-            "source_example_identity_map_sha256"
-        ):
-            raise ValueError("task database source identity map hash mismatch")
+        except sqlite3.DatabaseError as error:
+            source_identity_connection.close()
+            raise ValueError("task database source identity map is invalid") from error
     split_counts: Counter[str] = Counter()
     language_counts: Counter[str] = Counter()
     family_counts: Counter[str] = Counter()
@@ -547,70 +524,110 @@ def audit_task_database(
     example_count = 0
     total_sequence_tokens = 0
     maximum_sequence_tokens = 0
-    for row in dataset.iter_examples():
-        input_ids = row["input_ids"]
-        input_ids_sha256 = hashlib.sha256(
-            _canonical_json(input_ids).encode("utf-8")
-        ).hexdigest()
-        identity = {
-            "document_id": row["document_id"],
-            "family": row["family"],
-            "record_index": row["record_index"],
-            "input_ids_sha256": input_ids_sha256,
-        }
-        expected_id = hashlib.sha256(
-            _canonical_json(identity).encode("utf-8")
-        ).hexdigest()
-        if source_identities is None:
-            if row["example_id"] != expected_id:
-                raise ValueError("task example identity mismatch")
-        else:
-            mapped = source_identities.get(str(row["example_id"]))
-            expected_kind = (
-                "instruction"
-                if row["family"]
-                in {"instruction_to_code", "instruction_to_response"}
-                else "replay"
+    try:
+        for row in dataset.iter_examples():
+            input_ids = row["input_ids"]
+            input_ids_sha256 = hashlib.sha256(
+                _canonical_json(input_ids).encode("utf-8")
+            ).hexdigest()
+            identity = {
+                "document_id": row["document_id"],
+                "family": row["family"],
+                "record_index": row["record_index"],
+                "input_ids_sha256": input_ids_sha256,
+            }
+            expected_id = hashlib.sha256(
+                _canonical_json(identity).encode("utf-8")
+            ).hexdigest()
+            if source_identity_cursor is None:
+                if row["example_id"] != expected_id:
+                    raise ValueError("task example identity mismatch")
+            else:
+                try:
+                    mapping_row = source_identity_cursor.fetchone()
+                except sqlite3.DatabaseError as error:
+                    raise ValueError(
+                        "task database source identity map is invalid"
+                    ) from error
+                if mapping_row is None:
+                    raise ValueError("task database source identity map count mismatch")
+                new_id = str(mapping_row[0])
+                source_id = str(mapping_row[1])
+                kind = str(mapping_row[2])
+                if new_id != row["example_id"] or salted_source_example_id(
+                    kind, source_id
+                ) != new_id:
+                    raise ValueError("task database salted example identity mismatch")
+                expected_kind = (
+                    "instruction"
+                    if row["family"]
+                    in {"instruction_to_code", "instruction_to_response"}
+                    else "replay"
+                )
+                if (source_id, kind) != (expected_id, expected_kind):
+                    raise ValueError("task source example identity mismatch")
+                mapping_digest.update(
+                    _canonical_json(
+                        {
+                            "example_id": new_id,
+                            "source_example_id": source_id,
+                            "source_kind": kind,
+                        }
+                    ).encode("utf-8")
+                )
+            sequence_length = len(input_ids)
+            if sequence_length > maximum_allowed:
+                raise ValueError("task sequence exceeds configured maximum")
+            split = str(row["split"])
+            language = str(row["language"])
+            family = str(row["family"])
+            split_counts[split] += 1
+            language_counts[language] += 1
+            family_counts[family] += 1
+            document_splits[str(row["document_id"])].add(split)
+            content_digest.update(
+                _canonical_json(
+                    {
+                        "document_id": row["document_id"],
+                        "example_id": row["example_id"],
+                        "family": family,
+                        "input_ids_sha256": input_ids_sha256,
+                        "language": language,
+                        "loss_start_index": row["loss_start_index"],
+                        "record_index": row["record_index"],
+                        "parser_runtime_identity_sha256": row[
+                            "parser_runtime_identity_sha256"
+                        ],
+                        "semantic_spec_sha256": row["semantic_spec_sha256"],
+                        "source_sha256": row["source_sha256"],
+                        "split": split,
+                    }
+                ).encode("utf-8")
             )
-            if mapped != (expected_id, expected_kind):
-                raise ValueError("task source example identity mismatch")
-        sequence_length = len(input_ids)
-        if sequence_length > maximum_allowed:
-            raise ValueError("task sequence exceeds configured maximum")
-        split = str(row["split"])
-        language = str(row["language"])
-        family = str(row["family"])
-        split_counts[split] += 1
-        language_counts[language] += 1
-        family_counts[family] += 1
-        document_splits[str(row["document_id"])].add(split)
-        content_digest.update(
-            _canonical_json(
-                {
-                    "document_id": row["document_id"],
-                    "example_id": row["example_id"],
-                    "family": family,
-                    "input_ids_sha256": input_ids_sha256,
-                    "language": language,
-                    "loss_start_index": row["loss_start_index"],
-                    "record_index": row["record_index"],
-                    "parser_runtime_identity_sha256": row[
-                        "parser_runtime_identity_sha256"
-                    ],
-                    "semantic_spec_sha256": row["semantic_spec_sha256"],
-                    "source_sha256": row["source_sha256"],
-                    "split": split,
-                }
-            ).encode("utf-8")
-        )
-        content_digest.update(b"\n")
-        example_count += 1
-        total_sequence_tokens += sequence_length
-        maximum_sequence_tokens = max(maximum_sequence_tokens, sequence_length)
+            content_digest.update(b"\n")
+            example_count += 1
+            total_sequence_tokens += sequence_length
+            maximum_sequence_tokens = max(maximum_sequence_tokens, sequence_length)
+        if source_identity_cursor is not None:
+            try:
+                extra_mapping_row = source_identity_cursor.fetchone()
+            except sqlite3.DatabaseError as error:
+                raise ValueError(
+                    "task database source identity map is invalid"
+                ) from error
+            if extra_mapping_row is not None:
+                raise ValueError("task database source identity map count mismatch")
+            if mapping_digest.hexdigest() != dataset.metadata.get(
+                "source_example_identity_map_sha256"
+            ):
+                raise ValueError("task database source identity map hash mismatch")
+    finally:
+        if source_identity_cursor is not None:
+            source_identity_cursor.close()
+        if source_identity_connection is not None:
+            source_identity_connection.close()
     if not example_count:
         raise ValueError("task database audit found no examples")
-    if source_identities is not None and len(source_identities) != example_count:
-        raise ValueError("task database source identity map count mismatch")
     if any(len(splits) != 1 for splits in document_splits.values()):
         raise ValueError("task document appears in multiple splits")
     content_sha256 = content_digest.hexdigest()

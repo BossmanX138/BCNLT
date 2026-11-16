@@ -251,6 +251,42 @@ def test_mixed_loss_mask_audit_rejects_weight_policy_mismatch(
         ).materialize(output, tmp_path / "should-not-exist.json")
 
 
+def test_task_audit_streams_and_rejects_truncated_source_identity_map(
+    tmp_path: Path,
+) -> None:
+    binding = NativeTokenizerBinding.load()
+    semantic = tmp_path / "semantic.sqlite"
+    instruction = tmp_path / "instruction.sqlite"
+    output = tmp_path / "mixed.sqlite"
+    _write_database(semantic, binding, instruction=False)
+    _write_database(instruction, binding, instruction=True)
+    build_mixed_curriculum(
+        binding,
+        semantic_database=semantic,
+        instruction_database=instruction,
+        output_database=output,
+        expected_semantic_identity_sha256=(
+            audit_task_database(binding, semantic).database_identity_sha256
+        ),
+        expected_instruction_identity_sha256=(
+            audit_task_database(binding, instruction).database_identity_sha256
+        ),
+        instruction_training_weight_fraction=0.5,
+    )
+    connection = sqlite3.connect(output)
+    try:
+        connection.execute(
+            "DELETE FROM source_example_identity WHERE example_id=("
+            "SELECT MAX(example_id) FROM source_example_identity)"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(ValueError, match="identity map count mismatch"):
+        audit_task_database(binding, output)
+
+
 def test_rejects_wrong_expected_source_identity(tmp_path: Path) -> None:
     binding = NativeTokenizerBinding.load()
     semantic = tmp_path / "semantic.sqlite"
