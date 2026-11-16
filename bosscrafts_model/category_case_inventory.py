@@ -485,6 +485,7 @@ def _build_category_case_inventory_from_contents(
             example_id = record.get("example_id")
             if not _is_sha256(example_id) or example_id != _sha256(body):
                 raise ValueError(f"{category} category case content identity is invalid")
+            example_id_value = example_id
             language = _validate_case_payload(
                 category,
                 record.get("case_kind"),
@@ -512,10 +513,10 @@ def _build_category_case_inventory_from_contents(
                         "family": packed_case.get("family"),
                     }
                 )
-            if example_id in global_ids:
+            if example_id_value in global_ids:
                 raise ValueError("category case identity is duplicated")
-            global_ids.add(example_id)
-            example_ids.append(example_id)
+            global_ids.add(example_id_value)
+            example_ids.append(example_id_value)
         if example_ids != sorted(example_ids):
             raise ValueError(f"{category} category cases are not sorted by identity")
         if category in _LANGUAGE_COVERED_CATEGORIES and observed_languages != set(

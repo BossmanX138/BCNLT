@@ -41,11 +41,20 @@ SALTED_SOURCE_EXAMPLE_ID_POLICY = "bosscrafts-v11-salted-source-example-id-v1"
 _TASK_FAMILIES = frozenset(
     {
         "instruction_to_code",
+        "instruction_to_response",
         "code_to_semantic",
         "semantic_continuation",
         "semantic_to_code",
     }
 )
+
+
+def _valid_task_cell(language: object, family: object) -> bool:
+    if type(language) is not str or type(family) is not str:
+        return False
+    if family == "instruction_to_response":
+        return language == "english"
+    return language in CURRENT_RUNTIME_SPEC_SHA256 and family in _TASK_FAMILIES
 
 
 class TaskExample(TypedDict):
@@ -190,10 +199,7 @@ class ResumableTaskDataset:
             if (
                 type(split) is not str
                 or split not in {"train", "validation", "test"}
-                or type(language) is not str
-                or language not in CURRENT_RUNTIME_SPEC_SHA256
-                or type(family) is not str
-                or family not in _TASK_FAMILIES
+                or not _valid_task_cell(language, family)
                 or type(count) is not int
                 or count < 1
             ):
@@ -425,7 +431,7 @@ class ResumableTaskDataset:
         language = row[2]
         expected_runtime = (
             PARSER_RUNTIME_NOT_APPLICABLE
-            if family == "instruction_to_code"
+            if family in {"instruction_to_code", "instruction_to_response"}
             else PARSER_RUNTIME_IDENTITY_SHA256
         )
         if (
@@ -433,11 +439,11 @@ class ResumableTaskDataset:
             or family not in _TASK_FAMILIES
             or type(split_value) is not str
             or split_value not in {"train", "validation", "test"}
-            or type(language) is not str
-            or language not in CURRENT_RUNTIME_SPEC_SHA256
+            or not _valid_task_cell(language, family)
             or str(row[10]) != expected_runtime
         ):
             raise ValueError("task row parser runtime lineage mismatch")
+        language_value = cast(str, language)
         token_count = row[7]
         if (
             type(token_count) is not int
@@ -463,7 +469,7 @@ class ResumableTaskDataset:
         record_index = row[4]
         if type(record_index) is not int or record_index < 0:
             raise ValueError("task record index is invalid")
-        cell = (split_value, language, family)
+        cell = (split_value, language_value, family)
         return {
             "example_id": str(row[0]),
             "document_id": str(row[1]),
@@ -560,7 +566,10 @@ def audit_task_database(
         else:
             mapped = source_identities.get(str(row["example_id"]))
             expected_kind = (
-                "instruction" if row["family"] == "instruction_to_code" else "replay"
+                "instruction"
+                if row["family"]
+                in {"instruction_to_code", "instruction_to_response"}
+                else "replay"
             )
             if mapped != (expected_id, expected_kind):
                 raise ValueError("task source example identity mismatch")

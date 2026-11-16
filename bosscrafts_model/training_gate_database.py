@@ -186,6 +186,7 @@ def build_training_gate_database(
                 raise ValueError("source task example split is invalid")
             if family not in FAMILIES:
                 raise ValueError("source task family is invalid")
+            family_value = family
             if split != "train":
                 continue
             language = row.get("language")
@@ -196,7 +197,7 @@ def build_training_gate_database(
             ):
                 stale_spec_skipped_count += 1
                 continue
-            cell = (language, family)
+            cell = (language, family_value)
             if cell in selected_cells:
                 continue
             input_ids = row.get("input_ids")
@@ -204,7 +205,7 @@ def build_training_gate_database(
             target_token_count = row.get("target_token_count")
             record_index = row.get("record_index")
             expected_task_start = binding.structural_token_ids[
-                f"<|bcnlt:task:{family}|>"
+                f"<|bcnlt:task:{family_value}|>"
             ]
             expected_task_end = binding.structural_token_ids["<|bcnlt:task:end|>"]
             if (
@@ -230,7 +231,7 @@ def build_training_gate_database(
             ).hexdigest()
             identity = {
                 "document_id": row["document_id"],
-                "family": family,
+                "family": family_value,
                 "record_index": record_index,
                 "input_ids_sha256": input_ids_sha256,
             }

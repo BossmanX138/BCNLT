@@ -1050,6 +1050,7 @@ def verify_model_acceptance(
         or not _is_sha256(checkpoint_training_database_identity_value)
     ):
         raise ValueError("acceptance evidence lineage mismatch")
+    model_fingerprint = EXPECTED_MODEL_FINGERPRINT
     if checkpoint_heldout_suite_identity_value != heldout_suite.manifest_sha256:
         raise ValueError("acceptance checkpoint held-out suite lineage mismatch")
 
@@ -1088,7 +1089,7 @@ def verify_model_acceptance(
         evaluation_task_database_identities_sha256=(
             evaluation_database_identities
         ),
-        model_fingerprint=model_fingerprint_value,
+        model_fingerprint=model_fingerprint,
         evaluation_sha256={
             split: _payload_sha256(payload)
             for split, payload in sorted(evaluation_by_split.items())

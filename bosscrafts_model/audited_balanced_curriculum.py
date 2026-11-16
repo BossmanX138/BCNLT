@@ -546,6 +546,7 @@ def build_audited_balanced_curriculum(
                                 example_id_value = item.get("example_id")
                                 if family not in FAMILIES:
                                     raise ValueError("packed task family is invalid")
+                                family_value = family
                                 if type(raw_ids_value) is not list:
                                     raise ValueError(
                                         "packed task input IDs are invalid"
@@ -561,7 +562,7 @@ def build_audited_balanced_curriculum(
                                     raise ValueError(
                                         "packed task identity or loss boundary is invalid"
                                     )
-                                cell = (split, language, family)
+                                cell = (split, language, family_value)
                                 raw_ids = _encode_u16(input_ids)
                                 loss_start = loss_start_value
                                 target_tokens = len(input_ids) - loss_start
@@ -569,7 +570,7 @@ def build_audited_balanced_curriculum(
                                     example_id=cast(str, example_id_value),
                                     document_id=document_id,
                                     language=language,
-                                    family=family,
+                                    family=family_value,
                                     record_index=record_index_value,
                                     split=split,
                                     input_ids_zlib=zlib.compress(raw_ids, 6),
@@ -583,7 +584,7 @@ def build_audited_balanced_curriculum(
                                     ),
                                     source_sha256=source_sha,
                                     prompt_key=(
-                                        family,
+                                        family_value,
                                         hashlib.sha256(
                                             raw_ids[: loss_start * 2]
                                         ).hexdigest(),

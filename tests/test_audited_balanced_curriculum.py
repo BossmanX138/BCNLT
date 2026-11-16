@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+import subprocess
+import sys
 import zlib
 from pathlib import Path
 from unittest.mock import patch
@@ -22,6 +24,29 @@ from bosscrafts_model.current_task_packing import FAMILIES
 from bosscrafts_model.resumable_current_corpus import RESUMABLE_SCHEMA
 from bosscrafts_model.resumable_task_packing import _canonical_json, _encode_u16
 from bosscrafts_model.tokenizer import NativeTokenizerBinding
+
+
+def test_current_audited_curriculum_script_runs_from_project_root() -> None:
+    project_root = Path(__file__).parents[1]
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(
+                project_root
+                / "scripts"
+                / "build_v10_current_audited_balanced_curriculum.py"
+            ),
+            "--help",
+        ],
+        cwd=project_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "--train-eligibility-manifest-sha256" in result.stdout
+    assert "--validation-eligibility-manifest-sha256" in result.stdout
+    assert "--test-eligibility-manifest-sha256" in result.stdout
 
 
 def _candidate(

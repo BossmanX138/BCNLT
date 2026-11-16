@@ -173,6 +173,7 @@ def _validate_inventory_against_admission(
     admission_identity: str,
     admission_rows: dict[str, tuple[Any, ...]],
 ) -> None:
+    admission_split = metadata.get("frozen_source_split", "train")
     if (
         manifest.get("source_admission_identity_sha256") != admission_identity
         or manifest.get("source_document_count") != len(admission_rows)
@@ -180,7 +181,7 @@ def _validate_inventory_against_admission(
         != metadata.get("source_catalog_sha256")
         or manifest.get("source_freeze_manifest_sha256")
         != metadata.get("source_freeze_manifest_sha256")
-        or manifest.get("source_split") != metadata.get("frozen_source_split")
+        or manifest.get("source_split") != admission_split
     ):
         raise ValueError("source eligibility admission lineage mismatch")
 

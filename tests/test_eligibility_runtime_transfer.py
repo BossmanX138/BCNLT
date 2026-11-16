@@ -31,7 +31,7 @@ def _canonical(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
-def _database(path: Path, parser_runtime: str) -> None:
+def _database(path: Path, parser_runtime: str, *, source_split: str = "test") -> None:
     connection = sqlite3.connect(path)
     try:
         connection.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY,value TEXT NOT NULL)")
@@ -55,8 +55,9 @@ def _database(path: Path, parser_runtime: str) -> None:
             ).hexdigest(),
             "source_catalog_sha256": CATALOG_SHA256,
             "source_freeze_manifest_sha256": FREEZE_SHA256,
-            "frozen_source_split": "test",
         }
+        if source_split != "train":
+            metadata["frozen_source_split"] = source_split
         connection.executemany(
             "INSERT INTO metadata(key,value) VALUES(?,?)", sorted(metadata.items())
         )
@@ -130,7 +131,7 @@ def _admission_identity(path: Path) -> str:
         connection.close()
 
 
-def _eligibility(root: Path, baseline: Path) -> None:
+def _eligibility(root: Path, baseline: Path, *, source_split: str = "test") -> None:
     root.mkdir()
     eligible = {
         "schema_version": "bosscrafts-training-eligible-document-v1",
@@ -170,7 +171,7 @@ def _eligibility(root: Path, baseline: Path) -> None:
         "semantic_audit_qualification_sha256": "d" * 64,
         "audit_host_code_identity_sha256": "e" * 64,
         "source_document_count": 3,
-        "source_split": "test",
+        "source_split": source_split,
         "eligible_document_count": 1,
         "excluded_document_count": 2,
         "eligible_file": "eligible.jsonl",
@@ -191,14 +192,16 @@ def _eligibility(root: Path, baseline: Path) -> None:
     )
 
 
-def _fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
+def _fixture(
+    tmp_path: Path, *, source_split: str = "test"
+) -> tuple[Path, Path, Path, Path]:
     baseline = tmp_path / "baseline.sqlite"
     candidate = tmp_path / "candidate.sqlite"
     source = tmp_path / "eligibility-source"
     receipt = tmp_path / "equivalence.json"
-    _database(baseline, BASELINE_RUNTIME)
-    _database(candidate, PARSER_RUNTIME_IDENTITY_SHA256)
-    _eligibility(source, baseline)
+    _database(baseline, BASELINE_RUNTIME, source_split=source_split)
+    _database(candidate, PARSER_RUNTIME_IDENTITY_SHA256, source_split=source_split)
+    _eligibility(source, baseline, source_split=source_split)
     publish_equivalence_receipt(
         compare_admission_runtime_equivalence(baseline, candidate), receipt
     )
@@ -237,6 +240,27 @@ def test_transfer_binds_eligibility_to_current_runtime(tmp_path: Path) -> None:
             equivalence_receipt=receipt,
             output_root=destination,
         )
+
+
+def test_transfer_accepts_training_admission_without_frozen_split_key(
+    tmp_path: Path,
+) -> None:
+    baseline, candidate, source, receipt = _fixture(
+        tmp_path, source_split="train"
+    )
+    destination = tmp_path / "transferred"
+
+    result = transfer_runtime_equivalent_eligibility(
+        baseline_admission_database=baseline,
+        candidate_admission_database=candidate,
+        source_eligibility_root=source,
+        equivalence_receipt=receipt,
+        output_root=destination,
+    )
+
+    assert result.eligible_document_count == 1
+    manifest = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["source_split"] == "train"
 
 
 def test_transfer_rejects_candidate_changed_after_receipt(tmp_path: Path) -> None:
