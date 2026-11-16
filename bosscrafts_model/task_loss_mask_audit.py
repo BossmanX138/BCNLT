@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import hashlib
+import heapq
 import json
+import sqlite3
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,13 +13,11 @@ from typing import Mapping
 from .bcnlt_source_pipeline import CURRENT_RUNTIME_SPEC_SHA256
 from .current_task_packing import FAMILIES
 from .immutable_artifacts import publish_new_files
-from .resumable_task_packing import (
-    ResumableTaskDataset,
-    audit_task_database,
-)
+from .resumable_task_packing import audit_task_database
 from .tokenizer import NativeTokenizerBinding
 
 LOSS_MASK_AUDIT_SCHEMA = "bosscrafts-task-loss-mask-audit-v1"
+_SPLITS = ("train", "validation", "test")
 
 
 def _canonical(value: object) -> str:
@@ -27,6 +27,112 @@ def _canonical(value: object) -> str:
         sort_keys=True,
         separators=(",", ":"),
         allow_nan=False,
+    )
+
+
+def _assert_cross_split_example_ids_disjoint(
+    databases: Mapping[str, Path], expected_counts: Mapping[str, int]
+) -> None:
+    """Merge indexed ID streams without retaining the corpus in memory."""
+    connections: list[sqlite3.Connection] = []
+    cursors: list[sqlite3.Cursor] = []
+    heap: list[tuple[str, int]] = []
+    observed_counts = {split: 0 for split in _SPLITS}
+    try:
+        for index, split in enumerate(_SPLITS):
+            database = databases[split]
+            connection = sqlite3.connect(
+                f"{database.as_uri()}?mode=ro", uri=True, timeout=30
+            )
+            connection.execute("PRAGMA query_only=ON")
+            connections.append(connection)
+            cursor = connection.execute("SELECT example_id FROM tasks ORDER BY example_id")
+            cursors.append(cursor)
+            first = cursor.fetchone()
+            if first is not None:
+                heapq.heappush(heap, (str(first[0]), index))
+
+        previous_id: str | None = None
+        previous_index: int | None = None
+        while heap:
+            example_id, index = heapq.heappop(heap)
+            split = _SPLITS[index]
+            observed_counts[split] += 1
+            if example_id == previous_id and index != previous_index:
+                raise ValueError("task example identity crosses frozen splits")
+            previous_id = example_id
+            previous_index = index
+            following = cursors[index].fetchone()
+            if following is not None:
+                heapq.heappush(heap, (str(following[0]), index))
+    finally:
+        for cursor in cursors:
+            cursor.close()
+        for connection in connections:
+            connection.close()
+    if observed_counts != dict(expected_counts):
+        raise ValueError("task database changed during loss-mask audit")
+
+
+def _read_loss_mask_summary(
+    database: Path,
+) -> tuple[Counter[tuple[str, str]], set[str], int, int, int, int]:
+    connection = sqlite3.connect(f"{database.as_uri()}?mode=ro", uri=True, timeout=30)
+    connection.execute("PRAGMA query_only=ON")
+    try:
+        rows = connection.execute(
+            """SELECT split, language, family, COUNT(*),
+                      COALESCE(SUM(token_count-loss_start_index), 0),
+                      COALESCE(MAX(token_count), 0),
+                      COALESCE(MIN(token_count-loss_start_index), 0),
+                      SUM(CASE WHEN loss_start_index <= 0
+                                    OR loss_start_index >= token_count
+                               THEN 1 ELSE 0 END)
+               FROM tasks GROUP BY split, language, family"""
+        ).fetchall()
+        document_ids = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT DISTINCT document_id FROM tasks ORDER BY document_id"
+            )
+        }
+    finally:
+        connection.close()
+    cells: Counter[tuple[str, str]] = Counter()
+    example_count = 0
+    target_total = 0
+    maximum_sequence = 0
+    minimum_target: int | None = None
+    for (
+        split,
+        language,
+        family,
+        count,
+        target_count,
+        cell_maximum,
+        cell_minimum,
+        invalid_count,
+    ) in rows:
+        if split not in _SPLITS or int(invalid_count) != 0:
+            raise ValueError("packed causal loss mask boundary is inconsistent")
+        cells[(str(language), str(family))] += int(count)
+        example_count += int(count)
+        target_total += int(target_count)
+        maximum_sequence = max(maximum_sequence, int(cell_maximum))
+        minimum_target = (
+            int(cell_minimum)
+            if minimum_target is None
+            else min(minimum_target, int(cell_minimum))
+        )
+    if minimum_target is None or minimum_target < 1:
+        raise ValueError("packed causal loss mask boundary is inconsistent")
+    return (
+        cells,
+        document_ids,
+        example_count,
+        target_total,
+        maximum_sequence,
+        minimum_target,
     )
 
 
@@ -86,61 +192,49 @@ class TaskLossMaskAuditor:
         split_example_counts: dict[str, int] = {}
         split_document_counts: dict[str, int] = {}
         split_target_counts: dict[str, int] = {}
-        all_example_ids: set[str] = set()
         all_document_ids: set[str] = set()
+        resolved_databases: dict[str, Path] = {}
         maximum_sequence = 0
         minimum_target: int | None = None
 
-        for split in ("train", "validation", "test"):
+        for split in _SPLITS:
             database = Path(databases[split]).resolve()
+            resolved_databases[split] = database
             database_audit = audit_task_database(self._binding, database)
-            dataset = ResumableTaskDataset(self._binding, database)
-            cells: Counter[tuple[str, str]] = Counter()
-            example_ids: set[str] = set()
-            document_ids: set[str] = set()
-            target_total = 0
-            for row in dataset.iter_examples():
-                if row["split"] != split:
-                    raise ValueError(f"{split} task database contains another split")
-                example_id = str(row["example_id"])
-                document_id = str(row["document_id"])
-                if example_id in example_ids:
-                    raise ValueError("task database contains duplicate example identity")
-                example_ids.add(example_id)
-                document_ids.add(document_id)
-                language = str(row["language"])
-                family = str(row["family"])
-                cells[(language, family)] += 1
-                input_ids = row["input_ids"]
-                loss_start = int(row["loss_start_index"])
-                sequence_tokens = len(input_ids)
-                target_tokens = sequence_tokens - loss_start
-                causal_targets = sum(
-                    position >= loss_start for position in range(1, sequence_tokens)
-                )
-                if target_tokens < 1 or causal_targets != target_tokens:
-                    raise ValueError("packed causal loss mask boundary is inconsistent")
-                target_total += target_tokens
-                maximum_sequence = max(maximum_sequence, sequence_tokens)
-                minimum_target = (
-                    target_tokens
-                    if minimum_target is None
-                    else min(minimum_target, target_tokens)
-                )
+            (
+                cells,
+                document_ids,
+                example_count,
+                target_total,
+                split_maximum,
+                split_minimum,
+            ) = _read_loss_mask_summary(database)
+            maximum_sequence = max(maximum_sequence, split_maximum)
+            minimum_target = (
+                split_minimum
+                if minimum_target is None
+                else min(minimum_target, split_minimum)
+            )
             expected_cells = {
                 (language, family)
                 for language in self._languages
                 for family in FAMILIES
             }
+            observed_splits = set(database_audit.split_counts)
+            if observed_splits != {split}:
+                raise ValueError(f"{split} task database contains another split")
             if set(cells) != expected_cells or any(count < 1 for count in cells.values()):
                 raise ValueError(f"{split} task database lacks complete language-family cells")
-            if all_example_ids.intersection(example_ids):
-                raise ValueError("task example identity crosses frozen splits")
+            if example_count != database_audit.example_count:
+                raise ValueError("task database changed during loss-mask audit")
+            if len(document_ids) != database_audit.document_count:
+                raise ValueError("task database changed during loss-mask audit")
+            if split_maximum != database_audit.maximum_sequence_tokens:
+                raise ValueError("task database changed during loss-mask audit")
             if all_document_ids.intersection(document_ids):
                 raise ValueError("source document crosses frozen task splits")
-            all_example_ids.update(example_ids)
             all_document_ids.update(document_ids)
-            split_example_counts[split] = len(example_ids)
+            split_example_counts[split] = example_count
             split_document_counts[split] = len(document_ids)
             split_target_counts[split] = target_total
             database_receipts[split] = {
@@ -155,6 +249,10 @@ class TaskLossMaskAuditor:
                     for (language, family), count in sorted(cells.items())
                 },
             }
+
+        _assert_cross_split_example_ids_disjoint(
+            resolved_databases, split_example_counts
+        )
 
         if minimum_target is None:
             raise ValueError("loss-mask audit found no examples")
