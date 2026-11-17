@@ -1,17 +1,19 @@
 from __future__ import annotations
 
-from pathlib import Path
 import unittest
+from pathlib import Path
 
 from scripts.run_v9_post_training_until_ready import (
+    ACCEPTANCE_CATEGORIES,
     EXPECTED_DATABASE_IDENTITY,
     EXPECTED_MODEL_FINGERPRINT,
     EXPECTED_OPTIMIZER_STEPS,
     EXPECTED_SPLIT_COUNT,
+    _acceptance_command,
     _evaluation_command,
     _inference_command,
-    _verify_runtime_identity,
     _verify_evaluation,
+    _verify_runtime_identity,
 )
 
 
@@ -59,6 +61,26 @@ class V9PostTrainingControllerTests(unittest.TestCase):
         )
         self.assertEqual(command[command.index("--heldout-split") + 1], "test")
         self.assertEqual(command[command.index("--max-new-tokens") + 1], "256")
+
+    def test_formal_acceptance_command_binds_database_and_all_categories(self) -> None:
+        inferences = {
+            family: Path(f"{family}.json")
+            for family in (
+                "code_to_semantic",
+                "semantic_continuation",
+                "semantic_to_code",
+            )
+        }
+        categories = {
+            category: Path(f"{category}.json") for category in ACCEPTANCE_CATEGORIES
+        }
+        command = _acceptance_command(inferences, categories, Path("acceptance.json"))
+
+        self.assertIn("--task-database", command)
+        self.assertIn("--heldout-manifest", command)
+        for category in ACCEPTANCE_CATEGORIES:
+            option = f"--{category.replace('_', '-')}-evidence"
+            self.assertEqual(command[command.index(option) + 1], str(categories[category]))
 
     def test_evaluation_contract_rejects_partial_or_nonfinite_report(self) -> None:
         for key, value in (

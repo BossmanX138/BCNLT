@@ -1,0 +1,21 @@
+{
+  "include": [
+    "bosscrafts_model",
+    "scripts"
+  ],
+  "exclude": [
+    "artifacts",
+    "vendor"
+  ],
+  "extraPaths": [
+    "vendor/tokenizers_runtime_0_23",
+    "vendor/bcnlt_runtime_v10_learning_candidate/source",
+    "vendor/bcnlt_runtime_v10_learning_candidate/site-packages",
+    "artifacts/bcnlt/runtime-recovery-v1/source"
+  ],
+  "pythonPlatform": "Windows",
+  "pythonVersion": "3.13",
+  "typeCheckingMode": "basic",
+  "venv": ".venv",
+  "venvPath": "."
+}

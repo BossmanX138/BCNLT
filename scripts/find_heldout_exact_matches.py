@@ -2,14 +2,13 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter, defaultdict
 import json
-from pathlib import Path
 import sys
 import time
+from collections import Counter, defaultdict
+from pathlib import Path
 
 import torch
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -33,7 +32,6 @@ from bosscrafts_model.resumable_task_packing import (
 )
 from bosscrafts_model.tokenizer import NativeTokenizerBinding, bound_native_65k_config
 from bosscrafts_model.training_checkpoint import load_model_checkpoint_for_inference
-
 
 DEFAULT_DATABASE = (
     PROJECT_ROOT
@@ -158,7 +156,7 @@ def main() -> int:
                 )
 
     payload = {
-        "schema_version": "bosscrafts-heldout-exact-match-scan-v1",
+        "schema_version": "bosscrafts-heldout-exact-match-scan-v2",
         "scan_complete": processed == len(examples),
         "split": arguments.split,
         "example_count": processed,
@@ -166,6 +164,7 @@ def main() -> int:
         "device": device.type,
         "dtype": str(dtype).removeprefix("torch."),
         "checkpoint_lineage_verified": True,
+        "checkpoint_sha256": state.checkpoint_sha256,
         "checkpoint_training_complete": (
             state.epoch_index >= state.target_epochs
             and state.cursor_after_example_id is None

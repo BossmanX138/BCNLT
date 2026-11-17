@@ -3,14 +3,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import tempfile
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
 from .heldout_semantic_review import REVIEW_ITEM_SCHEMA, REVIEW_MANIFEST_SCHEMA
+from .immutable_artifacts import publish_new_files
 from .jsonl import split_jsonl_records
 
 _CHALLENGE_SCHEMA = "bosscrafts-semantic-challenge-review-v1"
@@ -40,23 +39,6 @@ def _sha256_bytes(value: bytes) -> str:
 
 def _sha256_text(value: str) -> str:
     return _sha256_bytes(value.encode("utf-8"))
-
-
-def _atomic_write(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,13 +190,19 @@ class SemanticChallengeReviewBuilder:
         }
         manifest_sha256 = _sha256_text(_canonical(unsigned))
         manifest = {**unsigned, "manifest_sha256": manifest_sha256}
-        _atomic_write(output_path / "review_queue.jsonl", queue_text.encode("utf-8"))
-        _atomic_write(
-            output_path / "control_answer_key.jsonl", answer_text.encode("utf-8")
-        )
-        _atomic_write(
-            output_path / "manifest.json",
-            f"{_canonical(manifest)}\n".encode(),
+        publish_new_files(
+            (
+                (output_path / "review_queue.jsonl", queue_text.encode("utf-8")),
+                (
+                    output_path / "control_answer_key.jsonl",
+                    answer_text.encode("utf-8"),
+                ),
+                (
+                    output_path / "manifest.json",
+                    f"{_canonical(manifest)}\n".encode("utf-8"),
+                ),
+            ),
+            artifact_label="semantic challenge review",
         )
         return self.verify(output_path)
 

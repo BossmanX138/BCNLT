@@ -1,17 +1,16 @@
 """Global prompt-to-target determinism audit for packed BossCrafts tasks."""
 from __future__ import annotations
 
+import hashlib
+import sqlite3
 from collections import Counter
 from dataclasses import dataclass
-import hashlib
 from pathlib import Path
-import sqlite3
 
-from .current_task_packing import FAMILIES
 from .compression import decompress_bounded
+from .current_task_packing import FAMILIES
 from .resumable_task_packing import _decode_u16, audit_task_database
 from .tokenizer import NativeTokenizerBinding
-
 
 AUDIT_SCHEMA = "bosscrafts-task-prompt-determinism-audit-v1"
 _SPLIT_BITS = {"train": 1, "validation": 2, "test": 4}

@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
-
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_SOURCE = (
@@ -21,7 +20,6 @@ from bosscrafts_model.semantic_calibration_promotion import (
     promote_semantic_uncertainty,
 )
 from bosscrafts_model.strict_uncertainty_acceptance import StrictUncertaintyPolicy
-
 
 DEFAULT_DATASET = (
     PROJECT_ROOT

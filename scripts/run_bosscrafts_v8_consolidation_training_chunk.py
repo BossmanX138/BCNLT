@@ -4,10 +4,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from pathlib import Path
 import subprocess
 import sys
-
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -23,7 +22,6 @@ from scripts.run_bosscrafts_v5_training_chunk import (
     _verify_database,
     _verify_determinism_audit,
 )
-
 
 DEFAULT_CHECKPOINT = (
     PROJECT_ROOT

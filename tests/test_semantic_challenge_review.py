@@ -4,11 +4,10 @@ import hashlib
 import importlib
 import importlib.util
 import json
-from pathlib import Path
 import tempfile
+from pathlib import Path
 
 import pytest
-
 from test_local_semantic_review import (
     _canonical,
     _decision,

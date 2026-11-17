@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 import json
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 
 from bosscrafts_model.bcnlt_source_pipeline import (
     BCNLTPreprocessingError,
     BCNLTSourcePipeline,
 )
 from bosscrafts_model.tokenizer import NativeTokenizerBinding
-
 
 SAMPLES = {
     "bash": "f() { local x=$1; return $((x + 1)); }\n",

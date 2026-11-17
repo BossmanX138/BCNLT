@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import replace
 import hashlib
-from pathlib import Path
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
+from pathlib import Path
 
 from bosscrafts_model.bcnlt_source_pipeline import BCNLTSourcePipeline
 from bosscrafts_model.current_corpus import SourceCandidate
@@ -306,6 +306,37 @@ class ResumableCurrentCorpusAdmissionTests(unittest.TestCase):
                 connection.close()
             self.assertEqual(rows["rejected-license"], "rejected")
             self.assertEqual(rows["approved-license"], "admitted")
+
+    def test_comment_only_source_is_rejected_when_no_semantic_records_exist(self):
+        candidate = _candidate(
+            "comment-only",
+            "# This historical file intentionally contains no executable code.\n",
+        )
+        for worker_mode in ("threads", "processes"):
+            with self.subTest(worker_mode=worker_mode), tempfile.TemporaryDirectory() as directory:
+                database = Path(directory) / "admission.sqlite"
+                status = ResumableCurrentCorpusAdmission(
+                    self.pipeline,
+                    database,
+                    source_catalog_sha256="a" * 64,
+                    review_manifest_sha256="b" * 64,
+                    host_code_identity_sha256="c" * 64,
+                ).process(
+                    (candidate,),
+                    workers=1,
+                    worker_mode=worker_mode,
+                )
+                self.assertEqual(status.admitted_count, 0)
+                self.assertEqual(status.rejected_count, 1)
+                connection = sqlite3.connect(database)
+                try:
+                    row = connection.execute(
+                        "SELECT status, reason_code, semantic_record_count "
+                        "FROM documents WHERE document_id='comment-only'"
+                    ).fetchone()
+                finally:
+                    connection.close()
+                self.assertEqual(row, ("rejected", "no_semantic_records", 0))
 
     def test_full_admission_script_runs_from_project_root(self):
         project_root = Path(__file__).resolve().parents[1]

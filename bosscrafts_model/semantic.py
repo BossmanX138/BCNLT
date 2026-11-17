@@ -5,8 +5,8 @@ does not parse source code into semantics and does not execute generated code.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 from typing import Sequence
 
 from .tokenizer import (
@@ -15,7 +15,6 @@ from .tokenizer import (
     EXPECTED_VOCABULARY_SIZE,
     NativeTokenizerBinding,
 )
-
 
 SEMANTIC_RECORD_SCHEMA = "bosscrafts-native-semantic-record-v1"
 _BEGIN = "<|bcnlt:record:begin|>"

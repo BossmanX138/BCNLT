@@ -1,0 +1,471 @@
+{
+  "admitted_corpus": {
+    "accepted_record_count": 987342,
+    "bulk_accepted_jsonl_bytes": 5318202517,
+    "bulk_accepted_jsonl_copied": false,
+    "evidence_files": {
+      "corpus-validation-recovery-gate-v2.json": {
+        "bytes": 945,
+        "sha256": "4f87e4907dd05569b48b138783635085d512c538976e1078ce5f09815ee487fb"
+      },
+      "lineage--multilingual-smoke-expected-lineage.json": {
+        "bytes": 408,
+        "sha256": "cf24fdef06c8bd251e57fd0b24fb89c0558c6df13ef3dd7d5419598ff9dfc30a"
+      },
+      "packed--dataset_manifest.json": {
+        "bytes": 103950,
+        "sha256": "3a8853e6ac9b8dd37a64fcce78242811dc48c70b45485ebb057101472c353c8f"
+      },
+      "per-language-validation.json": {
+        "bytes": 5379,
+        "sha256": "7776a25434399cde96452092272f327ee92f1e7e3e9544a98732d5595eb06ed0"
+      },
+      "source-sample.json": {
+        "bytes": 21188,
+        "sha256": "f0abc00d8a372458dba2c90cbfc74833753f01a32a80902bed2e3d0a1d98a4b9"
+      }
+    },
+    "languages_passed": 14,
+    "origin": "\\\\PATISBORG\\D$\\BCNLT-runs\\runeforge-mk2-bcnlt-multilingual-v1\\multilingual-smoke-21b9de0343dd4bb2-gate-v2",
+    "packed_manifest_sha256": "3a8853e6ac9b8dd37a64fcce78242811dc48c70b45485ebb057101472c353c8f",
+    "packed_tokenizer_manifest_sha256": "c435e9198ed6db535931ece5a0ead15dd94db7121695cd190b87813b67a5d7fa",
+    "packed_tokenizer_vocab_size": 32073,
+    "packed_training_records": 901645,
+    "packed_training_tokens": 1016338614,
+    "source_sample_passed": true
+  },
+  "frozen_model_identity": {
+    "binding_sha256": "6bdcf5df4e5f16b79ee8de6eea9b86194c1e9909ef8e8545e28d5847ab031268",
+    "tokenizer_sha256": "e1930449f3efe99bbb3f63730f75f71788d4ff21928bcae4d3ee2a520d30d407",
+    "tokenizer_vocab_size": 65536
+  },
+  "parser_contract": {
+    "all_specs_match_admitted_output": false,
+    "grammar_package": "tree-sitter-language-pack==1.22.1",
+    "max_source_bytes": 204800,
+    "parse_timeout_ms": 500,
+    "parser_config_sha256": "d7df9e034b19a2a459299cecb1e14c31e4bd7b9626247f3ebd56ba258d3fecd6",
+    "semantic_schema_version": "bcnlt-semantic-record-v3",
+    "semantic_spec_comparison": {
+      "bash": {
+        "admitted_output_sha256": "2456bb03da817645a32fe197ddd4a7fa1f9d39aa962462ad8ec2d36495105d72",
+        "matches": false,
+        "recovered_source_sha256": "5addb26a6c5ea02b3c68585a64a40016f76e3fe5acaa7df7fac62caf45b7b42e"
+      },
+      "c": {
+        "admitted_output_sha256": "4074bac723d50ecd2046329c537bef89977144935a948fa19828e67ddc6d0deb",
+        "matches": false,
+        "recovered_source_sha256": "1043ac0f961f48674c85b7ca99c1671ec1c5a2238bb39d9dca738b38ab666c29"
+      },
+      "c_sharp": {
+        "admitted_output_sha256": "8ea03777924d8ae3a4a6a90396f72fb4027c44528c5fa9e46fc2b790db0676d3",
+        "matches": false,
+        "recovered_source_sha256": "9782b1a20c3abf79b019fc819eccf24605c20d81dcadb4eccfee1b845cf323a8"
+      },
+      "cpp": {
+        "admitted_output_sha256": "342de562401c299eefc900ac9ac69fd4890b59379aa680baf2c0cd7e3f307a",
+        "matches": false,
+        "recovered_source_sha256": "bc5169cc32c9879a574ed296765d79871cf8df60f233705f2a0d329883b3e86a"
+      },
+      "go": {
+        "admitted_output_sha256": "2701f4ebcf1be3d199ade39b26f443d9309d2d03f433e6d4083876cadfa758ee",
+        "matches": false,
+        "recovered_source_sha256": "7552a8e2ceba6f27de122f40c1dffd5aa31d950215f2173c8b8b7015231cfe41"
+      },
+      "java": {
+        "admitted_output_sha256": "e21c3fda821a487ef25868175d21a3d1f569c8de362c3ad77efe89b23ade5cf8",
+        "matches": false,
+        "recovered_source_sha256": "c6b55b9f2c70d9e9f3e578172ad7b9dfa64af6388b33450d3f11ef637be96776"
+      },
+      "javascript": {
+        "admitted_output_sha256": "1fe022c4990ff4293e367bc4761b949ca9c5b5ba56493dec4c4fd06beddc9cb4",
+        "matches": false,
+        "recovered_source_sha256": "1e0196f02396c2bb53ff0a1986c0716c4f90c89d407bedd78eb415339fb6f8fe"
+      },
+      "kotlin": {
+        "admitted_output_sha256": "1dbcf1aa8d4e9277b60e08790e97e19182cbdab2299125d6fd4d6ced00329547",
+        "matches": false,
+        "recovered_source_sha256": "1a06fe68c39cf6417d05ad2fba4bba41c200b62ef85db729bf3d8e079756d07d"
+      },
+      "php": {
+        "admitted_output_sha256": "0aa553d70c7fd1364eb8e884942908828a9b18a1b198f94b4376bf4ab5b5fc54",
+        "matches": false,
+        "recovered_source_sha256": "987ca0a3ec87f5289017e9bc16876a70893d484ce628c8292fffb6feecf92ffd"
+      },
+      "python": {
+        "admitted_output_sha256": "fe0bb47da50274411299c39d0034eb434c2d36fc1d58d42e4e9b847403b83303",
+        "matches": false,
+        "recovered_source_sha256": "3e6f7eef596634af3de66eb476892f2e4515780cd5670198f7c548b91496e118"
+      },
+      "ruby": {
+        "admitted_output_sha256": "9251389d48aa0f94a9ae19d6605b8dc306b2c0f1e834014ae09de6cd37c88148",
+        "matches": false,
+        "recovered_source_sha256": "0e5549f3028b213e0590076b220d79b878248e862e93ac04df7c31f92ca10b2e"
+      },
+      "rust": {
+        "admitted_output_sha256": "345d4da1650dfc4020aed3d86205f428882bb2350974dc6c01bf1a84478deef1",
+        "matches": false,
+        "recovered_source_sha256": "202d4db9c497b22ac5f6ae79eb3e7567b0069d59f0cb0d74ca3c5d0716d914e0"
+      },
+      "swift": {
+        "admitted_output_sha256": "2cb2c75ffa4bfe53c2936dba00461ccd25fc04f3dd9d63f97b66869fa67ba398",
+        "matches": false,
+        "recovered_source_sha256": "dd6d38e81375c85c69e1aecce23132a2703ea64dd19162a2b3ec7c6419aaabaa"
+      },
+      "typescript": {
+        "admitted_output_sha256": "45b4d2a264fd9629ae5c6b00567a3d0d523fc8ef13d8646e32e3aa811a76f190",
+        "matches": false,
+        "recovered_source_sha256": "fe8bcdd0cb4f5fd3882b4409275ee6cc5ab1426ea6bc8a643f2e56b2a8743f1c"
+      }
+    },
+    "semantic_specs_file": "semantic-specs.json",
+    "semantic_specs_file_sha256": "b2aa5b000c8a3642b2fea5c2290d18444df17ef50fffe5b420c3a54542fc6908",
+    "tree_sitter_package": "tree-sitter==0.26.0"
+  },
+  "readiness": {
+    "admitted_corpus_tokenizer_compatible": false,
+    "blockers": [
+      "14 pinned grammar DLLs are absent",
+      "available native parser package is CPython 3.13 while project Python is 3.12",
+      "all 14 recovered semantic spec hashes differ from admitted output provenance",
+      "admitted packed corpus uses tokenizer vocab 32073, not frozen vocab 65536"
+    ],
+    "live_parser_ready": false,
+    "output_consumer_integrated": true,
+    "source_contract_recovered": true,
+    "training_ready": false
+  },
+  "runtime": {
+    "automatic_download_permitted": false,
+    "grammar_cache_complete": false,
+    "grammar_dlls_found": 0,
+    "grammar_dlls_required": 14,
+    "live_parser_executed": false,
+    "metadata_files": {
+      "pyvenv.cfg": {
+        "bytes": 159,
+        "sha256": "fb0f4a6d3cc07d0b0558fd9dae86fe7973c0cc5e2eab010be0b41612dfe947a4"
+      },
+      "tree-sitter-0.26.0.METADATA": {
+        "bytes": 10368,
+        "sha256": "9a72c5bb238ba29c33bd5bcc31287efe4191454f500728881bdf7d9489627ce6"
+      },
+      "tree-sitter-language-pack-1.22.1.METADATA": {
+        "bytes": 864,
+        "sha256": "e2c15042c9ed40f1da92d06c36ed07aab96b7df1a27c6f0ea37cf98622c3dcd0"
+      }
+    },
+    "native_abi_compatible": false,
+    "native_package_copied": false,
+    "project_python": "3.12.10",
+    "source_environment_python": "3.13.13",
+    "source_native_package_sha256": "18fda57fbe2f52f85cf09fd1fc5af6509bfe0a8c6d3d425cafe3d7b63f8dca6e",
+    "source_tree_sitter_binding_sha256": "d8efa5533a1c79cc404df3a0ff03d76626ad50d54b74d97e4cf6e30ab85bebe4"
+  },
+  "schema_version": "bosscrafts-bcnlt-runtime-recovery-v1",
+  "source": {
+    "branch": "feature/bcnlt-multilingual-corpus",
+    "files": {
+      "bcnlt/__init__.py": {
+        "bytes": 113,
+        "sha256": "ebf42da09734c42fa911eb04db1a5669e186d0f5684a2425f6bf3aa061b0263d"
+      },
+      "bcnlt/adapters/__init__.py": {
+        "bytes": 427,
+        "sha256": "783c85c21afd7c1ffeec8acd34c32de230098738222c6964a26e4d6673ef46df"
+      },
+      "bcnlt/adapters/base.py": {
+        "bytes": 762,
+        "sha256": "d0557055224d3c534dc5337c9a08c41558e6ee08a0ca9ac5492af3ee88a2f054"
+      },
+      "bcnlt/adapters/carousel.py": {
+        "bytes": 3717,
+        "sha256": "4cbe40c467c2d5609ac0d06f9848d172fa40f7dbd46e595e8a2a5ac79fe4eba6"
+      },
+      "bcnlt/adapters/coverage.py": {
+        "bytes": 3131,
+        "sha256": "2cc76895a05e53682e4db1a47b74ddf609f359e55d05123c871cdfc4620a0df8"
+      },
+      "bcnlt/adapters/python.py": {
+        "bytes": 41047,
+        "sha256": "0e29feab51e38ffaef06b47f84a0f95840a10da2c28118ff8bee0985d119a620"
+      },
+      "bcnlt/adapters/spec.py": {
+        "bytes": 3094,
+        "sha256": "56a6e36b692f77432d32f7c82c33b43accd6954e6f12acb86de441072bfc4f37"
+      },
+      "bcnlt/adapters/symbols.py": {
+        "bytes": 2573,
+        "sha256": "8ad17897fa6ed7d73897bba0b5b8aea67235cc3d14a680da86913de675df18f5"
+      },
+      "bcnlt/adapters/tree_sitter.py": {
+        "bytes": 21286,
+        "sha256": "6cca8e3e42881a4cc545fd5c88201e4237de6276c403f068cec82c8499a0455f"
+      },
+      "bcnlt/adaptive_vocab/__init__.py": {
+        "bytes": 361,
+        "sha256": "55f758218f82aa9e9460b4e0ae1aa6474ddb552ece408f266ec1a79c05e85ba5"
+      },
+      "bcnlt/adaptive_vocab/boundary_entropy.py": {
+        "bytes": 8314,
+        "sha256": "55566a0cdb878a91ebf906ddfbfb4dd5d74cbd304f7edbe371ee087c6217b1e8"
+      },
+      "bcnlt/adaptive_vocab/candidates.py": {
+        "bytes": 15308,
+        "sha256": "15894342570c512fba2ef004926b208164a406fd9201ebc0b7d2a5054f53ff48"
+      },
+      "bcnlt/adaptive_vocab/codec.py": {
+        "bytes": 2460,
+        "sha256": "34dd32eea5e5ad2b93ddded398b0458c676a09958a972c949dcea47f7ad69431"
+      },
+      "bcnlt/adaptive_vocab/config.py": {
+        "bytes": 7977,
+        "sha256": "6122bbfe64019465041f8cd501d23b63ab567fd9f8cbf963c1ad0fc039505f50"
+      },
+      "bcnlt/adaptive_vocab/corpus_audit.py": {
+        "bytes": 6299,
+        "sha256": "de52277fef280110b4808133e58b87edffa5ec5ee278efcdd5a232451bec7ff5"
+      },
+      "bcnlt/adaptive_vocab/hf_artifact.py": {
+        "bytes": 1305,
+        "sha256": "d9b44d789fc3f7e6b122241e137e66a7974efa54599ae5f2752d899ca931ffa5"
+      },
+      "bcnlt/adaptive_vocab/lineage.py": {
+        "bytes": 6264,
+        "sha256": "b7400e0e9d92a891ccf375b3bafe9e02944707285ee77b9b392ad4b3fae96a0f"
+      },
+      "bcnlt/adaptive_vocab/manifest.py": {
+        "bytes": 11169,
+        "sha256": "6c6a896c49228e80e68945d69d786b88eaca12002bf335acc8801a57543f7b85"
+      },
+      "bcnlt/adaptive_vocab/model_eval.py": {
+        "bytes": 13393,
+        "sha256": "e96cb14e1792296c28106895470c51b510abae8f35232b187d9b68b0e71fc9cf"
+      },
+      "bcnlt/adaptive_vocab/runner.py": {
+        "bytes": 10185,
+        "sha256": "2bc280d827c14fd3dedaac477f3f4b99282ba2fff3233a10290c7657f437dea8"
+      },
+      "bcnlt/adaptive_vocab/secrets.py": {
+        "bytes": 2986,
+        "sha256": "a042b521291e7761dd0689764a2bd0c47848463052b917efc298b54ef96851ea"
+      },
+      "bcnlt/adaptive_vocab/tokenizer.py": {
+        "bytes": 2901,
+        "sha256": "ca372b1aefd7e0ce53e5cbce5b2b7e522af5b8ebfee156958c4747770845f275"
+      },
+      "bcnlt/adaptive_vocab/tokenizer_eval.py": {
+        "bytes": 13385,
+        "sha256": "18b3ae993707049f29c0baa6bb1e354a54e1ea921bc723f75b5f24ab082c94b4"
+      },
+      "bcnlt/adaptive_vocab/training.py": {
+        "bytes": 6986,
+        "sha256": "f9b06f07c8a0ef358635e89536f141c3f6c8195016ff9d5b8cc1e0021bb83622"
+      },
+      "bcnlt/benchmark.py": {
+        "bytes": 9506,
+        "sha256": "f3ff42733815e5365b650bdfa357d74ddc9bf9ca21ee4489fc2a39f9ddb77e63"
+      },
+      "bcnlt/cache.py": {
+        "bytes": 3198,
+        "sha256": "8c391c2db2e6d8fe838acebe0cced0f4973f4c28679f4a2bd48bbfd58badfa80"
+      },
+      "bcnlt/canonical.py": {
+        "bytes": 6640,
+        "sha256": "2ceb7cc4b2cfecb9029bbbadede6495d4a85f0982f010e637b57704eab25446b"
+      },
+      "bcnlt/cli.py": {
+        "bytes": 9056,
+        "sha256": "aa89ce2e1400a3b643d397ff6647d12da688a2cbcb63d1c4f6d1ef4c60aaac56"
+      },
+      "bcnlt/common_core_registry.py": {
+        "bytes": 28668,
+        "sha256": "7c48b889764b3ced997596447d7ef335052f486a444bb93927caff85555f23e2"
+      },
+      "bcnlt/core.py": {
+        "bytes": 1248,
+        "sha256": "346ea3462766a35c46e44b03fc72a3b84d634a7e99d261503a8a16e680052559"
+      },
+      "bcnlt/corpus/__init__.py": {
+        "bytes": 445,
+        "sha256": "a0148bd49bbea30760bb89bec5a075ebee14e70a684bfb922b23b39265ab4678"
+      },
+      "bcnlt/corpus/admission.py": {
+        "bytes": 27896,
+        "sha256": "703ee20e8f1a2e83377ed988430ee88e6c612d06c434ba22239813b8c9077e64"
+      },
+      "bcnlt/corpus/curriculum.py": {
+        "bytes": 7988,
+        "sha256": "12d7f979bab521a2ccb585d2b5f6e8fcf84a6e223d87ccec37c3335fb40f5201"
+      },
+      "bcnlt/corpus/database.py": {
+        "bytes": 9598,
+        "sha256": "5df692b6cfa2a063642d15aa4a156cd583ad532d9c23a7f7e059273cfc934589"
+      },
+      "bcnlt/corpus/filters.py": {
+        "bytes": 10590,
+        "sha256": "1ba079d4b1c10fe788981d639664b2993f9b48d278af55ceaf8f38ca39bfe440"
+      },
+      "bcnlt/corpus/packing.py": {
+        "bytes": 22008,
+        "sha256": "3a6342357c5098ba583337170fbaa6e9abf30bd9f5c1f9d14e060b6e23b43651"
+      },
+      "bcnlt/corpus/sources.py": {
+        "bytes": 14653,
+        "sha256": "72c6a73cf80a7335629395883678015e3b4beb3278aa8c091f57335c7280e92a"
+      },
+      "bcnlt/corpus/streaming_admission.py": {
+        "bytes": 21843,
+        "sha256": "a73b29b24392caff50aee9d9e76cc5e6c9fe30e297365a62d500989516146c4c"
+      },
+      "bcnlt/corpus/tasks/__init__.py": {
+        "bytes": 48,
+        "sha256": "3b70d31cf8e59b9b208503d4bc1ba3482ff55a88672289c135cd4e436ffc3fab"
+      },
+      "bcnlt/corpus/tasks/code_to_semantic.py": {
+        "bytes": 2011,
+        "sha256": "18bbc5b978eaf2238d800d54d19b57f75375ce92f59df4bbe3017fd05d1a1b3d"
+      },
+      "bcnlt/corpus/tasks/knowledge_boundary.py": {
+        "bytes": 2879,
+        "sha256": "8ab559cf6f92d8aac1d46d0bf3039c0e58830d3eccc4c916b9318266640e84d8"
+      },
+      "bcnlt/corpus/tasks/mixed_instruction.py": {
+        "bytes": 1261,
+        "sha256": "4a10a77a3da44d45bfe96293510b7f3bdf020fe643e464290ed2b2b5095ee6ab"
+      },
+      "bcnlt/corpus/tasks/semantic_continuation.py": {
+        "bytes": 1470,
+        "sha256": "bdb9fe7460a3a76d1175deb7bac13c109695dd78709e4db73329465db3069e18"
+      },
+      "bcnlt/corpus/tasks/semantic_to_code.py": {
+        "bytes": 1210,
+        "sha256": "5b05e5116dd480a7b0a75f5522d5195f87367d772010df07ec7f08682973a26d"
+      },
+      "bcnlt/corpus/tasks/structural_reasoning.py": {
+        "bytes": 1536,
+        "sha256": "ac2eccf76a2e3f834702f1883372299a6b6de40959887545acb8e5a8b6116d06"
+      },
+      "bcnlt/evaluation_cache.py": {
+        "bytes": 2839,
+        "sha256": "189477b9814dd79ce30ff825d4c30da0677d0a2134d51e2ac74b7db67b632bb2"
+      },
+      "bcnlt/events.py": {
+        "bytes": 850,
+        "sha256": "b15e6ec6ee0d42779f128edef14b5a77acf3c30ed01ae9f3eb15ad7f601c7a6c"
+      },
+      "bcnlt/extended_core.py": {
+        "bytes": 3779,
+        "sha256": "b3265d0dcfdf717f2bf961879984a4fe079156a23e7f3acb91f2f553376ef47f"
+      },
+      "bcnlt/full_run_gate.py": {
+        "bytes": 14460,
+        "sha256": "e1a7dd60ed48fa8ca6d7815e1e7d1c2acf2e0f9759028f20738e2bd9ff27ec7c"
+      },
+      "bcnlt/hf_tokenizer.py": {
+        "bytes": 13158,
+        "sha256": "b0fcf1f05ba85006b37c1d289216adeacb9d99e996de818930048cabb6467af9"
+      },
+      "bcnlt/incremental.py": {
+        "bytes": 1612,
+        "sha256": "11b275d18362261051f5410b48f1c81d83906b0616764519c50b8a7658beb474"
+      },
+      "bcnlt/ir.py": {
+        "bytes": 5641,
+        "sha256": "bd9630991905b048a5ae8d31214223727189bbd5c8b0836a5babc46c4a5be234"
+      },
+      "bcnlt/languages.py": {
+        "bytes": 2745,
+        "sha256": "e9d2f3657e547d57fb0ffb7a56dfc603d4ad12b9a52a2f0e70508607152044a8"
+      },
+      "bcnlt/meaning_eval.py": {
+        "bytes": 7814,
+        "sha256": "6abf44720a6389cc3f96a305399f3789794eb45f88b26129081eaafea6c34b27"
+      },
+      "bcnlt/model_eval.py": {
+        "bytes": 15731,
+        "sha256": "325515b2da7442e4680803b65a3399641cccd3b1937dcee442d62364940d8550"
+      },
+      "bcnlt/multilingual_eval.py": {
+        "bytes": 17942,
+        "sha256": "f144adfbea131e2dc1957b6227d1c29c8a47371e336ed8d478e6dc10f9b0a79e"
+      },
+      "bcnlt/multilingual_training.py": {
+        "bytes": 17131,
+        "sha256": "2e94be9fdc4ad617ae8bd661ed5786e43d62e973f558f7d73797b24fb1341ae6"
+      },
+      "bcnlt/parsers/__init__.py": {
+        "bytes": 534,
+        "sha256": "5bc8ca0725799afe98da29c7f03bded6ee466474571980e344d70eb825c0ad2a"
+      },
+      "bcnlt/parsers/bundle.py": {
+        "bytes": 16308,
+        "sha256": "81ca4ce8c58d2f571da2e623b19fcf92f866be01b38c265da49cdad62c24bee5"
+      },
+      "bcnlt/preprocessing.py": {
+        "bytes": 8426,
+        "sha256": "9f6e29141b5c3213650fb89ff408d76222f39edaec75a7ca71b8b5ffae96cf04"
+      },
+      "bcnlt/scientific_learning.py": {
+        "bytes": 19466,
+        "sha256": "ff23d9ae9d9314c82d38e16ae943628c792541c2401230a54410ee03b049a6d1"
+      },
+      "bcnlt/semantic_db.py": {
+        "bytes": 19684,
+        "sha256": "66a679d4d3936fdfa3d6db55c82bef6f77c7be3415cadae947adc138959e881b"
+      },
+      "bcnlt/semantic_record.py": {
+        "bytes": 7507,
+        "sha256": "05f6ecd7175f0bd68410ba820ef1c37cf9161da5fe94593b37b03d5d02d2d1b9"
+      },
+      "bcnlt/semantic_schema.py": {
+        "bytes": 3506,
+        "sha256": "19c22fa8e1a41cc3c4409b7f740d8a1bd5b716fab8dd70a7807a6ad552a2754b"
+      },
+      "bcnlt/tokenizer.py": {
+        "bytes": 15376,
+        "sha256": "c824672ea2a5af264d695c0614b5e28bd1f6ac16258ad3a53fdf9c682519be74"
+      },
+      "bcnlt/tokenizer_base.py": {
+        "bytes": 483,
+        "sha256": "301c66f1615a7cd2f1c7e9bc6485bf815c4293f48d9c873b495fdacb416ef0f8"
+      },
+      "bcnlt/tokenizer_cli.py": {
+        "bytes": 5868,
+        "sha256": "4521a3cffb43b51aeaea6b4862e003d4c974e40018e3160617a20cea0dab5928"
+      },
+      "bcnlt/tokenizer_eval.py": {
+        "bytes": 10772,
+        "sha256": "9c5105341755244f2b752f8b283b7dcd2b2694d4fb335024d0202dff0bca7a14"
+      },
+      "bcnlt/tokenizer_manifest.py": {
+        "bytes": 14323,
+        "sha256": "e00f2d3277f962ec51eef4c3c5943e2ca0dae1385e9ba369c162a1928a1b37d7"
+      },
+      "bcnlt/uncertainty.py": {
+        "bytes": 4383,
+        "sha256": "6f30afa62ac7218568b6b68608f4a1a0a8c476b76b380ebd3db332f4b1d18202"
+      },
+      "bcnlt/uyr.py": {
+        "bytes": 8686,
+        "sha256": "6fcc9954a17d564af101a7440c08a90a977bcdf81fe5535bacde206e0eb07c3f"
+      },
+      "bcnlt/wildcard.py": {
+        "bytes": 47852,
+        "sha256": "048ae580621abbba08f28913f3cdc03035943e6b5aff5e23d9aef1b85ed76fd7"
+      },
+      "configs/bcnlt_parser_bundle_v1.json": {
+        "bytes": 685,
+        "sha256": "d7df9e034b19a2a459299cecb1e14c31e4bd7b9626247f3ebd56ba258d3fecd6"
+      },
+      "pyproject.toml": {
+        "bytes": 558,
+        "sha256": "c096740cd6f0d1b3a3f1de80b45f3c810e0b90a50b049e56c8dd982df60a13a3"
+      }
+    },
+    "head": "4857b8ec0d765c4ecf50da352aa610b1571c0ffb",
+    "identity_policy": "exact_current_file_hashes_override_commit_assumptions",
+    "origin": "\\\\PATISBORG\\C$\\Users\\bossm\\Documents\\Codex\\BCNLT\\.worktrees\\bcnlt-multilingual-corpus",
+    "working_tree_reported_dirty": true
+  }
+}

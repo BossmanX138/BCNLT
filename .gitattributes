@@ -1,5 +1,7 @@
 * text=auto
 
+.gitattributes text eol=lf
+.gitignore text eol=lf
 *.json text eol=lf
 *.md text eol=lf
 *.py text eol=lf
@@ -23,3 +25,24 @@
 *.safetensors binary
 *.so binary
 *.zip binary
+
+# Immutable native runtime payloads required by a fresh clone. Generated
+# corpora, checkpoints, and model artifacts remain excluded from Git.
+artifacts/tokenizers/bcnlt-native-foundation-65536-v1/tokenizer.json filter=lfs diff=lfs merge=lfs -text
+vendor/tokenizers_runtime_0_23/tokenizers/tokenizers.pyd filter=lfs diff=lfs merge=lfs -text
+vendor/bcnlt_runtime_v10_learning_candidate/grammars/*.dll filter=lfs diff=lfs merge=lfs -text
+vendor/bcnlt_runtime_v10_learning_candidate/site-packages/**/*.pyd filter=lfs diff=lfs merge=lfs -text
+
+# The frozen tokenizer bundle is content-addressed byte-for-byte, including
+# its JSON manifests and checksum sidecar.
+artifacts/tokenizers/bcnlt-native-foundation-65536-v1/** -text whitespace=-trailing-space
+artifacts/bcnlt/multilingual-parser-output-v1/** -text whitespace=-trailing-space
+artifacts/bcnlt/runtime-recovery-v1/** -text whitespace=-trailing-space
+artifacts/reviews/bcnlt-v10-semantic-challenge-v1/** -text whitespace=-trailing-space
+artifacts/reviews/bcnlt-v10-semantic-challenge-deterministic-audit-v1/** -text whitespace=-trailing-space
+artifacts/reviews/bcnlt-v10-semantic-challenge-raw-ast-audit-v1/** -text whitespace=-trailing-space
+
+# This owned wheel is verified as an exact byte tree at import time. Treat its
+# wrappers and metadata as opaque vendor payloads so checkout never rewrites
+# upstream CRLF/LF bytes and invalidates the pinned aggregate identity.
+vendor/tokenizers_runtime_0_23/** -text whitespace=-trailing-space

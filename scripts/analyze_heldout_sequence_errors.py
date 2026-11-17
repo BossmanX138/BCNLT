@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter, defaultdict
 import json
-from pathlib import Path
 import sys
 import time
+from collections import Counter, defaultdict
+from pathlib import Path
+from typing import TypedDict
 
 import torch
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -34,7 +34,6 @@ from bosscrafts_model.resumable_task_packing import (
 from bosscrafts_model.tokenizer import NativeTokenizerBinding, bound_native_65k_config
 from bosscrafts_model.training_checkpoint import load_model_checkpoint_for_inference
 
-
 DEFAULT_DATABASE = (
     PROJECT_ROOT
     / "artifacts"
@@ -49,6 +48,18 @@ DEFAULT_CHECKPOINT = (
     / "bosscrafts-engineering-v2"
     / "checkpoint.pt"
 )
+
+
+class _RankedSequenceError(TypedDict):
+    example_id: str
+    language: str
+    prompt_token_count: int
+    target_token_count: int
+    mismatch_count: int
+    token_accuracy: float
+    first_mismatch_offset: int | None
+    expected_token_id_at_first_mismatch: int | None
+    predicted_token_id_at_first_mismatch: int | None
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:
@@ -109,7 +120,7 @@ def main() -> int:
         expected_model_fingerprint=config.fingerprint(),
     )
 
-    candidates: dict[str, list[dict[str, object]]] = defaultdict(list)
+    candidates: dict[str, list[_RankedSequenceError]] = defaultdict(list)
     mismatch_histograms: dict[str, Counter[int]] = defaultdict(Counter)
     scanned_by_family: Counter[str] = Counter()
     exact_by_family: Counter[str] = Counter()
@@ -155,7 +166,7 @@ def main() -> int:
                     )
                     expected_token_id = int(expected[first_mismatch_offset].item())
                     predicted_token_id = int(predictions[first_mismatch_offset].item())
-                item = {
+                item: _RankedSequenceError = {
                     "example_id": example["example_id"],
                     "language": example["language"],
                     "prompt_token_count": loss_start,
@@ -192,7 +203,7 @@ def main() -> int:
                 )
 
     payload = {
-        "schema_version": "bosscrafts-heldout-sequence-error-analysis-v1",
+        "schema_version": "bosscrafts-heldout-sequence-error-analysis-v2",
         "analysis_complete": processed == len(examples),
         "split": arguments.split,
         "example_count": processed,
@@ -200,6 +211,7 @@ def main() -> int:
         "device": device.type,
         "dtype": str(dtype).removeprefix("torch."),
         "checkpoint_lineage_verified": True,
+        "checkpoint_sha256": state.checkpoint_sha256,
         "checkpoint_training_complete": (
             state.epoch_index >= state.target_epochs
             and state.cursor_after_example_id is None

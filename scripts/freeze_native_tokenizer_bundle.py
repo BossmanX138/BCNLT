@@ -10,7 +10,6 @@ import hashlib
 import json
 from pathlib import Path
 
-
 EXPECTED_TOKENIZER_SHA256 = (
     "e1930449f3efe99bbb3f63730f75f71788d4ff21928bcae4d3ee2a520d30d407"
 )

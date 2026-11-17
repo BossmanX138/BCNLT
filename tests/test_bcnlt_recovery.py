@@ -1,12 +1,14 @@
 import hashlib
 import json
-from pathlib import Path
 import unittest
+from pathlib import Path
 
 from bosscrafts_model.bcnlt_adapter import LANGUAGE_SPEC_SHA256
 from bosscrafts_model.bcnlt_recovery import load_bcnlt_recovery_status
-from bosscrafts_model.tokenizer import EXPECTED_BINDING_SHA256, EXPECTED_TOKENIZER_SHA256
-
+from bosscrafts_model.tokenizer import (
+    EXPECTED_BINDING_SHA256,
+    EXPECTED_TOKENIZER_SHA256,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RECOVERY_ROOT = PROJECT_ROOT / "artifacts" / "bcnlt" / "runtime-recovery-v1"

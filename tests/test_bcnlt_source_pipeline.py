@@ -2,20 +2,25 @@ from __future__ import annotations
 
 import hashlib
 import json
-from types import SimpleNamespace
+import math
+import sys
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
+
 import torch
 
 from bosscrafts_model.bcnlt_source_pipeline import (
+    _DEFAULT_PYTHON_313,
+    _EXPECTED_RUNTIME_IDENTITY,
+    CURRENT_RUNTIME_SPEC_SHA256,
     BCNLTPreprocessingError,
     BCNLTSourcePipeline,
-    CURRENT_RUNTIME_SPEC_SHA256,
 )
-from bosscrafts_model.tokenizer import NativeTokenizerBinding
 from bosscrafts_model.config import ModelConfig
 from bosscrafts_model.model import EngineeringModel
-
+from bosscrafts_model.tokenizer import NativeTokenizerBinding
 
 LANGUAGE_SAMPLES = {
     "python": "def f(x):\n    return x + 1\n",
@@ -40,6 +45,9 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.binding = NativeTokenizerBinding.load()
         cls.pipeline = BCNLTSourcePipeline(cls.binding)
+
+    def test_default_sidecar_interpreter_is_active_verified_python(self) -> None:
+        self.assertEqual(_DEFAULT_PYTHON_313, Path(sys.executable).resolve())
 
     def test_live_python_and_javascript_semantics_use_the_frozen_structural_ids(self):
         cases = (
@@ -67,7 +75,9 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     prepared.canonical_sha256,
-                    hashlib.sha256(prepared.canonical_jsonl.encode("utf-8")).hexdigest(),
+                    hashlib.sha256(
+                        prepared.canonical_jsonl.encode("utf-8")
+                    ).hexdigest(),
                 )
                 ids = prepared.token_ids
                 structural = self.binding.structural_token_ids
@@ -86,7 +96,9 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
                     self.pipeline.decode_semantic(ids),
                     prepared.canonical_jsonl,
                 )
-                payloads = [json.loads(line) for line in prepared.canonical_jsonl.splitlines()]
+                payloads = [
+                    json.loads(line) for line in prepared.canonical_jsonl.splitlines()
+                ]
                 self.assertTrue(
                     all("knowledge_state" in record["metadata"] for record in payloads)
                 )
@@ -101,7 +113,42 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
         second = self.pipeline.prepare_semantic(source, language="rust", path="lib.rs")
         self.assertEqual(first, second)
         self.assertEqual(self.binding.structural_token_ids, before)
-        self.assertTrue(all(0 <= token_id < self.binding.vocab_size for token_id in first.token_ids))
+        self.assertTrue(
+            all(0 <= token_id < self.binding.vocab_size for token_id in first.token_ids)
+        )
+
+    def test_sidecar_response_attests_frozen_executable_source(self):
+        source = "x = 1\n"
+        response = self.pipeline._invoke_sidecar(
+            source,
+            language="python",
+            path="attested.py",
+            dialect=None,
+        )
+        self.assertEqual(
+            response["sidecar_source_sha256"],
+            _EXPECTED_RUNTIME_IDENTITY["sidecar"],
+        )
+        self.assertEqual(
+            response["parser_runtime_identity_sha256"],
+            self.pipeline.parser_runtime_identity_sha256,
+        )
+
+        for field in ("sidecar_source_sha256", "parser_runtime_identity_sha256"):
+            with self.subTest(field=field):
+                tampered = dict(response)
+                tampered[field] = "0" * 64
+                with patch.object(
+                    self.pipeline, "_invoke_sidecar", return_value=tampered
+                ):
+                    with self.assertRaisesRegex(
+                        BCNLTPreprocessingError, "sidecar provenance mismatch"
+                    ):
+                        self.pipeline.prepare_semantic(
+                            source,
+                            language="python",
+                            path="attested.py",
+                        )
 
     def test_semantic_decoder_rejects_null_in_required_surface_field(self):
         prepared = self.pipeline.prepare_semantic(
@@ -113,9 +160,7 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
         surface_begin = self.binding.structural_token_ids[
             "<|bcnlt:field:surface:begin|>"
         ]
-        surface_end = self.binding.structural_token_ids[
-            "<|bcnlt:field:surface:end|>"
-        ]
+        surface_end = self.binding.structural_token_ids["<|bcnlt:field:surface:end|>"]
         value_null = self.binding.structural_token_ids["<|bcnlt:value:null|>"]
         start = ids.index(surface_begin)
         end = ids.index(surface_end, start + 1)
@@ -133,8 +178,13 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
                     path=f"sample.{language}",
                 )
                 self.assertGreater(prepared.record_count, 0)
-                self.assertEqual(prepared.semantic_spec_sha256, CURRENT_RUNTIME_SPEC_SHA256[language])
-                self.assertEqual(self.pipeline.decode_semantic(prepared.token_ids), prepared.canonical_jsonl)
+                self.assertEqual(
+                    prepared.semantic_spec_sha256, CURRENT_RUNTIME_SPEC_SHA256[language]
+                )
+                self.assertEqual(
+                    self.pipeline.decode_semantic(prepared.token_ids),
+                    prepared.canonical_jsonl,
+                )
 
     def test_raw_mode_is_preserved_and_fallback_is_never_silent(self):
         source = "function {"
@@ -160,9 +210,63 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
             self.binding.structural_token_ids["<|bcnlt:mode:raw_code|>"],
         )
 
+    def test_invalid_semantic_handoff_uses_only_explicit_auditable_fallback(self):
+        source = "x = 1\n"
+        response = self.pipeline._invoke_sidecar(
+            source,
+            language="python",
+            path="malformed.py",
+            dialect=None,
+        )
+        malformed = dict(response)
+        malformed["canonical_jsonl"] = '{"broken":true}\n'
+        malformed["canonical_sha256"] = hashlib.sha256(
+            malformed["canonical_jsonl"].encode("utf-8")
+        ).hexdigest()
+        malformed["record_count"] = 1
+
+        with patch.object(self.pipeline, "_invoke_sidecar", return_value=malformed):
+            with self.assertRaisesRegex(
+                BCNLTPreprocessingError, "semantic handoff validation failed"
+            ):
+                self.pipeline.prepare_semantic(
+                    source,
+                    language="python",
+                    path="malformed.py",
+                )
+
+            prepared = self.pipeline.prepare_semantic(
+                source,
+                language="python",
+                path="malformed.py",
+                allow_raw_fallback=True,
+            )
+        self.assertEqual(prepared.mode, "raw_code")
+        self.assertTrue(prepared.used_raw_fallback)
+        self.assertEqual(
+            prepared.fallback_reason,
+            "BCNLT semantic handoff validation failed",
+        )
+
     def test_unsupported_language_fails_closed(self):
         with self.assertRaisesRegex(ValueError, "unsupported BCNLT language"):
             self.pipeline.prepare_semantic("+", language="brainfuck", path="x.bf")
+
+    def test_pipeline_control_arguments_require_exact_types_and_finite_timeout(self):
+        for invalid_timeout in (True, False, math.nan, math.inf, "30"):
+            with self.subTest(timeout=invalid_timeout):
+                with self.assertRaises((TypeError, ValueError)):
+                    BCNLTSourcePipeline(
+                        self.binding,
+                        timeout_seconds=invalid_timeout,
+                    )
+
+        with self.assertRaises(TypeError):
+            self.pipeline.prepare_semantic(
+                "function {",
+                language="javascript",
+                allow_raw_fallback="yes",
+            )
 
     def test_sidecar_transport_captures_binary_output_before_decoding(self):
         completed = SimpleNamespace(
@@ -174,7 +278,9 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
             "bosscrafts_model.bcnlt_source_pipeline.subprocess.run",
             return_value=completed,
         ) as run:
-            with self.assertRaisesRegex(BCNLTPreprocessingError, "parser rejected input"):
+            with self.assertRaisesRegex(
+                BCNLTPreprocessingError, "parser rejected input"
+            ):
                 self.pipeline._invoke_sidecar(
                     "x = 1\n",
                     language="python",
@@ -190,7 +296,7 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
     def test_non_utf8_sidecar_stdout_fails_closed_without_reader_thread_decode(self):
         completed = SimpleNamespace(
             returncode=0,
-            stdout=b"{\"protocol\":\"broken\",\"payload\":\xc2}",
+            stdout=b'{"protocol":"broken","payload":\xc2}',
             stderr=b"",
         )
         with patch(
@@ -313,8 +419,7 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
         self.assertEqual(set(definitions), expected)
         self.assertFalse(
             any(
-                record["event"] == "DEFINE"
-                and record["surface"].startswith("{")
+                record["event"] == "DEFINE" and record["surface"].startswith("{")
                 for record in records
             )
         )
@@ -410,8 +515,18 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
             ("python", "x = obj.field\n", "member.py", "field"),
             ("c", "int f(void) { return obj.field; }\n", "member.c", "field"),
             ("cpp", "int f() { return obj.field; }\n", "member.cpp", "field"),
-            ("c_sharp", "class C { int F() { return obj.field; } }\n", "member.cs", "field"),
-            ("java", "class C { int f() { return obj.field; } }\n", "Member.java", "field"),
+            (
+                "c_sharp",
+                "class C { int F() { return obj.field; } }\n",
+                "member.cs",
+                "field",
+            ),
+            (
+                "java",
+                "class C { int f() { return obj.field; } }\n",
+                "Member.java",
+                "field",
+            ),
             ("go", "package p\nfunc f() { x := obj.field }\n", "member.go", "field"),
             ("rust", "fn f() { let x = obj.field; }\n", "member.rs", "field"),
             ("php", "<?php $x = $obj->field;\n", "member.php", "field"),
@@ -478,7 +593,9 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
             and record["span"][0] == 1
             and record["span"][1] > definitions["second"]["span"][1]
         )
-        self.assertEqual(default_reference["defines"], definitions["first"]["symbol_id"])
+        self.assertEqual(
+            default_reference["defines"], definitions["first"]["symbol_id"]
+        )
 
     def test_javascript_destructured_parameters_are_function_scoped_bindings(self):
         prepared = self.pipeline.prepare_semantic(
@@ -496,7 +613,9 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
             if record["event"] == "DEFINE" and record["surface"] in expected
         }
         self.assertEqual(set(definitions), expected)
-        self.assertTrue(all(record["scope"] == "module.f" for record in definitions.values()))
+        self.assertTrue(
+            all(record["scope"] == "module.f" for record in definitions.values())
+        )
         for name, definition in definitions.items():
             body_reference = next(
                 record
@@ -507,6 +626,266 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
             )
             self.assertEqual(body_reference["defines"], definition["symbol_id"])
 
+    def test_go_grouped_parameters_define_every_name(self):
+        prepared = self.pipeline.prepare_semantic(
+            "package p\nfunc f(a, b int) { use(a, b) }\n",
+            language="go",
+            path="grouped.go",
+        )
+        records = [json.loads(line) for line in prepared.canonical_jsonl.splitlines()]
+        definitions = {
+            record["surface"]: record
+            for record in records
+            if record["event"] == "DEFINE" and record["surface"] in {"a", "b"}
+        }
+        self.assertEqual(set(definitions), {"a", "b"})
+        self.assertTrue(
+            all(record["scope"] == "module.f" for record in definitions.values())
+        )
+        for name, definition in definitions.items():
+            body_reference = next(
+                record
+                for record in records
+                if record["event"] == "REFERENCE"
+                and record["surface"] == name
+                and record["span"][1] > definition["span"][1]
+            )
+            self.assertEqual(body_reference["defines"], definition["symbol_id"])
+
+    def test_go_range_declaration_defines_each_loop_binding(self):
+        prepared = self.pipeline.prepare_semantic(
+            "package p\n"
+            "func f(xs []int) { for i, value := range xs { use(i, value) } }\n",
+            language="go",
+            path="range.go",
+        )
+        records = [json.loads(line) for line in prepared.canonical_jsonl.splitlines()]
+        definitions = {
+            record["surface"]: record
+            for record in records
+            if record["event"] == "DEFINE"
+            and record["surface"] in {"i", "value"}
+        }
+        self.assertEqual(set(definitions), {"i", "value"})
+        self.assertTrue(
+            all(
+                record["scope"] == "module.f.for_statement"
+                for record in definitions.values()
+            )
+        )
+        for name, definition in definitions.items():
+            body_reference = next(
+                record
+                for record in records
+                if record["event"] == "REFERENCE"
+                and record["surface"] == name
+                and record["span"][1] > definition["span"][1]
+            )
+            self.assertEqual(body_reference["defines"], definition["symbol_id"])
+        self.assertFalse(
+            any(
+                record["event"] == "UNKNOWN_SEMANTIC"
+                and record["metadata"].get("unknown_node") == "range_clause"
+                for record in records
+            )
+        )
+
+    def test_go_range_assignment_resolves_without_creating_a_binding(self):
+        prepared = self.pipeline.prepare_semantic(
+            "package p\n"
+            "func f(xs []int) { var i int; for i = range xs { use(i) } }\n",
+            language="go",
+            path="range-assignment.go",
+        )
+        records = [json.loads(line) for line in prepared.canonical_jsonl.splitlines()]
+        definitions = [
+            record
+            for record in records
+            if record["event"] == "DEFINE" and record["surface"] == "i"
+        ]
+        self.assertEqual(len(definitions), 1)
+        range_reference = next(
+            record
+            for record in records
+            if record["event"] == "REFERENCE"
+            and record["surface"] == "i"
+            and record["span"][1] > definitions[0]["span"][1]
+        )
+        self.assertEqual(range_reference["defines"], definitions[0]["symbol_id"])
+        self.assertFalse(
+            any(record["ast_relation"] == "range_clause.binding" for record in records)
+        )
+
+    def test_ruby_complex_parameters_define_each_binding(self):
+        prepared = self.pipeline.prepare_semantic(
+            "def f((a, b), c:, **kw, &block)\n"
+            "  use(a, b, c, kw, block)\n"
+            "end\n",
+            language="ruby",
+            path="parameters.rb",
+        )
+        records = [json.loads(line) for line in prepared.canonical_jsonl.splitlines()]
+        expected = {"a", "b", "c", "kw", "block"}
+        definitions = {
+            record["surface"]: record
+            for record in records
+            if record["event"] == "DEFINE" and record["surface"] in expected
+        }
+        self.assertEqual(set(definitions), expected)
+        self.assertTrue(
+            all(record["scope"] == "module.f" for record in definitions.values())
+        )
+        for name, definition in definitions.items():
+            body_reference = next(
+                record
+                for record in records
+                if record["event"] == "REFERENCE"
+                and record["surface"] == name
+                and record["span"][0] == 2
+            )
+            self.assertEqual(body_reference["defines"], definition["symbol_id"])
+        self.assertFalse(
+            any(
+                record["event"] == "UNKNOWN_SEMANTIC"
+                and record["metadata"].get("unknown_node")
+                in {
+                    "method_parameters",
+                    "destructured_parameter",
+                    "keyword_parameter",
+                    "hash_splat_parameter",
+                    "block_parameter",
+                }
+                for record in records
+            )
+        )
+
+    def test_ruby_parameter_defaults_see_only_earlier_bindings(self):
+        prepared = self.pipeline.prepare_semantic(
+            "def f(a, b = a, c = c)\n  use(a, b, c)\nend\n",
+            language="ruby",
+            path="defaults.rb",
+        )
+        records = [json.loads(line) for line in prepared.canonical_jsonl.splitlines()]
+        definitions = {
+            record["surface"]: record
+            for record in records
+            if record["event"] == "DEFINE" and record["surface"] in {"a", "b", "c"}
+        }
+        self.assertEqual(set(definitions), {"a", "b", "c"})
+        default_a = next(
+            record
+            for record in records
+            if record["event"] == "REFERENCE"
+            and record["surface"] == "a"
+            and record["span"][0] == 1
+        )
+        default_c = next(
+            record
+            for record in records
+            if record["event"] == "REFERENCE"
+            and record["surface"] == "c"
+            and record["span"][0] == 1
+        )
+        self.assertEqual(default_a["defines"], definitions["a"]["symbol_id"])
+        self.assertIsNone(default_c["defines"])
+
+    def test_bash_implicit_parameters_are_known_references_not_definitions(self):
+        prepared = self.pipeline.prepare_semantic(
+            "f() { echo $1 $2 $# $@ $?; }\n",
+            language="bash",
+            path="parameters.sh",
+        )
+        records = [json.loads(line) for line in prepared.canonical_jsonl.splitlines()]
+        expected = {"1", "2", "#", "@", "?"}
+        parameters = [
+            record
+            for record in records
+            if record["surface"] in expected
+            and record["ast_relation"]
+            in {"variable_name.self", "special_variable_name.self"}
+        ]
+        self.assertEqual({record["surface"] for record in parameters}, expected)
+        self.assertTrue(all(record["event"] == "REFERENCE" for record in parameters))
+        self.assertTrue(
+            all(record["metadata"].get("implicit_binding") is True for record in parameters)
+        )
+        self.assertTrue(
+            all(
+                "missing definition"
+                not in record["metadata"].get("uncertainty_signals", [])
+                for record in parameters
+            )
+        )
+
+    def test_javascript_static_block_var_does_not_escape_its_static_scope(self):
+        prepared = self.pipeline.prepare_semantic(
+            "class C { static { var value = 1; use(value); } }\nuse(value);\n",
+            language="javascript",
+            path="static-block.js",
+        )
+        records = [json.loads(line) for line in prepared.canonical_jsonl.splitlines()]
+        definition = next(
+            record
+            for record in records
+            if record["event"] == "DEFINE" and record["surface"] == "value"
+        )
+        self.assertEqual(definition["scope"], "module.C.class_static_block")
+        inner_reference = next(
+            record
+            for record in records
+            if record["event"] == "REFERENCE"
+            and record["surface"] == "value"
+            and record["span"][0] == 1
+            and record["span"][1] > 35
+        )
+        outer_reference = next(
+            record
+            for record in records
+            if record["event"] == "REFERENCE"
+            and record["surface"] == "value"
+            and record["span"][0] == 2
+        )
+        self.assertEqual(inner_reference["defines"], definition["symbol_id"])
+        self.assertIsNone(outer_reference["defines"])
+
+    def test_scope_exit_preserves_exact_dotted_or_computed_scope_name(self):
+        cases = (
+            (
+                "javascript",
+                "const symbols = {run: Symbol()};\n"
+                "class Runner { [symbols.run]() { return 1; } }\n",
+                "computed-method.js",
+                "[symbols.run]",
+            ),
+            (
+                "swift",
+                "extension Outer.Inner { func run() {} }\n",
+                "qualified-extension.swift",
+                "Outer.Inner",
+            ),
+        )
+        for language, source, path, expected_surface in cases:
+            with self.subTest(language=language):
+                prepared = self.pipeline.prepare_semantic(
+                    source,
+                    language=language,
+                    path=path,
+                )
+                records = [
+                    json.loads(line)
+                    for line in prepared.canonical_jsonl.splitlines()
+                ]
+                scope_records = [
+                    record
+                    for record in records
+                    if record["event"] in {"SCOPE_ENTER", "SCOPE_EXIT"}
+                    and record["surface"] == expected_surface
+                ]
+                self.assertEqual(
+                    [record["event"] for record in scope_records],
+                    ["SCOPE_ENTER", "SCOPE_EXIT"],
+                )
+
     def test_isolated_sidecar_roundtrips_non_ascii_source_over_utf8_transport(self):
         source = "// 背景色\nconst value = 'Grüße';\n"
         prepared = self.pipeline.prepare_semantic(
@@ -514,7 +893,9 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
             language="javascript",
             path="unicode.js",
         )
-        self.assertEqual(prepared.source_sha256, hashlib.sha256(source.encode()).hexdigest())
+        self.assertEqual(
+            prepared.source_sha256, hashlib.sha256(source.encode()).hexdigest()
+        )
         self.assertNotIn("\\udc", prepared.canonical_jsonl)
 
     def test_semantic_surfaces_and_history_are_bounded_before_handoff(self):
@@ -525,10 +906,15 @@ class BCNLTSourcePipelineTests(unittest.TestCase):
             path="large-surface.js",
         )
         records = [json.loads(line) for line in prepared.canonical_jsonl.splitlines()]
-        self.assertTrue(any(record["metadata"].get("surface_truncated") for record in records))
+        self.assertTrue(
+            any(record["metadata"].get("surface_truncated") for record in records)
+        )
         self.assertLessEqual(max(len(record["surface"]) for record in records), 4096)
         self.assertLessEqual(
-            max((len(item) for record in records for item in record["recent_history"]), default=0),
+            max(
+                (len(item) for record in records for item in record["recent_history"]),
+                default=0,
+            ),
             512,
         )
 

@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
 import sqlite3
 import subprocess
 import sys
 import zlib
+from pathlib import Path
 
 import pytest
 
+import bosscrafts_model.resumable_training_semantic_audit as audit_module
 from bosscrafts_model.bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
+from bosscrafts_model.resumable_current_corpus import RESUMABLE_SCHEMA
 from bosscrafts_model.resumable_training_semantic_audit import (
     ResumableTrainingSemanticAudit,
 )
@@ -40,6 +42,9 @@ class _PassingWitnessClient:
                     "query_id": query["query_id"],
                     "span": query["span"],
                     "ast_relation": query["ast_relation"],
+                    "claimed_surface": query["surface"],
+                    "derived_surface": query["surface"],
+                    "surface_match": True,
                     "claimed_scope": query["scope"],
                     "derived_scope": query["scope"],
                     "exact_named_node_types": ["command_name"],
@@ -169,7 +174,7 @@ def _fixture(
             """
         )
         metadata = {
-            "schema_version": "bosscrafts-current-corpus-resumable-v4",
+            "schema_version": RESUMABLE_SCHEMA,
             "catalog_exhausted": str(complete).lower(),
             "expected_source_document_count": "2",
             "source_catalog_sha256": catalog_sha,
@@ -275,6 +280,19 @@ def _failing_audit(
     )
 
 
+def test_source_excerpt_includes_context_around_zero_width_boundaries() -> None:
+    source = "[Fact]\npublic void Run() {}\nnext();\n"
+    record = {"span": [1, 0, 1, 0]}
+
+    excerpt = ResumableTrainingSemanticAudit._source_excerpt(
+        source, "decorated.cs", record
+    )
+
+    assert ">000001| [Fact]" in excerpt
+    assert " 000002| public void Run() {}" in excerpt
+    assert " 000003| next();" in excerpt
+
+
 def _real_audit(
     root: Path, admission: Path, catalog: Path, catalog_sha: str, freeze_sha: str
 ):
@@ -360,6 +378,58 @@ def test_fails_closed_on_tampered_canonical_payload(tmp_path: Path):
     finally:
         connection.close()
     with pytest.raises(ValueError, match="canonical JSONL SHA-256 mismatch"):
+        _audit(tmp_path, admission, catalog, catalog_sha, freeze_sha).process()
+
+
+@pytest.mark.parametrize(
+    "payload_mutator",
+    (
+        lambda payload: payload[:-1],
+        lambda payload: payload + b"trailing-data",
+        lambda payload: payload + payload,
+    ),
+    ids=("truncated", "trailing-data", "concatenated"),
+)
+def test_fails_closed_on_non_exact_canonical_zlib_stream(
+    tmp_path: Path,
+    payload_mutator,
+):
+    admission, catalog, catalog_sha, freeze_sha = _fixture(tmp_path)
+    connection = sqlite3.connect(admission)
+    try:
+        payload = connection.execute(
+            "SELECT canonical_jsonl_zlib FROM documents WHERE document_id='admitted-doc'"
+        ).fetchone()[0]
+        connection.execute(
+            "UPDATE documents SET canonical_jsonl_zlib=? WHERE document_id='admitted-doc'",
+            (payload_mutator(payload),),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    with pytest.raises(ValueError, match="canonical JSONL payload is invalid"):
+        _audit(tmp_path, admission, catalog, catalog_sha, freeze_sha).process()
+
+
+def test_fails_closed_before_high_ratio_canonical_payload_exceeds_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    admission, catalog, catalog_sha, freeze_sha = _fixture(tmp_path)
+    oversized = b"x" * 65
+    monkeypatch.setattr(audit_module, "MAX_CANONICAL_OUTPUT_BYTES", 64)
+    connection = sqlite3.connect(admission)
+    try:
+        connection.execute(
+            """UPDATE documents
+               SET canonical_sha256=?, canonical_jsonl_zlib=?
+               WHERE document_id='admitted-doc'""",
+            (_sha256(oversized), zlib.compress(oversized, 9)),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    with pytest.raises(ValueError, match="canonical JSONL payload is invalid"):
         _audit(tmp_path, admission, catalog, catalog_sha, freeze_sha).process()
 
 
@@ -473,7 +543,9 @@ def test_refuses_same_count_with_nonfrozen_document_id(tmp_path: Path):
         connection.commit()
     finally:
         connection.close()
-    with pytest.raises(ValueError, match="source admission document count is incomplete"):
+    with pytest.raises(
+        ValueError, match="source admission document count is incomplete"
+    ):
         _audit(tmp_path, admission, catalog, catalog_sha, freeze_sha)
 
 

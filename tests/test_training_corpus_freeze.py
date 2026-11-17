@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -214,7 +214,9 @@ def test_freeze_is_deterministic_group_aware_and_never_training_ready(tmp_path: 
     assert first.training_ready is False
     records = [
         json.loads(line)
-        for line in (first.output_root / "documents.jsonl").read_text(encoding="utf-8").splitlines()
+        for line in (first.output_root / "documents.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
     ]
     by_id = {row["document_id"]: row for row in records}
     assert by_id[heldout_id]["split"] == "reserved_heldout"
@@ -224,11 +226,16 @@ def test_freeze_is_deterministic_group_aware_and_never_training_ready(tmp_path: 
     assert by_id[synthetic_train_id]["split"] == "train"
     assert by_id[synthetic_train_id]["split_group_kind"] == "document"
 
-    manifest = json.loads((first.output_root / "manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads(
+        (first.output_root / "manifest.json").read_text(encoding="utf-8")
+    )
     assert manifest["source_freeze_complete"] is True
     assert manifest["repository_cross_split_count"] == 0
     assert manifest["training_ready"] is False
-    assert "full current-runtime semantic admission is incomplete" in manifest["training_blockers"]
+    assert (
+        "full current-runtime semantic admission is incomplete"
+        in manifest["training_blockers"]
+    )
 
     verified = VerifiedTrainingSourceFreeze(
         first.output_root,
@@ -238,7 +245,9 @@ def test_freeze_is_deterministic_group_aware_and_never_training_ready(tmp_path: 
     assert verified.training_document_count == 2
     assert verified.source_catalog_sha256 == catalog_sha
     assert verified.qualification_file_sha256 == qualification_sha
-    assert [candidate.document_id for candidate in verified.iter_training_candidates()] == [
+    assert [
+        candidate.document_id for candidate in verified.iter_training_candidates()
+    ] == [
         synthetic_train_id,
         "train-repository-document",
     ]
@@ -281,6 +290,16 @@ def test_freeze_rejects_tampered_qualification(tmp_path: Path):
             expected_catalog_sha256=catalog_sha,
             expected_heldout_manifest_file_sha256=heldout_manifest_sha,
             expected_qualification_file_sha256=qualification_sha,
+        )
+
+
+def test_qualification_loader_rejects_non_object_json(tmp_path: Path) -> None:
+    qualification = tmp_path / "qualification.json"
+    qualification.write_text("[]\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="semantic audit qualification is invalid"):
+        TrainingCorpusFreezer._load_qualification(
+            qualification, _sha256_file(qualification)
         )
 
 

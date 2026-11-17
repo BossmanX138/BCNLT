@@ -5,7 +5,6 @@ import pytest
 from bosscrafts_model.semantic import NativeSemanticRecordCodec, SemanticRecord
 from bosscrafts_model.tokenizer import NativeTokenizerBinding
 
-
 STANDARD_SPECIALS = ("<|unk|>", "<|bos|>", "<|eos|>", "<|pad|>")
 
 

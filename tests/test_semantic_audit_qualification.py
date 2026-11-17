@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REVIEWS = PROJECT_ROOT / "artifacts" / "reviews"
 CHALLENGE = REVIEWS / "bcnlt-v10-semantic-challenge-v1"
@@ -23,10 +22,24 @@ def _feature():
 
 def test_combined_audits_qualify_on_every_blinded_defect_without_false_flags(
     tmp_path,
+    monkeypatch,
 ):
     feature = _feature()
     output = tmp_path / "qualification"
     evaluator = feature.SemanticAuditQualificationEvaluator()
+    historical_raw_manifest = json.loads(
+        (RAW_AST / "manifest.json").read_text(encoding="utf-8")
+    )
+    current_sha256_file = feature._sha256_file
+
+    def historical_sidecar_identity(path):
+        if path == feature._RAW_AST_SIDECAR:
+            return historical_raw_manifest["witness_sidecar_sha256"]
+        return current_sha256_file(path)
+
+    # This test isolates union/scoring behavior over the frozen historical
+    # control inventory. A separate test below enforces live sidecar lineage.
+    monkeypatch.setattr(feature, "_sha256_file", historical_sidecar_identity)
 
     result = evaluator.materialize(
         CHALLENGE,
@@ -57,3 +70,15 @@ def test_combined_audits_qualify_on_every_blinded_defect_without_false_flags(
         RAW_AST,
         output,
     ) == result
+
+
+def test_combined_audit_rejects_preserved_stale_sidecar_evidence(tmp_path):
+    evaluator = _feature().SemanticAuditQualificationEvaluator()
+
+    with pytest.raises(ValueError, match="raw AST audit challenge lineage mismatch"):
+        evaluator.materialize(
+            CHALLENGE,
+            DETERMINISTIC,
+            RAW_AST,
+            tmp_path / "stale-qualification",
+        )

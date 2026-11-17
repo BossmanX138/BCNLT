@@ -2,16 +2,17 @@
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
 import hashlib
 import json
 import os
-from pathlib import Path
 import sys
 import time
+from collections import defaultdict
+from collections.abc import Mapping
+from pathlib import Path
+from typing import TypedDict
 
 import torch
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -28,6 +29,12 @@ import tokenizers
 if tokenizers.__version__ != "0.23.2":
     raise RuntimeError("project-contained tokenizers runtime version mismatch")
 
+from bosscrafts_model.generation_artifacts import (
+    GENERATION_GATE_SCHEMA,
+    GenerationGateRecord,
+    load_generation_gate_records,
+)
+from bosscrafts_model.immutable_artifacts import publish_new_files, replace_mutable_file
 from bosscrafts_model.inference_protocol import (
     INFERENCE_TASKS,
     response_payload_token_ids,
@@ -38,14 +45,12 @@ from bosscrafts_model.model import EngineeringModel
 from bosscrafts_model.resumable_task_packing import (
     ResumableTaskDataset,
     _canonical_json,
-    _sha256_file,
     audit_task_database,
 )
 from bosscrafts_model.tokenizer import NativeTokenizerBinding, bound_native_65k_config
 from bosscrafts_model.training_checkpoint import load_model_checkpoint_for_inference
 
-
-SCHEMA = "bosscrafts-strict-generation-gate-v1"
+SCHEMA = GENERATION_GATE_SCHEMA
 DEFAULT_DATABASE = (
     PROJECT_ROOT
     / "artifacts"
@@ -62,39 +67,38 @@ DEFAULT_CHECKPOINT = (
 )
 
 
-def _atomic_json(path: Path, payload: dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(path)
+class _GenerationCase(TypedDict):
+    example_id: str
+    family: str
+    prompt_ids: list[int]
+    expected_ids: list[int]
 
 
-def _append_jsonl(path: Path, payload: dict[str, object]) -> None:
+class _GenerationSummary(TypedDict):
+    case_count: int
+    protocol_complete_count: int
+    protocol_complete_rate: float
+    exact_match_count: int
+    exact_match_rate: float
+    mean_target_token_accuracy: float
+    total_generation_seconds: float
+
+
+def _render_json(payload: Mapping[str, object]) -> bytes:
+    return (
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+
+
+def _replace_progress(path: Path, payload: Mapping[str, object]) -> None:
+    replace_mutable_file(path, _render_json(payload))
+
+
+def _append_jsonl(path: Path, payload: Mapping[str, object]) -> None:
     with path.open("a", encoding="utf-8", newline="\n") as handle:
         handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
         handle.flush()
         os.fsync(handle.fileno())
-
-
-def _load_records(path: Path, run_identity: str) -> dict[str, dict[str, object]]:
-    records: dict[str, dict[str, object]] = {}
-    if not path.exists():
-        return records
-    with path.open("r", encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, start=1):
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            if type(row) is not dict or row.get("run_identity_sha256") != run_identity:
-                raise ValueError(f"generation gate record {line_number} has wrong identity")
-            example_id = row.get("example_id")
-            if type(example_id) is not str or example_id in records:
-                raise ValueError(f"generation gate record {line_number} is invalid")
-            records[example_id] = row
-    return records
 
 
 def _select_cases(
@@ -105,8 +109,8 @@ def _select_cases(
     limit_per_family: int,
     maximum_new_tokens: int,
     maximum_sequence: int,
-) -> list[dict[str, object]]:
-    selected: dict[str, list[dict[str, object]]] = {
+) -> list[_GenerationCase]:
+    selected: dict[str, list[_GenerationCase]] = {
         family: [] for family in families
     }
     for row in dataset.iter_examples(split=split):
@@ -123,12 +127,12 @@ def _select_cases(
         ):
             continue
         selected[family].append(
-            {
-                "example_id": str(row["example_id"]),
-                "family": family,
-                "prompt_ids": prompt_ids,
-                "expected_ids": expected_ids,
-            }
+            _GenerationCase(
+                example_id=str(row["example_id"]),
+                family=family,
+                prompt_ids=prompt_ids,
+                expected_ids=expected_ids,
+            )
         )
     missing = {
         family: len(rows)
@@ -141,6 +145,54 @@ def _select_cases(
             + json.dumps(missing, sort_keys=True)
         )
     return [row for family in families for row in selected[family]]
+
+
+def _verify_resumed_records(
+    binding: NativeTokenizerBinding,
+    cases: list[_GenerationCase],
+    records: Mapping[str, GenerationGateRecord],
+    *,
+    maximum_new_tokens: int,
+) -> None:
+    """Rebind persisted records to their exact held-out rows and tokenizer."""
+    selected = {str(case["example_id"]): case for case in cases}
+    if not set(records).issubset(selected):
+        raise ValueError("generation gate records contain an unselected example")
+    for example_id, record in records.items():
+        case = selected[example_id]
+        family = str(case["family"])
+        prompt_ids = list(case["prompt_ids"])
+        expected_ids = list(case["expected_ids"])
+        generated_ids = list(record["generated_ids"])
+        if record["example_id"] != example_id:
+            raise ValueError("generation gate record key is inconsistent")
+        if record["family"] != family:
+            raise ValueError("generation gate record family does not match its case")
+        if record["prompt_token_count"] != len(prompt_ids):
+            raise ValueError("generation gate prompt count does not match its case")
+        if (
+            record["expected_token_count"] != len(expected_ids)
+            or record["expected_ids"] != expected_ids
+        ):
+            raise ValueError("generation gate expected tokens do not match their case")
+        if len(generated_ids) > maximum_new_tokens:
+            raise ValueError("generation gate record exceeds the generation bound")
+        if any(token_id >= binding.vocab_size for token_id in generated_ids):
+            raise ValueError("generation gate record contains an out-of-vocabulary token")
+        if record["expected_protocol_text"] != binding.decode(expected_ids):
+            raise ValueError("generation gate expected text is inconsistent")
+        if record["generated_protocol_text"] != binding.decode(generated_ids):
+            raise ValueError("generation gate generated text is inconsistent")
+        payload_ids = response_payload_token_ids(binding, family, generated_ids)
+        if record["generated_payload_text"] != binding.decode(payload_ids):
+            raise ValueError("generation gate payload text is inconsistent")
+        protocol_complete = response_protocol_complete(
+            binding,
+            task=family,
+            generated_ids=generated_ids,
+        )
+        if record["protocol_complete"] is not protocol_complete:
+            raise ValueError("generation gate protocol result is inconsistent")
 
 
 def main() -> int:
@@ -220,12 +272,30 @@ def main() -> int:
         maximum_new_tokens=arguments.max_new_tokens,
         maximum_sequence=config.max_sequence,
     )
+    device = torch.device(arguments.device)
+    dtype = torch.float32 if arguments.dtype == "float32" else torch.bfloat16
+    model = EngineeringModel(config).to(device=device, dtype=dtype).eval()
+    state = load_model_checkpoint_for_inference(
+        checkpoint,
+        model,
+        expected_task_database_identity_sha256=(
+            checkpoint_audit.database_identity_sha256
+        ),
+        expected_binding_sha256=binding.binding_sha256,
+        expected_model_fingerprint=config.fingerprint(),
+    )
+    checkpoint_training_complete = (
+        state.epoch_index >= state.target_epochs
+        and state.cursor_after_example_id is None
+    )
+    if not checkpoint_training_complete and not arguments.allow_incomplete_probe:
+        raise ValueError("strict generation requires a completed checkpoint")
     run_spec: dict[str, object] = {
         "schema_version": SCHEMA,
         "binding_sha256": binding.binding_sha256,
         "tokenizer_sha256": binding.tokenizer_sha256,
         "model_fingerprint": config.fingerprint(),
-        "checkpoint_sha256": _sha256_file(checkpoint),
+        "checkpoint_sha256": state.checkpoint_sha256,
         "checkpoint_task_database_identity_sha256": (
             checkpoint_audit.database_identity_sha256
         ),
@@ -255,32 +325,19 @@ def main() -> int:
         if json.loads(manifest_path.read_text(encoding="utf-8")) != run_spec:
             raise ValueError("generation gate output belongs to another run")
     else:
-        _atomic_json(manifest_path, run_spec)
+        publish_new_files(
+            ((manifest_path, _render_json(run_spec)),),
+            artifact_label="generation gate manifest",
+        )
 
     records_path = output / "generation-records.jsonl"
-    records = _load_records(records_path, run_identity)
-    selected_ids = {str(row["example_id"]) for row in cases}
-    if not set(records).issubset(selected_ids):
-        raise ValueError("generation gate records contain an unselected example")
-
-    device = torch.device(arguments.device)
-    dtype = torch.float32 if arguments.dtype == "float32" else torch.bfloat16
-    model = EngineeringModel(config).to(device=device, dtype=dtype).eval()
-    state = load_model_checkpoint_for_inference(
-        checkpoint,
-        model,
-        expected_task_database_identity_sha256=(
-            checkpoint_audit.database_identity_sha256
-        ),
-        expected_binding_sha256=binding.binding_sha256,
-        expected_model_fingerprint=config.fingerprint(),
+    records = load_generation_gate_records(records_path, run_identity)
+    _verify_resumed_records(
+        binding,
+        cases,
+        records,
+        maximum_new_tokens=arguments.max_new_tokens,
     )
-    checkpoint_training_complete = (
-        state.epoch_index >= state.target_epochs
-        and state.cursor_after_example_id is None
-    )
-    if not checkpoint_training_complete and not arguments.allow_incomplete_probe:
-        raise ValueError("strict generation requires a completed checkpoint")
 
     for case in cases:
         example_id = str(case["example_id"])
@@ -307,32 +364,32 @@ def main() -> int:
             for actual, expected in zip(generated_ids, expected_ids, strict=False)
         )
         payload_ids = response_payload_token_ids(binding, family, generated_ids)
-        record: dict[str, object] = {
-            "schema_version": SCHEMA,
-            "run_identity_sha256": run_identity,
-            "example_id": example_id,
-            "family": family,
-            "prompt_token_count": len(prompt_ids),
-            "expected_token_count": len(expected_ids),
-            "generated_token_count": len(generated_ids),
-            "expected_ids": expected_ids,
-            "generated_ids": generated_ids,
-            "expected_protocol_text": binding.decode(expected_ids),
-            "generated_protocol_text": binding.decode(generated_ids),
-            "generated_payload_text": binding.decode(payload_ids),
-            "protocol_complete": response_protocol_complete(
+        record = GenerationGateRecord(
+            schema_version=SCHEMA,
+            run_identity_sha256=run_identity,
+            example_id=example_id,
+            family=family,
+            prompt_token_count=len(prompt_ids),
+            expected_token_count=len(expected_ids),
+            generated_token_count=len(generated_ids),
+            expected_ids=expected_ids,
+            generated_ids=generated_ids,
+            expected_protocol_text=binding.decode(expected_ids),
+            generated_protocol_text=binding.decode(generated_ids),
+            generated_payload_text=binding.decode(payload_ids),
+            protocol_complete=response_protocol_complete(
                 binding,
                 task=family,
                 generated_ids=generated_ids,
             ),
-            "exact_match": generated_ids == expected_ids,
-            "target_token_accuracy": correct / len(expected_ids),
-            "generation_seconds": elapsed,
-            "tokens_per_second": len(generated_ids) / elapsed,
-        }
+            exact_match=generated_ids == expected_ids,
+            target_token_accuracy=correct / len(expected_ids),
+            generation_seconds=elapsed,
+            tokens_per_second=len(generated_ids) / elapsed,
+        )
         _append_jsonl(records_path, record)
         records[example_id] = record
-        _atomic_json(
+        _replace_progress(
             output / "progress.json",
             {
                 **run_spec,
@@ -359,11 +416,11 @@ def main() -> int:
         )
 
     ordered = [records[str(case["example_id"])] for case in cases]
-    by_family: dict[str, list[dict[str, object]]] = defaultdict(list)
+    by_family: dict[str, list[GenerationGateRecord]] = defaultdict(list)
     for record in ordered:
         by_family[str(record["family"])].append(record)
 
-    def summarize(items: list[dict[str, object]]) -> dict[str, object]:
+    def summarize(items: list[GenerationGateRecord]) -> _GenerationSummary:
         return {
             "case_count": len(items),
             "protocol_complete_count": sum(
@@ -402,7 +459,10 @@ def main() -> int:
             and overall["exact_match_rate"] == 1.0
         ),
     }
-    _atomic_json(output / "report.json", report)
+    publish_new_files(
+        ((output / "report.json", _render_json(report)),),
+        artifact_label="generation gate report",
+    )
     print(json.dumps(report, sort_keys=True))
     return 0
 

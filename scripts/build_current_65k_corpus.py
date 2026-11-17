@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
-
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -14,7 +13,6 @@ if str(PROJECT_ROOT) not in sys.path:
 from bosscrafts_model.bcnlt_source_pipeline import BCNLTSourcePipeline
 from bosscrafts_model.current_corpus import CurrentCorpusAdmission, SQLiteSourceCatalog
 from bosscrafts_model.tokenizer import NativeTokenizerBinding
-
 
 DEFAULT_DATABASE = (
     PROJECT_ROOT
@@ -45,9 +43,14 @@ def main() -> int:
         help="Process all source documents; never implied by the default pilot run.",
     )
     arguments = parser.parse_args()
-    if arguments.full and arguments.limit_per_language != 3:
-        parser.error("--full and --limit-per-language cannot be combined")
-    limit = None if arguments.full else arguments.limit_per_language
+    if arguments.full:
+        parser.error(
+            "--full is not supported by the bounded pilot builder; "
+            "use scripts/run_full_resumable_admission.py"
+        )
+    if not 1 <= arguments.limit_per_language <= 3:
+        parser.error("--limit-per-language must be between 1 and 3 for the bounded pilot")
+    limit = arguments.limit_per_language
     catalog = SQLiteSourceCatalog(
         arguments.database,
         expected_sha256=arguments.database_sha256,

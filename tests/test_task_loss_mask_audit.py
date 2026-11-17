@@ -2,14 +2,19 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
 import sqlite3
+from pathlib import Path
+
+import pytest
 
 from bosscrafts_model.bcnlt_source_pipeline import BCNLTSourcePipeline
 from bosscrafts_model.current_corpus import SourceCandidate
 from bosscrafts_model.resumable_current_corpus import ResumableCurrentCorpusAdmission
 from bosscrafts_model.resumable_task_packing import ResumableCurrentTaskPacking
-from bosscrafts_model.task_loss_mask_audit import TaskLossMaskAuditor
+from bosscrafts_model.task_loss_mask_audit import (
+    TaskLossMaskAuditor,
+    _assert_cross_split_example_ids_disjoint,
+)
 from bosscrafts_model.tokenizer import NativeTokenizerBinding
 
 
@@ -71,6 +76,52 @@ def _catalog(path: Path, candidates: tuple[SourceCandidate, ...]) -> str:
     finally:
         connection.close()
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _id_database(path: Path, example_ids: tuple[str, ...]) -> None:
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute("CREATE TABLE tasks(example_id TEXT PRIMARY KEY)")
+        connection.executemany(
+            "INSERT INTO tasks VALUES(?)", ((example_id,) for example_id in example_ids)
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def test_streaming_cross_split_identity_check_is_disjoint_and_count_bound(
+    tmp_path: Path,
+) -> None:
+    databases = {
+        split: tmp_path / f"{split}.sqlite"
+        for split in ("train", "validation", "test")
+    }
+    _id_database(databases["train"], ("1", "4"))
+    _id_database(databases["validation"], ("2", "5"))
+    _id_database(databases["test"], ("3", "6"))
+    counts = {"train": 2, "validation": 2, "test": 2}
+
+    _assert_cross_split_example_ids_disjoint(databases, counts)
+    with pytest.raises(ValueError, match="changed during loss-mask audit"):
+        _assert_cross_split_example_ids_disjoint(
+            databases, {"train": 1, "validation": 2, "test": 2}
+        )
+
+
+def test_streaming_cross_split_identity_check_rejects_overlap(tmp_path: Path) -> None:
+    databases = {
+        split: tmp_path / f"{split}.sqlite"
+        for split in ("train", "validation", "test")
+    }
+    _id_database(databases["train"], ("1", "4"))
+    _id_database(databases["validation"], ("2", "4"))
+    _id_database(databases["test"], ("3", "6"))
+
+    with pytest.raises(ValueError, match="identity crosses frozen splits"):
+        _assert_cross_split_example_ids_disjoint(
+            databases, {"train": 2, "validation": 2, "test": 2}
+        )
 
 
 def test_materializes_complete_disjoint_loss_mask_receipt(tmp_path: Path):

@@ -10,13 +10,13 @@ import gzip
 import hashlib
 import json
 import os
-from pathlib import Path
-import re
 import sys
 import time
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Literal, TypedDict
 
 import torch
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -33,19 +33,26 @@ import tokenizers
 if tokenizers.__version__ != "0.23.2":
     raise RuntimeError("project-contained tokenizers runtime version mismatch")
 
-from bosscrafts_model.model import EngineeringModel
+from bosscrafts_model.generation_artifacts import (
+    HUMANEVAL_GENERATION_SCHEMA,
+    HumanEvalGenerationRecord,
+    clean_python_completion,
+    load_humaneval_generation_records,
+    validate_humaneval_generation_records,
+)
+from bosscrafts_model.immutable_artifacts import publish_new_files, replace_mutable_file
 from bosscrafts_model.inference_protocol import (
     build_inference_prompt,
     response_payload_token_ids,
     response_protocol_complete,
     task_end_token_id,
 )
+from bosscrafts_model.model import EngineeringModel
 from bosscrafts_model.resumable_task_packing import audit_task_database
 from bosscrafts_model.tokenizer import NativeTokenizerBinding, bound_native_65k_config
 from bosscrafts_model.training_checkpoint import load_model_checkpoint_for_inference
 
-
-SCHEMA = "bosscrafts-openai-humaneval-generation-v2"
+SCHEMA = HUMANEVAL_GENERATION_SCHEMA
 OPENAI_HUMANEVAL_SHA256 = (
     "b796127e635a67f93fb35c04f4cb03cf06f38c8072ee7cee8833d7bee06979ef"
 )
@@ -80,6 +87,14 @@ DEFAULT_OUTPUT = (
 )
 
 
+class _HumanEvalTask(TypedDict):
+    task_id: str
+    prompt: str
+    canonical_solution: str
+    test: str
+    entry_point: str
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -88,17 +103,17 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _atomic_json(path: Path, payload: dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(path)
+def _render_json(payload: Mapping[str, object]) -> bytes:
+    return (
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
 
 
-def _append_jsonl(path: Path, payload: dict[str, object]) -> None:
+def _replace_progress(path: Path, payload: Mapping[str, object]) -> None:
+    replace_mutable_file(path, _render_json(payload))
+
+
+def _append_jsonl(path: Path, payload: Mapping[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8", newline="\n") as handle:
         handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
@@ -106,8 +121,8 @@ def _append_jsonl(path: Path, payload: dict[str, object]) -> None:
         os.fsync(handle.fileno())
 
 
-def _read_dataset(path: Path) -> list[dict[str, object]]:
-    tasks: list[dict[str, object]] = []
+def _read_dataset(path: Path) -> list[_HumanEvalTask]:
+    tasks: list[_HumanEvalTask] = []
     with gzip.open(path, "rt", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
             if not line.strip():
@@ -118,72 +133,34 @@ def _read_dataset(path: Path) -> list[dict[str, object]]:
                 raise ValueError(f"invalid HumanEval row {line_number}")
             if any(type(task[name]) is not str for name in required):
                 raise ValueError(f"non-string HumanEval field on row {line_number}")
-            tasks.append(task)
+            tasks.append(
+                _HumanEvalTask(
+                    task_id=task["task_id"],
+                    prompt=task["prompt"],
+                    canonical_solution=task["canonical_solution"],
+                    test=task["test"],
+                    entry_point=task["entry_point"],
+                )
+            )
     expected_ids = [f"HumanEval/{index}" for index in range(164)]
     if [task["task_id"] for task in tasks] != expected_ids:
         raise ValueError("HumanEval task IDs do not match the official 164-task order")
     return tasks
 
 
-_FENCE = re.compile(r"^\s*```(?:python)?\s*\n?|\n?```\s*$", re.IGNORECASE)
-
-
-def clean_python_completion(text: str) -> str:
-    """Apply a small, deterministic HumanEval completion cleanup.
-
-    The raw completion is always retained.  Cleanup removes only Markdown fences and
-    truncates obvious top-level content after the requested function body.  It does
-    not repair syntax, remove BCNLT tokens, or synthesize code.
-    """
-    cleaned = _FENCE.sub("", text.replace("\r\n", "\n"))
-    stop_markers = (
-        "\nclass ",
-        "\ndef ",
-        "\nif __name__",
-        "\nprint(",
-        "\nassert ",
-        "\n# Example",
-        "\n# Test",
-        "\n```",
-    )
-    positions = [cleaned.find(marker) for marker in stop_markers]
-    positions = [position for position in positions if position >= 0]
-    if positions:
-        cleaned = cleaned[: min(positions)]
-    return cleaned.rstrip() + "\n" if cleaned.strip() else cleaned
-
-
-def _load_existing(path: Path, run_identity: str) -> dict[str, dict[str, object]]:
-    records: dict[str, dict[str, object]] = {}
-    if not path.exists():
-        return records
-    with path.open("r", encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, start=1):
-            if not line.strip():
-                continue
-            record = json.loads(line)
-            if type(record) is not dict or record.get("run_identity_sha256") != run_identity:
-                raise ValueError(f"existing generation record {line_number} has wrong identity")
-            task_id = record.get("task_id")
-            if type(task_id) is not str or task_id in records:
-                raise ValueError(f"existing generation record {line_number} is invalid")
-            records[task_id] = record
-    return records
-
-
-def _write_samples(path: Path, records: list[dict[str, object]], field: str) -> None:
-    temporary = path.with_name(f".{path.name}.tmp")
-    with temporary.open("w", encoding="utf-8", newline="\n") as handle:
-        for record in records:
-            handle.write(
-                json.dumps(
-                    {"task_id": record["task_id"], "completion": record[field]},
-                    ensure_ascii=False,
-                    sort_keys=True,
-                )
-                + "\n"
-            )
-    temporary.replace(path)
+def _render_samples(
+    records: list[HumanEvalGenerationRecord],
+    field: Literal["raw_completion", "clean_completion"],
+) -> bytes:
+    return "".join(
+        json.dumps(
+            {"task_id": record["task_id"], "completion": record[field]},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        + "\n"
+        for record in records
+    ).encode("utf-8")
 
 
 def main() -> int:
@@ -233,10 +210,19 @@ def main() -> int:
     binding = NativeTokenizerBinding.load()
     database_audit = audit_task_database(binding, database)
     config = bound_native_65k_config(binding)
-    checkpoint_sha256 = _sha256(checkpoint)
+    device = torch.device(arguments.device)
+    dtype = torch.float32 if arguments.dtype == "float32" else torch.bfloat16
+    model = EngineeringModel(config).to(device=device, dtype=dtype).eval()
+    state = load_model_checkpoint_for_inference(
+        checkpoint,
+        model,
+        expected_task_database_identity_sha256=database_audit.database_identity_sha256,
+        expected_binding_sha256=binding.binding_sha256,
+        expected_model_fingerprint=config.fingerprint(),
+    )
     run_spec = {
         "schema_version": SCHEMA,
-        "checkpoint_sha256": checkpoint_sha256,
+        "checkpoint_sha256": state.checkpoint_sha256,
         "dataset_sha256": dataset_sha256,
         "database_identity_sha256": database_audit.database_identity_sha256,
         "device": arguments.device,
@@ -259,23 +245,20 @@ def main() -> int:
         if existing_manifest != run_spec:
             raise ValueError("output directory already belongs to another benchmark run")
     else:
-        _atomic_json(manifest_path, run_spec)
+        publish_new_files(
+            ((manifest_path, _render_json(run_spec)),),
+            artifact_label="HumanEval generation manifest",
+        )
 
     records_path = output / "generation-records.jsonl"
-    records = _load_existing(records_path, run_identity)
-    selected_ids = {task["task_id"] for task in tasks}
-    if not set(records).issubset(selected_ids):
-        raise ValueError("existing records contain a task outside this run")
-
-    device = torch.device(arguments.device)
-    dtype = torch.float32 if arguments.dtype == "float32" else torch.bfloat16
-    model = EngineeringModel(config).to(device=device, dtype=dtype).eval()
-    state = load_model_checkpoint_for_inference(
-        checkpoint,
-        model,
-        expected_task_database_identity_sha256=database_audit.database_identity_sha256,
-        expected_binding_sha256=binding.binding_sha256,
-        expected_model_fingerprint=config.fingerprint(),
+    records = load_humaneval_generation_records(records_path, run_identity)
+    validate_humaneval_generation_records(
+        binding,
+        tasks,
+        records,
+        prompt_protocol=arguments.prompt_protocol,
+        maximum_new_tokens=arguments.max_new_tokens,
+        maximum_sequence=config.max_sequence,
     )
 
     for index, task in enumerate(tasks):
@@ -283,6 +266,7 @@ def main() -> int:
         if task_id in records:
             continue
         prompt = str(task["prompt"])
+        eos_token_id: int | None
         if arguments.prompt_protocol == "raw":
             prompt_ids = binding.encode_payload(prompt)
             eos_token_id = 2
@@ -330,26 +314,28 @@ def main() -> int:
             )
         raw_model_response = binding.decode(generated_ids)
         raw_completion = binding.decode(completion_ids)
-        record: dict[str, object] = {
-            "schema_version": SCHEMA,
-            "run_identity_sha256": run_identity,
-            "task_index": index,
-            "task_id": task_id,
-            "entry_point": task["entry_point"],
-            "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
-            "prompt_token_count": len(prompt_ids),
-            "generated_token_count": len(generated_ids),
-            "completion_token_count": len(completion_ids),
-            "generation_seconds": elapsed,
-            "tokens_per_second": len(generated_ids) / elapsed,
-            "response_protocol_complete": protocol_complete,
-            "raw_model_response": raw_model_response,
-            "raw_completion": raw_completion,
-            "clean_completion": clean_python_completion(raw_completion),
-        }
+        record = HumanEvalGenerationRecord(
+            schema_version=SCHEMA,
+            run_identity_sha256=run_identity,
+            task_index=index,
+            task_id=task_id,
+            entry_point=task["entry_point"],
+            prompt_sha256=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+            prompt_token_count=len(prompt_ids),
+            generated_token_count=len(generated_ids),
+            completion_token_count=len(completion_ids),
+            generated_ids=generated_ids,
+            completion_ids=completion_ids,
+            generation_seconds=elapsed,
+            tokens_per_second=len(generated_ids) / elapsed,
+            response_protocol_complete=protocol_complete,
+            raw_model_response=raw_model_response,
+            raw_completion=raw_completion,
+            clean_completion=clean_python_completion(raw_completion),
+        )
         _append_jsonl(records_path, record)
         records[task_id] = record
-        _atomic_json(
+        _replace_progress(
             output / "progress.json",
             {
                 **run_spec,
@@ -380,8 +366,6 @@ def main() -> int:
         )
 
     ordered = [records[str(task["task_id"])] for task in tasks]
-    _write_samples(output / "samples-raw.jsonl", ordered, "raw_completion")
-    _write_samples(output / "samples.jsonl", ordered, "clean_completion")
     summary = {
         **run_spec,
         "checkpoint_epoch_index": state.epoch_index,
@@ -396,7 +380,20 @@ def main() -> int:
             / sum(float(item["generation_seconds"]) for item in ordered)
         ),
     }
-    _atomic_json(output / "summary.json", summary)
+    publish_new_files(
+        (
+            (
+                output / "samples-raw.jsonl",
+                _render_samples(ordered, "raw_completion"),
+            ),
+            (
+                output / "samples.jsonl",
+                _render_samples(ordered, "clean_completion"),
+            ),
+            (output / "summary.json", _render_json(summary)),
+        ),
+        artifact_label="HumanEval generation",
+    )
     print(json.dumps(summary, sort_keys=True))
     return 0
 

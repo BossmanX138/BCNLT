@@ -4,20 +4,20 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from pathlib import Path
 import sys
-
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from bosscrafts_model.bcnlt_source_pipeline import BCNLTSourcePipeline
-from bosscrafts_model.bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
+from bosscrafts_model.bcnlt_source_pipeline import (
+    PARSER_RUNTIME_IDENTITY_SHA256,
+    BCNLTSourcePipeline,
+)
 from bosscrafts_model.current_corpus import SQLiteSourceCatalog
 from bosscrafts_model.resumable_current_corpus import ResumableCurrentCorpusAdmission
 from bosscrafts_model.tokenizer import NativeTokenizerBinding
-
 
 DEFAULT_CATALOG = PROJECT_ROOT / "artifacts" / "source-catalogs" / "legacy-current-source-v1" / "corpus.sqlite"
 DEFAULT_CATALOG_SHA256 = "286d92f79f84b75049b845be0270e4308f32056421c8dea92d82d41b4e4003e2"

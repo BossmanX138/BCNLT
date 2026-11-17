@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
-
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -24,7 +23,6 @@ if tokenizers.__version__ != "0.23.2":
 
 from bosscrafts_model.codex_replay_curriculum import build_codex_replay_curriculum
 from bosscrafts_model.tokenizer import NativeTokenizerBinding
-
 
 EXPECTED_CODEX_IDENTITY = "249c068873764d4594427ac06bf840a1729545a2f83a416c8706a38d916783c9"
 EXPECTED_REPLAY_IDENTITY = "626186864cf4444db997bea5bd8ea4a18f18b5042509033a0d6939d0bd35afd2"

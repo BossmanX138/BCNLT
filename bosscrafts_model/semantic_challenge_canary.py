@@ -3,12 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeGuard
 
+from .immutable_artifacts import publish_new_files
 from .jsonl import split_jsonl_records
 from .semantic_challenge_review import SemanticChallengeReviewBuilder
 
@@ -44,23 +43,6 @@ def _is_sha256(value: object) -> TypeGuard[str]:
     )
 
 
-def _atomic_write(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
-
-
 @dataclass(frozen=True, slots=True)
 class SemanticChallengeCanarySelectionResult:
     output_root: Path
@@ -78,9 +60,14 @@ class SemanticChallengeCanarySelector:
         challenge = Path(challenge_root).resolve()
         output = Path(output_root).resolve()
         selection = self._build(challenge)
-        _atomic_write(
-            output / "selection.json",
-            f"{_canonical(selection)}\n".encode(),
+        publish_new_files(
+            (
+                (
+                    output / "selection.json",
+                    f"{_canonical(selection)}\n".encode("utf-8"),
+                ),
+            ),
+            artifact_label="semantic challenge canary",
         )
         return self._result(output, selection)
 

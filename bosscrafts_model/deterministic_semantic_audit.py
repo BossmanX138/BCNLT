@@ -1,21 +1,28 @@
 """Deterministic pre-audit for objective BCNLT semantic-record invariants."""
+
 from __future__ import annotations
 
 import hashlib
 import json
-import os
-import tempfile
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeGuard
 
+from .immutable_artifacts import publish_new_files
 from .jsonl import split_jsonl_records
-from .local_semantic_review import _SEMANTIC_CONTRACT, DualLocalSemanticReviewer
+from .local_semantic_review import (
+    _SEMANTIC_CONTRACT,
+    DualLocalSemanticReviewer,
+    _span_surfaces,
+)
 
 _SOURCE_MANIFEST_SCHEMA = "bosscrafts-heldout-semantic-review-manifest-v2"
 _SOURCE_ITEM_SCHEMA = "bosscrafts-heldout-semantic-review-item-v2"
 _FINDING_SCHEMA = "bosscrafts-deterministic-semantic-finding-v1"
 _REPORT_SCHEMA = "bosscrafts-deterministic-semantic-audit-manifest-v1"
+_MAX_SEMANTIC_SURFACE_CHARS = 4096
+_MAX_IR_NAME_CHARS = 8192
 
 
 def _canonical(value: object) -> str:
@@ -38,23 +45,6 @@ def _is_sha256(value: object) -> TypeGuard[str]:
         and len(value) == 64
         and all(character in "0123456789abcdef" for character in value)
     )
-
-
-def _atomic_write(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +102,24 @@ class DeterministicSemanticAuditor:
             raise ValueError("semantic review canonical record is invalid")
         evidence = DualLocalSemanticReviewer._span_evidence(item)
         extracted = str(evidence["extracted_surface"])
+        raw_extracted, _ = _span_surfaces(item)
+        expected_truncated_surface = unicodedata.normalize(
+            "NFC",
+            raw_extracted[:_MAX_SEMANTIC_SURFACE_CHARS]
+            .replace("\r\n", "\n")
+            .replace("\r", "\n"),
+        )
+        expected_truncated_ir_name = unicodedata.normalize(
+            "NFC",
+            raw_extracted[:_MAX_IR_NAME_CHARS]
+            .replace("\r\n", "\n")
+            .replace("\r", "\n"),
+        )
+        valid_truncated_surface = (
+            metadata.get("surface_truncated") is True
+            and len(raw_extracted) > _MAX_SEMANTIC_SURFACE_CHARS
+            and surface == expected_truncated_surface
+        )
         findings: list[DeterministicSemanticFinding] = []
         boundary_events = set(_SEMANTIC_CONTRACT["zero_width_boundary_events"])
         is_zero_width = span[0] == span[2] and span[1] == span[3]
@@ -124,33 +132,15 @@ class DeterministicSemanticAuditor:
                         "scope boundary events must use a zero-width point span",
                     )
                 )
-            source_excerpt = item.get("source_excerpt")
-            ast_relation = record.get("ast_relation")
-            target_source = "\n".join(
-                line.split("| ", 1)[1]
-                for line in str(source_excerpt).splitlines()
-                if line.startswith(">") and "| " in line
-            )
-            node_kind = (
-                ast_relation[: -len(".scope")]
-                if type(ast_relation) is str and ast_relation.endswith(".scope")
-                else ""
-            )
-            scope_tail = scope.rsplit(".", 1)[-1]
-            surface_is_anchored = bool(surface) and (
-                surface == node_kind
-                or surface in target_source
-                or (scope != "module" and (surface in scope or scope_tail in surface))
-            )
-            if not surface_is_anchored:
+            if not surface:
                 findings.append(
                     DeterministicSemanticFinding(
                         "scope_boundary_surface_unanchored",
                         "surface",
-                        "scope boundary surface must name the target source, scope, or structural node",
+                        "scope boundary surface must be non-empty; exact ownership is verified by the raw AST gate",
                     )
                 )
-        elif surface != extracted:
+        elif not (surface == extracted or valid_truncated_surface):
             findings.append(
                 DeterministicSemanticFinding(
                     "surface_span_mismatch",
@@ -169,10 +159,16 @@ class DeterministicSemanticAuditor:
                 )
             )
         ir_name = ir.get("name")
+        truncated_ir_prefix = (
+            valid_truncated_surface
+            and isinstance(ir_name, str)
+            and ir_name == expected_truncated_ir_name
+        )
         if (
             ir.get("kind") != "extension"
             and ir_name is not None
             and ir_name != surface
+            and not truncated_ir_prefix
         ):
             findings.append(
                 DeterministicSemanticFinding(
@@ -219,9 +215,15 @@ class DeterministicSemanticAuditReport:
     ) -> DeterministicSemanticAuditReportResult:
         output = Path(output_root).resolve()
         findings_text, manifest = self._evaluate(Path(source_root).resolve())
-        _atomic_write(output / "findings.jsonl", findings_text.encode("utf-8"))
-        _atomic_write(
-            output / "manifest.json", f"{_canonical(manifest)}\n".encode()
+        publish_new_files(
+            (
+                (output / "findings.jsonl", findings_text.encode("utf-8")),
+                (
+                    output / "manifest.json",
+                    f"{_canonical(manifest)}\n".encode("utf-8"),
+                ),
+            ),
+            artifact_label="deterministic semantic audit",
         )
         return self._result(output, manifest)
 
@@ -251,9 +253,9 @@ class DeterministicSemanticAuditReport:
     def _evaluate(self, source_root: Path) -> tuple[str, dict[str, object]]:
         manifest = self._load_source_manifest(source_root / "manifest.json")
         try:
-            queue_text = (
-                source_root / str(manifest.get("queue_file"))
-            ).read_text(encoding="utf-8")
+            queue_text = (source_root / str(manifest.get("queue_file"))).read_text(
+                encoding="utf-8"
+            )
         except OSError as exc:
             raise ValueError("semantic source queue cannot be read") from exc
         if _sha256_text(queue_text) != manifest.get("queue_sha256"):
@@ -348,7 +350,10 @@ class DeterministicSemanticAuditReport:
             manifest = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise ValueError("semantic source manifest is invalid") from exc
-        if type(manifest) is not dict or manifest.get("schema_version") != _SOURCE_MANIFEST_SCHEMA:
+        if (
+            type(manifest) is not dict
+            or manifest.get("schema_version") != _SOURCE_MANIFEST_SCHEMA
+        ):
             raise ValueError("semantic source manifest schema mismatch")
         unsigned = dict(manifest)
         claimed = unsigned.pop("manifest_sha256", None)
@@ -387,4 +392,3 @@ class DeterministicSemanticAuditReport:
             findings_sha256=findings_sha256,
             manifest_sha256=manifest_sha256,
         )
-

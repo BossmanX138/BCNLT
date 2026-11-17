@@ -10,7 +10,11 @@ from typing import Any, Callable
 from bcnlt.cache import ProjectIndex
 from bcnlt.core import ContextualUnit, SourceDocument, Span
 from bcnlt.ir import CommonCodingCore, IRKind, IRNode
-from bcnlt.parsers.bundle import MAX_SOURCE_BYTES, PARSE_TIMEOUT_MS, assert_clean_parse_tree
+from bcnlt.parsers.bundle import (
+    MAX_SOURCE_BYTES,
+    PARSE_TIMEOUT_MS,
+    assert_clean_parse_tree,
+)
 from bcnlt.preprocessing import SemanticPreprocessor
 from bcnlt.semantic_record import normalize_semantic_text
 from bcnlt.semantic_schema import SEMANTIC_SCHEMA_VERSION
@@ -20,7 +24,6 @@ from .carousel import LanguageCartridge
 from .coverage import SemanticCoverage, SemanticExtraction, is_unresolved_unknown
 from .spec import IdentifierRoleRule, NodeRule, ScopeRule
 from .symbols import LexicalSymbolTable
-
 
 ParserProvider = Callable[[str], Any]
 _OWNED_GRAMMARS = frozenset(
@@ -167,7 +170,7 @@ class TreeSitterSemanticEngine:
             # lexical name. Never infer names for callbacks, properties, or
             # destructuring: those require a separate alias-analysis contract.
             if (name == "name" and document.language in {"javascript", "typescript"}
-                    and str(node.type) == "arrow_function"
+                    and str(node.type) in {"arrow_function", "function_expression"}
                     and node.child_by_field_name("name") is None):
                 parent = getattr(node, "parent", None)
                 if parent is not None and str(parent.type) == "variable_declarator":
@@ -386,6 +389,64 @@ class TreeSitterSemanticEngine:
             definition_owned_nodes.discard(key)
             mapped_nodes.discard(key)
 
+        def bind_ruby_parameter(binding: Any) -> bool:
+            """Define every name owned by a Ruby parameter pattern."""
+            binding_type = str(binding.type)
+            key = node_key(binding)
+            if binding_type == "identifier":
+                name = text(binding)
+                binding_span = span(binding)
+                definition_owned_nodes.add(key)
+                mapped_nodes.add(key)
+                symbol_id = symbols.define(name, binding_span)
+                document.index.define(
+                    document.path,
+                    symbol_id,
+                    name,
+                    binding_span,
+                )
+                emit(
+                    surface=name,
+                    event="DEFINE",
+                    unit_span=binding_span,
+                    relation="method_parameters.binding",
+                    symbol_id=symbol_id,
+                    ir=self._core.variable(name),
+                )
+                return True
+
+            ruby_parameter_wrappers = {
+                "block_parameter",
+                "destructured_parameter",
+                "hash_splat_parameter",
+                "keyword_parameter",
+                "keyword_splat_parameter",
+                "optional_parameter",
+                "splat_parameter",
+            }
+            if binding_type not in ruby_parameter_wrappers:
+                return False
+
+            mapped_nodes.add(key)
+            value = binding.child_by_field_name("value")
+            if value is not None:
+                # Defaults see bindings established by earlier parameters, but
+                # not the binding currently being initialized.
+                walk(value)
+            name_node = binding.child_by_field_name("name")
+            if name_node is not None:
+                bind_ruby_parameter(name_node)
+            for child in binding.named_children:
+                child_key = node_key(child)
+                if (
+                    (value is not None and child_key == node_key(value))
+                    or (name_node is not None and child_key == node_key(name_node))
+                ):
+                    continue
+                if not bind_ruby_parameter(child):
+                    walk(child)
+            return True
+
         def walk(node: Any) -> None:
             nonlocal total_named_nodes, scope_enters, scope_exits
             key = node_key(node)
@@ -404,7 +465,20 @@ class TreeSitterSemanticEngine:
             if key in pattern_owned_nodes:
                 return
 
-            candidate_role_rules = role_rules.get(str(node.type), ())
+            if (
+                is_named
+                and document.language == "ruby"
+                and str(node.type) == "method_parameters"
+            ):
+                mapped_nodes.add(key)
+                for child in node.named_children:
+                    if not bind_ruby_parameter(child):
+                        walk(child)
+                return
+
+            candidate_role_rules = (
+                role_rules.get(str(node.type), ()) if is_named else ()
+            )
             parent = getattr(node, "parent", None)
             parent_type = str(parent.type) if parent is not None else None
             contextual_role_rules = tuple(
@@ -417,7 +491,7 @@ class TreeSitterSemanticEngine:
             prewalked_child_keys: set[tuple[int, int, str]] = set()
             js_pattern_definition = False
 
-            if document.language in {"javascript", "typescript"}:
+            if is_named and document.language in {"javascript", "typescript"}:
                 node_type = str(node.type)
                 if node_type in {"import_clause", "named_imports"}:
                     mapped_nodes.add(key)
@@ -512,6 +586,41 @@ class TreeSitterSemanticEngine:
                         )
                         js_pattern_definition = True
             roles: dict[str, tuple[str, str | None, Any, str, str]] = {}
+            go_parameter = (
+                document.language == "go"
+                and str(node.type)
+                in {"parameter_declaration", "variadic_parameter_declaration"}
+            )
+            if go_parameter:
+                mapped_nodes.add(key)
+                name_nodes = tuple(node.children_by_field_name("name"))
+                for binding in name_nodes:
+                    binding_key = node_key(binding)
+                    definition_owned_nodes.add(binding_key)
+                    mapped_nodes.add(binding_key)
+                    name = text(binding)
+                    if name == "_":
+                        continue
+                    binding_span = span(binding)
+                    symbol_id = symbols.define(name, binding_span)
+                    document.index.define(
+                        document.path,
+                        symbol_id,
+                        name,
+                        binding_span,
+                    )
+                    emit(
+                        surface=name,
+                        event="DEFINE",
+                        unit_span=binding_span,
+                        relation=f"{node.type}.name",
+                        symbol_id=symbol_id,
+                        ir=self._core.variable(name),
+                    )
+                node_role_rules = tuple(
+                    rule for rule in node_role_rules if rule.role != "definition"
+                )
+
             # Go short declarations bind each LHS identifier, not the
             # expression-list spelling "a, b". Existing same-frame names are
             # assignments; outer-frame names are newly shadowed. `_` never binds.
@@ -544,6 +653,47 @@ class TreeSitterSemanticEngine:
                              defines=symbol_id if event == "REFERENCE" else None,
                              ir=self._core.variable(name))
                 node_role_rules = tuple(r for r in node_role_rules if r.role != "definition")
+
+            go_range = (
+                document.language == "go" and str(node.type) == "range_clause"
+            )
+            go_range_right = node.child_by_field_name("right") if go_range else None
+            if go_range_right is not None:
+                # The range expression is evaluated before newly declared loop
+                # variables become visible.
+                walk(go_range_right)
+                prewalked_child_keys.add(node_key(go_range_right))
+            if go_range:
+                mapped_nodes.add(key)
+                left = node.child_by_field_name("left")
+                declares = any(str(child.type) == ":=" for child in node.children)
+                if left is not None and declares:
+                    mapped_nodes.add(node_key(left))
+                    for binding in left.named_children:
+                        if str(binding.type) != "identifier":
+                            continue
+                        binding_key = node_key(binding)
+                        definition_owned_nodes.add(binding_key)
+                        mapped_nodes.add(binding_key)
+                        name = text(binding)
+                        if name == "_":
+                            continue
+                        binding_span = span(binding)
+                        symbol_id = symbols.define(name, binding_span)
+                        document.index.define(
+                            document.path,
+                            symbol_id,
+                            name,
+                            binding_span,
+                        )
+                        emit(
+                            surface=name,
+                            event="DEFINE",
+                            unit_span=binding_span,
+                            relation="range_clause.binding",
+                            symbol_id=symbol_id,
+                            ir=self._core.variable(name),
+                        )
             for role_rule in node_role_rules:
                 child = field(node, role_rule.field_name)
                 if child is None:
@@ -570,7 +720,9 @@ class TreeSitterSemanticEngine:
                         symbol_id, binding_scope = symbols.define_in_enclosing(
                             name,
                             child_span,
-                            kinds=frozenset({"function", "module"}),
+                            kinds=frozenset(
+                                {"static_block", "function", "module"}
+                            ),
                         )
                     else:
                         symbol_id = symbols.define(name, child_span)
@@ -595,10 +747,12 @@ class TreeSitterSemanticEngine:
                 else:
                     raise ValueError(f"Unsupported identifier role: {role_rule.role}")
 
-            rules = node_rules.get(str(node.type), ())
+            rules = node_rules.get(str(node.type), ()) if is_named else ()
             matching_rules: list[tuple[NodeRule, Any | None, str]] = []
             for rule in rules:
                 if go_short and rule.event == "DEFINE":
+                    continue
+                if go_parameter and rule.event == "DEFINE":
                     continue
                 if js_pattern_definition and rule.event == "DEFINE":
                     continue
@@ -649,6 +803,19 @@ class TreeSitterSemanticEngine:
                 symbol_id = role[1] if role else None
                 defines = symbol_id if role and role[4] == "reference" else None
                 event_span = span(surface_node or node)
+                rule_metadata = metadata_for(str(node.type))
+                if (
+                    document.language == "bash"
+                    and rule.event == "REFERENCE"
+                    and (
+                        str(node.type) == "special_variable_name"
+                        or (
+                            str(node.type) == "variable_name"
+                            and surface.isdecimal()
+                        )
+                    )
+                ):
+                    rule_metadata["implicit_binding"] = True
                 emit(
                     surface=surface,
                     event=rule.event,
@@ -657,7 +824,7 @@ class TreeSitterSemanticEngine:
                     symbol_id=symbol_id,
                     defines=defines,
                     ir=self._ir_for(rule, surface, document.language, node.type),
-                    metadata=metadata_for(str(node.type)),
+                    metadata=rule_metadata,
                     scope=(
                         role[3]
                         if role
@@ -697,7 +864,10 @@ class TreeSitterSemanticEngine:
                 )
 
             active_scope: ScopeRule | None = None
-            rules_for_scope = scope_rules.get(str(node.type), ())
+            active_scope_name: str | None = None
+            rules_for_scope = (
+                scope_rules.get(str(node.type), ()) if is_named else ()
+            )
             if (document.language == "go" and str(node.type) == "block"
                     and parent_type in {"function_declaration", "method_declaration", "func_literal"}):
                 # Parameters and the outer function body share one Go scope.
@@ -706,12 +876,18 @@ class TreeSitterSemanticEngine:
                 active_scope = rules_for_scope[0]
                 mapped_nodes.add(key)
                 name_node = field(node, active_scope.name_field)
-                scope_name = text(name_node) if name_node is not None else str(node.type)
+                active_scope_name = (
+                    text(name_node) if name_node is not None else str(node.type)
+                )
                 parent_scope = symbols.scope
-                scope_id = symbols.enter_scope(active_scope.scope_kind, scope_name, int(node.start_byte))
+                scope_id = symbols.enter_scope(
+                    active_scope.scope_kind,
+                    active_scope_name,
+                    int(node.start_byte),
+                )
                 scope_enters += 1
                 emit(
-                    surface=scope_name,
+                    surface=active_scope_name,
                     event="SCOPE_ENTER",
                     unit_span=point_span(node.start_point),
                     relation=f"{node.type}.scope",
@@ -772,7 +948,7 @@ class TreeSitterSemanticEngine:
                 if body is not None and str(body.type) != "statement_block":
                     emit(surface=text(body), event="RETURN", unit_span=span(body),
                          relation="arrow_function.implicit_return",
-                         ir=self._core.extension("javascript.arrow_return", {"syntactic_body": True}))
+                         ir=self._core.return_value())
 
             # Rust function tails return their final expression without a
             # `return` keyword. Only a direct function-body tail qualifies;
@@ -793,7 +969,7 @@ class TreeSitterSemanticEngine:
                                  or str(tail.type) in {"identifier", "block", "self"})):
                         emit(surface=text(tail), event="RETURN", unit_span=span(tail),
                              relation="function_item.implicit_tail",
-                             ir=self._core.extension("rust.implicit_return", {"syntactic_tail": True}))
+                             ir=self._core.return_value())
 
             for child in node.children:
                 if go_right is not None and node_key(child) == node_key(go_right):
@@ -803,12 +979,13 @@ class TreeSitterSemanticEngine:
                 walk(child)
 
             if active_scope is not None:
-                scope_name = symbols.scope.rsplit(".", 1)[-1]
+                if active_scope_name is None:
+                    raise RuntimeError("active scope name is missing")
                 current_scope = symbols.scope
                 symbols.exit_scope()
                 scope_exits += 1
                 emit(
-                    surface=scope_name,
+                    surface=active_scope_name,
                     event="SCOPE_EXIT",
                     unit_span=point_span(node.end_point),
                     relation=f"{node.type}.scope",
