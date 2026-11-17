@@ -58,12 +58,37 @@ Evidence roots:
 - `D:\BCNLT-runs\eligibility-current-fa4c826\validation`
 - `D:\BCNLT-runs\eligibility-current-fa4c826\test`
 
+## Packed task databases
+
+The validation and test partitions have completed packing with the pinned
+`compact_v2` semantic wire and 2,048-token sequence bound. Their built-in full
+database audits passed, and separately invoked full auditors reproduced the
+same database identities, content hashes, counts, language distributions,
+family distributions, split ownership, and token totals.
+
+| Split | Documents | Examples | Sequence tokens | Packing rejects | Database identity SHA-256 | Content SHA-256 | Independent audit manifest SHA-256 | Receipt file SHA-256 |
+| --- | ---: | ---: | ---: | ---: | --- | --- | --- | --- |
+| validation | 3,216 | 3,820,925 | 3,889,790,915 | 22,624 | `13a0970e8d5476d407e51eed8c298f11c2acb974dc883b4612c0798cb71b0f36` | `f23182857dc8d35a31d06de0414b2069ebdc181d605c17c0c982f3a54c801b41` | `86c02d5926c28ea156d7b215499527d574c5dbb63ea4e94f454f5d4e5229e1f2` | `2809b6788a5510feffc1f0b7794af15865d8df70dfc08c730fac7793f7da75bc` |
+| test | 3,199 | 3,631,774 | 3,691,636,163 | 20,057 | `2bc3dd2b25e10a4fd87bc53a5f58a001791e4b01fe41130e9ee27ffca65d047f` | `c2fa59457a3000367d49678343ad0b424767a197ad742cf16669d61d8e49a520` | `dbf66ea3e883c42f954dfb78e5a89aeef3471cedeec74840b6bd50954452cd34` | `9612167a54664f28430e3d75eabb549413d4cd2baf74db1760a2473dd81c30de` |
+
+Evidence roots:
+
+- `D:\BCNLT-runs\tasks-current-8edc43e\validation\tasks.sqlite`
+- `D:\BCNLT-runs\tasks-current-8edc43e\test\tasks.sqlite`
+- `D:\BCNLT-runs\audits-current-8bdb702\validation-task-audit.json`
+- `D:\BCNLT-runs\audits-current-8bdb702\test-task-audit.json`
+
+The train task database remains resumable and in progress. It must complete its
+own deferred cell index, built-in audit, and independently reproduced audit
+before it can be used to build the mixed training curriculum.
+
 ## Remaining gate order
 
-1. Pack the eligible train, validation, and test documents with the pinned
-   `compact_v2` semantic wire and 2,048-token sequence bound.
-2. Audit every packed example and its loss-mask boundary across all three task
-   databases.
+1. Finish packing the eligible train documents with the pinned `compact_v2`
+   semantic wire and 2,048-token sequence bound, then reproduce its built-in
+   full database audit with the independent auditor.
+2. Audit every packed example's loss-mask boundary across the completed train,
+   validation, and test task databases.
 3. Build a train-only, split-safe semantic and reviewed-instruction curriculum
    from the current training-task identity. Copy only reviewed instruction
    `train` rows; retain semantic validation/test databases and reviewed
