@@ -339,6 +339,52 @@ class ResumableTaskPackingTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "example identity"):
                 audit_task_database(self.binding, tasks_path)
 
+    def test_multiworker_document_write_retries_database_lock_atomically(self):
+        module = importlib.import_module("bosscrafts_model.resumable_task_packing")
+
+        class LockOnceConnection:
+            def __init__(self) -> None:
+                self.task_attempts = 0
+                self.rollback_count = 0
+                self.commit_count = 0
+                self.document_rows: list[tuple[object, ...]] = []
+
+            def executemany(
+                self, statement: str, rows: object
+            ) -> None:
+                if "INSERT INTO tasks" in statement:
+                    self.task_attempts += 1
+                    if self.task_attempts == 1:
+                        raise sqlite3.OperationalError("database is locked")
+
+            def execute(
+                self, statement: str, row: tuple[object, ...]
+            ) -> None:
+                self.document_rows.append(row)
+
+            def rollback(self) -> None:
+                self.rollback_count += 1
+
+            def commit(self) -> None:
+                self.commit_count += 1
+
+        connection = LockOnceConnection()
+        with patch.object(module.time, "sleep") as sleep:
+            module.ResumableCurrentTaskPacking._insert_document_rows(
+                connection,
+                (),
+                (),
+                ("retry-document", 0, 0),
+                retry_locked=True,
+            )
+        self.assertEqual(connection.task_attempts, 2)
+        self.assertEqual(connection.rollback_count, 1)
+        self.assertEqual(connection.commit_count, 1)
+        self.assertEqual(connection.document_rows, [("retry-document", 0, 0)])
+        sleep.assert_called_once_with(
+            module.TASK_DATABASE_LOCK_RETRY_INITIAL_SECONDS
+        )
+
     def test_worker_partitions_produce_the_same_complete_database_identity(self):
         module = importlib.import_module("bosscrafts_model.resumable_task_packing")
         candidates = tuple(

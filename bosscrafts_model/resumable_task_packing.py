@@ -7,6 +7,7 @@ import json
 import math
 import sqlite3
 import sys
+import time
 import zlib
 from array import array
 from collections import Counter, defaultdict
@@ -39,6 +40,9 @@ FULL_SEMANTIC_WIRE_SCHEMA = "bosscrafts-full-semantic-wire-v3"
 CELL_WEIGHT_MULTIPLIERS_METADATA_KEY = "training_cell_weight_multipliers_v1_json"
 SALTED_SOURCE_EXAMPLE_ID_POLICY = "bosscrafts-v11-salted-source-example-id-v1"
 TASK_DATABASE_BUSY_TIMEOUT_MS = 300_000
+TASK_DATABASE_LOCK_RETRY_LIMIT = 12
+TASK_DATABASE_LOCK_RETRY_INITIAL_SECONDS = 1.0
+TASK_DATABASE_LOCK_RETRY_MAX_SECONDS = 30.0
 _TASK_FAMILIES = frozenset(
     {
         "instruction_to_code",
@@ -901,6 +905,53 @@ class ResumableCurrentTaskPacking:
         connection.execute("PRAGMA synchronous=FULL")
         return connection
 
+    @staticmethod
+    def _insert_document_rows(
+        connection: sqlite3.Connection,
+        task_rows: Sequence[tuple[object, ...]],
+        rejection_rows: Sequence[tuple[object, ...]],
+        document_row: tuple[str, int, int],
+        *,
+        retry_locked: bool,
+    ) -> None:
+        retry_index = 0
+        while True:
+            try:
+                connection.executemany(
+                    """INSERT INTO tasks(
+                           example_id, document_id, language, family, record_index, split,
+                           input_ids_zlib, token_count, loss_start_index,
+                           semantic_spec_sha256, parser_runtime_identity_sha256,
+                           source_sha256
+                       ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    task_rows,
+                )
+                connection.executemany(
+                    "INSERT INTO rejections VALUES(?,?,?,?,?,?)", rejection_rows
+                )
+                connection.execute(
+                    "INSERT INTO documents VALUES(?,?,?)",
+                    document_row,
+                )
+                if retry_locked:
+                    connection.commit()
+                return
+            except sqlite3.OperationalError as error:
+                connection.rollback()
+                lock_error = "locked" in str(error).casefold()
+                if (
+                    not retry_locked
+                    or not lock_error
+                    or retry_index >= TASK_DATABASE_LOCK_RETRY_LIMIT
+                ):
+                    raise
+                delay = min(
+                    TASK_DATABASE_LOCK_RETRY_INITIAL_SECONDS * (2**retry_index),
+                    TASK_DATABASE_LOCK_RETRY_MAX_SECONDS,
+                )
+                retry_index += 1
+                time.sleep(delay)
+
     def _admission_identity(self) -> tuple[dict[str, str], int, int]:
         connection = self._ro_connect(self.admission_database)
         try:
@@ -1130,33 +1181,25 @@ class ResumableCurrentTaskPacking:
                     ]
                 elif self._eligible_ids is not None:
                     examples = [{**item, "split": "train"} for item in examples]
-                task_connection.executemany(
-                    """INSERT INTO tasks(
-                           example_id, document_id, language, family, record_index, split,
-                           input_ids_zlib, token_count, loss_start_index,
-                           semantic_spec_sha256, parser_runtime_identity_sha256,
-                           source_sha256
-                       ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    [
-                        (
-                            item["example_id"],
-                            item["document_id"],
-                            item["language"],
-                            item["family"],
-                            item["record_index"],
-                            item["split"],
-                            zlib.compress(
-                                _encode_u16(cast(list[int], item["input_ids"])), 6
-                            ),
-                            len(cast(list[int], item["input_ids"])),
-                            item["loss_start_index"],
-                            item["semantic_spec_sha256"],
-                            item["parser_runtime_identity_sha256"],
-                            item["source_sha256"],
-                        )
-                        for item in examples
-                    ],
-                )
+                task_rows = [
+                    (
+                        item["example_id"],
+                        item["document_id"],
+                        item["language"],
+                        item["family"],
+                        item["record_index"],
+                        item["split"],
+                        zlib.compress(
+                            _encode_u16(cast(list[int], item["input_ids"])), 6
+                        ),
+                        len(cast(list[int], item["input_ids"])),
+                        item["loss_start_index"],
+                        item["semantic_spec_sha256"],
+                        item["parser_runtime_identity_sha256"],
+                        item["source_sha256"],
+                    )
+                    for item in examples
+                ]
                 rejection_rows = []
                 for item in rejections:
                     rejection_id = hashlib.sha256(
@@ -1172,16 +1215,16 @@ class ResumableCurrentTaskPacking:
                             item["reason_code"],
                         )
                     )
-                task_connection.executemany(
-                    "INSERT INTO rejections VALUES(?,?,?,?,?,?)", rejection_rows
-                )
-                task_connection.execute(
-                    "INSERT INTO documents VALUES(?,?,?)",
+                self._insert_document_rows(
+                    task_connection,
+                    task_rows,
+                    rejection_rows,
                     (document_id, len(examples), len(rejections)),
+                    retry_locked=worker_count > 1,
                 )
                 completed_ids.add(document_id)
                 processed += 1
-                if processed % commit_interval == 0:
+                if worker_count == 1 and processed % commit_interval == 0:
                     task_connection.commit()
             task_connection.commit()
             processed_total = task_connection.execute(
