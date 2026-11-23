@@ -90,12 +90,26 @@ def _read_loss_mask_summary(
                                THEN 1 ELSE 0 END)
                FROM tasks GROUP BY split, language, family"""
         ).fetchall()
-        document_ids = {
-            str(row[0])
-            for row in connection.execute(
-                "SELECT DISTINCT document_id FROM tasks ORDER BY document_id"
+        has_document_ledger = (
+            connection.execute(
+                "SELECT 1 FROM sqlite_schema "
+                "WHERE type='table' AND name='documents'"
+            ).fetchone()
+            is not None
+        )
+        if has_document_ledger:
+            document_rows = list(
+                connection.execute(
+                    "SELECT document_id,task_count FROM documents "
+                    "WHERE task_count>0 ORDER BY document_id"
+                )
             )
-        }
+        else:
+            document_rows = list(
+                connection.execute(
+                    "SELECT DISTINCT document_id,NULL FROM tasks ORDER BY document_id"
+                )
+            )
     finally:
         connection.close()
     cells: Counter[tuple[str, str]] = Counter()
@@ -124,6 +138,12 @@ def _read_loss_mask_summary(
             if minimum_target is None
             else min(minimum_target, int(cell_minimum))
         )
+    document_ids = {str(row[0]) for row in document_rows}
+    declared_task_count = (
+        sum(int(row[1]) for row in document_rows) if has_document_ledger else example_count
+    )
+    if len(document_ids) != len(document_rows) or declared_task_count != example_count:
+        raise ValueError("task document accounting is inconsistent")
     if minimum_target is None or minimum_target < 1:
         raise ValueError("packed causal loss mask boundary is inconsistent")
     return (

@@ -14,6 +14,7 @@ from bosscrafts_model.resumable_task_packing import ResumableCurrentTaskPacking
 from bosscrafts_model.task_loss_mask_audit import (
     TaskLossMaskAuditor,
     _assert_cross_split_example_ids_disjoint,
+    _read_loss_mask_summary,
 )
 from bosscrafts_model.tokenizer import NativeTokenizerBinding
 
@@ -122,6 +123,37 @@ def test_streaming_cross_split_identity_check_rejects_overlap(tmp_path: Path) ->
         _assert_cross_split_example_ids_disjoint(
             databases, {"train": 2, "validation": 2, "test": 2}
         )
+
+
+def test_loss_mask_summary_rejects_document_task_count_mismatch(tmp_path: Path) -> None:
+    database = tmp_path / "tasks.sqlite"
+    connection = sqlite3.connect(database)
+    try:
+        connection.executescript(
+            """
+            CREATE TABLE tasks(
+                split TEXT NOT NULL,
+                language TEXT NOT NULL,
+                family TEXT NOT NULL,
+                document_id TEXT NOT NULL,
+                token_count INTEGER NOT NULL,
+                loss_start_index INTEGER NOT NULL
+            );
+            CREATE TABLE documents(
+                document_id TEXT PRIMARY KEY,
+                task_count INTEGER NOT NULL,
+                rejected_count INTEGER NOT NULL
+            );
+            INSERT INTO tasks VALUES('train','python','code_to_semantic','doc',8,4);
+            INSERT INTO documents VALUES('doc',2,0);
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(ValueError, match="document accounting"):
+        _read_loss_mask_summary(database)
 
 
 def test_materializes_complete_disjoint_loss_mask_receipt(tmp_path: Path):
