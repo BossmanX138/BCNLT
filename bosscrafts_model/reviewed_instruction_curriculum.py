@@ -11,6 +11,7 @@ import tempfile
 import unicodedata
 import zlib
 from collections import Counter, defaultdict
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -38,6 +39,7 @@ INSTRUCTION_SEMANTIC_SPEC_SHA256 = hashlib.sha256(
 ).hexdigest()
 _SPLITS = ("train", "validation", "test")
 _MAX_SOURCE_BYTES = 512 * 1024 * 1024
+_JSON_STREAM_CHUNK_CHARACTERS = 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,12 +101,6 @@ def _hash_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _source_content_digest(value: object) -> str:
-    """Reproduce the Wizard-Phi manifest's JSON-content digest exactly."""
-    serialized = json.dumps(value, sort_keys=True, ensure_ascii=False)
-    return _hash_text(serialized)
-
-
 def _load_json(path: Path) -> object:
     if not path.is_file():
         raise ValueError(f"reviewed instruction source does not exist: {path.name}")
@@ -115,6 +111,92 @@ def _load_json(path: Path) -> object:
         with path.open("r", encoding="utf-8") as handle:
             return json.load(handle)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError(
+            f"reviewed instruction source JSON is invalid: {path.name}"
+        ) from error
+
+
+def _iter_json_array(path: Path) -> Iterator[object]:
+    """Stream one top-level JSON array without materializing the source file."""
+    if not path.is_file():
+        raise ValueError(f"reviewed instruction source does not exist: {path.name}")
+    size = path.stat().st_size
+    if not 2 <= size <= _MAX_SOURCE_BYTES:
+        raise ValueError(f"reviewed instruction source size is invalid: {path.name}")
+
+    decoder = json.JSONDecoder()
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            buffer = ""
+            position = 0
+            exhausted = False
+
+            def refill() -> None:
+                nonlocal buffer, position, exhausted
+                chunk = handle.read(_JSON_STREAM_CHUNK_CHARACTERS)
+                buffer = buffer[position:] + chunk
+                position = 0
+                exhausted = not chunk
+
+            def skip_whitespace() -> None:
+                nonlocal position
+                while True:
+                    while position < len(buffer) and buffer[position].isspace():
+                        position += 1
+                    if position < len(buffer) or exhausted:
+                        return
+                    refill()
+
+            refill()
+            skip_whitespace()
+            if position >= len(buffer) or buffer[position] != "[":
+                raise ValueError(
+                    f"reviewed instruction source is not an array: {path.name}"
+                )
+            position += 1
+            first = True
+            while True:
+                skip_whitespace()
+                if position >= len(buffer):
+                    raise ValueError(
+                        f"reviewed instruction source JSON is invalid: {path.name}"
+                    )
+                if buffer[position] == "]":
+                    position += 1
+                    break
+                if not first:
+                    if buffer[position] != ",":
+                        raise ValueError(
+                            f"reviewed instruction source JSON is invalid: {path.name}"
+                        )
+                    position += 1
+                    skip_whitespace()
+
+                while True:
+                    try:
+                        value, end = decoder.raw_decode(buffer, position)
+                    except json.JSONDecodeError as error:
+                        if exhausted:
+                            raise ValueError(
+                                f"reviewed instruction source JSON is invalid: {path.name}"
+                            ) from error
+                        refill()
+                        continue
+                    position = end
+                    yield value
+                    first = False
+                    break
+
+            while True:
+                skip_whitespace()
+                if position < len(buffer):
+                    raise ValueError(
+                        f"reviewed instruction source JSON has trailing data: {path.name}"
+                    )
+                if exhausted:
+                    return
+                refill()
+    except UnicodeDecodeError as error:
         raise ValueError(
             f"reviewed instruction source JSON is invalid: {path.name}"
         ) from error
@@ -335,22 +417,27 @@ def build_reviewed_instruction_curriculum(
     candidates: list[_Candidate] = []
     source_ids: set[str] = set()
     for origin_split, path in (("train", train_path), ("eval", eval_path)):
-        raw_rows = _load_json(path)
-        if type(raw_rows) is not list:
-            raise ValueError(f"reviewed instruction {origin_split} source is not an array")
-        if _source_content_digest(raw_rows) != source_hashes[origin_split]:
-            raise ValueError(
-                f"reviewed instruction {origin_split} source hash mismatch"
+        content_digest = hashlib.sha256()
+        content_digest.update(b"[")
+        row_count = 0
+        for raw_row in _iter_json_array(path):
+            if row_count:
+                content_digest.update(b", ")
+            content_digest.update(
+                json.dumps(raw_row, sort_keys=True, ensure_ascii=False).encode("utf-8")
             )
-        expected_count = int(cast(int, manifest[origin_split]))
-        if len(raw_rows) != expected_count:
-            raise ValueError(f"reviewed instruction {origin_split} count mismatch")
-        for raw_row in raw_rows:
+            row_count += 1
             candidate = _candidate_from_row(raw_row, origin_split=origin_split)
             if candidate.source_id in source_ids:
                 raise ValueError("reviewed instruction source ID is duplicated")
             source_ids.add(candidate.source_id)
             candidates.append(candidate)
+        content_digest.update(b"]")
+        if content_digest.hexdigest() != source_hashes[origin_split]:
+            raise ValueError(f"reviewed instruction {origin_split} source hash mismatch")
+        expected_count = int(cast(int, manifest[origin_split]))
+        if row_count != expected_count:
+            raise ValueError(f"reviewed instruction {origin_split} count mismatch")
 
     rejection_counts: Counter[str] = Counter()
     screened, rejected = _screen_prompt_groups(candidates, rejection_counts)

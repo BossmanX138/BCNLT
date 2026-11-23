@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+import bosscrafts_model.reviewed_instruction_curriculum as curriculum_module
 from bosscrafts_model.resumable_task_packing import ResumableTaskDataset
 from bosscrafts_model.reviewed_instruction_curriculum import (
     INSTRUCTION_RESPONSE_FAMILY,
@@ -89,6 +90,20 @@ def test_cli_runs_from_project_root() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert "--source-root" in result.stdout
+
+
+def test_streams_json_array_across_small_read_boundaries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "rows.json"
+    rows = [
+        {"text": "alpha" * 20, "index": 1},
+        {"text": "beta" * 20, "index": 2},
+    ]
+    source.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    monkeypatch.setattr(curriculum_module, "_JSON_STREAM_CHUNK_CHARACTERS", 17)
+
+    assert list(curriculum_module._iter_json_array(source)) == rows
 
 
 def test_builds_text_mode_curriculum_and_rejects_cross_split_overlap(

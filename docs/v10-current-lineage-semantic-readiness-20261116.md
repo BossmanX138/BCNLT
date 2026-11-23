@@ -82,6 +82,31 @@ The train task database remains resumable and in progress. It must complete its
 own deferred cell index, built-in audit, and independently reproduced audit
 before it can be used to build the mixed training curriculum.
 
+## Reviewed instruction runtime repair
+
+The prior `reviewed-instruction-v4` database retained parser-runtime identity
+`7440ef62...`, so the repaired runtime correctly rejected it even though its
+tokenizer and vocabulary identities still matched. The immutable reviewed
+source at `D:\Wizard-Phi-3.5-v0.1\datasets\ready-v02` was rebuilt without new
+semantic selection into:
+
+- `D:\BCNLT-runs\curricula\reviewed-instruction-v5-runtime-repair\curriculum.sqlite`
+- `D:\BCNLT-runs\audits-current-8bdb702\reviewed-instruction-v5-runtime-repair-task-audit.json`
+
+The rebuild reproduces the prior content SHA-256
+`bcd57661933cb186e7df19d45556bea9d0342e7d81a310e49cc72f0a5beec346`,
+policy SHA-256
+`e584b654f80c4ff038dac6deca3930bd977145bb9b2c6b751ee1cfac62a0ac46`,
+57,943-example count, split counts, source counts, and rejection counts. Its new
+database identity is
+`3e9abdbcddd528f0bcb92ba5f383d45aeaa5ea61e9b31aeca9d35a054d1c185a`,
+its parser-runtime identity is the current
+`4cc9aac31f89be5c4e3f77ef61eabeea229dfa6db4c1dc80bd578a8f2d9a7917`,
+and the independent audit passed with manifest SHA-256
+`6135b95853ef2e23f0a5d674a473402bfcbf3736227a8db2ca556630b13fc6f8`.
+The receipt file SHA-256 is
+`a46f9d41fab6632e9749bb28a70c558f3728e7706fb7811963bbe8a069a6f7a3`.
+
 ## Remaining gate order
 
 1. Finish packing the eligible train documents with the pinned `compact_v2`
