@@ -8,7 +8,6 @@ from .adapters.spec import IdentifierRoleRule, LanguageSemanticSpec, NodeRule, S
 from .ir import COMMON_CODING_CONCEPTS
 from .languages import CANONICAL_LANGUAGE_IDS, LANGUAGE_BY_ID
 
-
 COMMON_CORE_REGISTRY_VERSION = "bcnlt-common-core-v1"
 REQUIRED_GRAMMAR_CONCEPTS = frozenset(
     {
@@ -91,7 +90,7 @@ _NODES = {
         typescript=("function_declaration", "method_definition", "arrow_function", "function_expression"), c=("function_definition",),
         cpp=("function_definition", "lambda_expression"), c_sharp=("method_declaration", "constructor_declaration", "lambda_expression"),
         java=("method_declaration", "constructor_declaration", "lambda_expression"), go=("function_declaration", "method_declaration", "func_literal"),
-        rust=("function_item", "closure_expression"), php=("function_definition", "method_declaration", "anonymous_function"),
+        rust=("function_item", "closure_expression"), php=("function_definition", "method_declaration", "anonymous_function", "arrow_function"),
         ruby=("method", "singleton_method", "lambda"), kotlin=("function_declaration", "lambda_literal"),
         swift=("function_declaration", "initializer_declaration", "lambda_literal"), bash=("function_definition",),
     ),

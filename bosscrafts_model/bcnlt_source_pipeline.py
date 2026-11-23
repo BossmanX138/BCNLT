@@ -66,7 +66,7 @@ CURRENT_RUNTIME_SPEC_SHA256 = {
     "java": "c20f4e36ab239b8ed7f75428587f72d56f7e85c2f0a46a5a38a853f0ba033e4b",
     "javascript": "45cabfe829b613869c0fc49a72fb78a5e58dd9b3d7449fb61560d6e593253c64",
     "kotlin": "02568b22e74dc1a05d3c4cf84c23808eec19f818ee312f497107782bbf3be9a5",
-    "php": "6f5aaff7714b1893ff7966d671700d6fc55a641b7665dcdd98701e11904e57ed",
+    "php": "04fb81c46fce64995672f19bd48b7b57ff0f74f845794fefdcab740dd6728f11",
     "python": "9dec2e498ca82f936d4d454a650de48f55dcea094000f27507dbbaf0cd408381",
     "ruby": "59ecd18636cc23219ce4e0a50bebe5b5904db420dca47b2666e108387d77ae57",
     "rust": "d0df302624a6374508c715ea95e4351a5479e7fbced804784b0c19df4831d66b",
@@ -80,7 +80,7 @@ _SIDECAR = _RUNTIME_ROOT / "bcnlt_source_sidecar.py"
 _DEFAULT_PYTHON_313 = Path(sys.executable).resolve()
 _RUNTIME_MANIFEST = _RUNTIME_ROOT / "runtime-manifest.json"
 _EXPECTED_RUNTIME_IDENTITY = {
-    "source": "341613f6b7d732f9f6e653a3cf1ae378087aabff48755c3b39d7189893cd054e",
+    "source": "d7468d5e308a7aa1d4f4bbb304ae2d93f237d67c067fca2d5976a2269f1938e5",
     "sidecar": "5eb8df0226ada9b5ba9d7d5b845d86abb6b4dbd22423c35a7ba6bff1f31be1f3",
     "tree_sitter": "d8efa5533a1c79cc404df3a0ff03d76626ad50d54b74d97e4cf6e30ab85bebe4",
     "language_pack": "18fda57fbe2f52f85cf09fd1fc5af6509bfe0a8c6d3d425cafe3d7b63f8dca6e",
@@ -88,10 +88,10 @@ _EXPECTED_RUNTIME_IDENTITY = {
     "site_packages": "3daa4575bdd757c649febf2c8514c80ab1311641c0205463b1c89b1e928b262c",
 }
 _EXPECTED_RUNTIME_MANIFEST_SHA256 = (
-    "f11a9408ac6fb465a0eec62f3b0c300a7244395fbd0822407090873baba43c67"
+    "c976fa02440d2b78bfcf0275a795ad01386d64c372ce4c75242304adaeb7ce01"
 )
 PARSER_RUNTIME_IDENTITY_SHA256 = (
-    "4cc9aac31f89be5c4e3f77ef61eabeea229dfa6db4c1dc80bd578a8f2d9a7917"
+    "18992265d9cc6337aac12cab6c88307cbe5a1b855c39844e7681c6f7df2885b8"
 )
 PARSER_RUNTIME_NOT_APPLICABLE = "not_applicable"
 _FIELD_ORDER = (

@@ -442,6 +442,225 @@ def test_raw_ast_witness_places_arrow_parameter_and_return_inside_arrow_scope():
     assert by_id["return"]["scope_match"] is True
 
 
+def _source_span(source: str, needle: str, occurrence: int = 0) -> list[int]:
+    offset = -1
+    for _ in range(occurrence + 1):
+        offset = source.index(needle, offset + 1)
+    prefix = source[:offset]
+    line = prefix.count("\n") + 1
+    column = len(prefix.rsplit("\n", 1)[-1])
+    return [line, column, line, column + len(needle)]
+
+
+@pytest.mark.parametrize(
+    ("language", "source", "needle", "relation", "scope"),
+    (
+        (
+            "python",
+            "def f(value=old,*items):\n return value+len(items)\n",
+            "value",
+            "parameters.binding",
+            "module.f",
+        ),
+        (
+            "c",
+            "int f(const char *name){ return name[0]; }\n",
+            "name",
+            "parameter_declaration.binding",
+            "module.f",
+        ),
+        (
+            "c_sharp",
+            "class A { int F(params int[] zs) { return zs.Length; } }",
+            "zs",
+            "parameter_list.binding",
+            "module.A.F",
+        ),
+        (
+            "java",
+            "class A { int f(int... values){ return values[0]; } }",
+            "values",
+            "spread_parameter.binding",
+            "module.A.f",
+        ),
+        (
+            "java",
+            "class A { void f(){ var g = item -> item+1; } }",
+            "item",
+            "lambda_expression.parameter",
+            "module.A.f.lambda_expression",
+        ),
+        (
+            "rust",
+            "fn f((left,right):(i32,i32))->i32{left+right}\n",
+            "left",
+            "parameter.pattern_binding",
+            "module.f",
+        ),
+        (
+            "php",
+            "<?php function f(int &...$ys){ return count($ys); }",
+            "$ys",
+            "variadic_parameter.binding",
+            "module.f",
+        ),
+        (
+            "python",
+            "f=lambda x:x+1\n",
+            "x+1",
+            "lambda.implicit_return",
+            "module.lambda",
+        ),
+        (
+            "c_sharp",
+            "class A { int F(int x) => x*2; }",
+            "x*2",
+            "method_declaration.implicit_return",
+            "module.A.F",
+        ),
+        (
+            "java",
+            "class A { void f(){ var g = x -> x*3; } }",
+            "x*3",
+            "lambda_expression.implicit_return",
+            "module.A.f.lambda_expression",
+        ),
+        (
+            "rust",
+            "fn f(){ let g=|x:i32| x*4; }\n",
+            "x*4",
+            "closure_expression.implicit_return",
+            "module.f.closure_expression",
+        ),
+        (
+            "php",
+            "<?php $f=fn($x)=>$x*5;",
+            "$x*5",
+            "arrow_function.implicit_return",
+            "module.arrow_function",
+        ),
+        (
+            "ruby",
+            "def f(x)\n x*6\nend\n",
+            "x*6",
+            "method.implicit_return",
+            "module.f",
+        ),
+        (
+            "kotlin",
+            "fun f(x:Int):Int=x*7\n",
+            "x*7",
+            "function_declaration.implicit_return",
+            "module.f",
+        ),
+        (
+            "swift",
+            "func f(_ x:Int)->Int { x*8 }\n",
+            "x*8",
+            "function_declaration.implicit_return",
+            "module.f",
+        ),
+        (
+            "c_sharp",
+            "class A { void F(){ System.Func<int,int> g=x=>x*2; } }",
+            "x",
+            "lambda_expression.parameter",
+            "module.A.F.lambda_expression",
+        ),
+        (
+            "kotlin",
+            "val f={ x:Int -> x*9 }\n",
+            "x*9",
+            "lambda_literal.implicit_return",
+            "module.lambda_literal",
+        ),
+        (
+            "swift",
+            "let f={ (value:Int) -> Int in value }\n",
+            "value",
+            "lambda_parameter.binding",
+            "module.lambda_literal",
+        ),
+        (
+            "swift",
+            "let f={ (value:Int) -> Int in value*12 }\n",
+            "value*12",
+            "lambda_literal.implicit_return",
+            "module.lambda_literal",
+        ),
+        (
+            "rust",
+            "fn f(){let g=|x:i32| {x*10};}\n",
+            "x*10",
+            "closure_expression.implicit_return",
+            "module.f.closure_expression",
+        ),
+        (
+            "ruby",
+            "f=->(value){value*11}\n",
+            "value",
+            "lambda_parameters.binding",
+            "module.lambda",
+        ),
+        (
+            "ruby",
+            "f=->(value){value*11}\n",
+            "value*11",
+            "lambda.implicit_return",
+            "module.lambda",
+        ),
+    ),
+)
+def test_raw_ast_witness_validates_complex_bindings_and_implicit_returns(
+    language: str,
+    source: str,
+    needle: str,
+    relation: str,
+    scope: str,
+):
+    response = _feature().RawAstWitnessClient().inspect(
+        source,
+        language=language,
+        path=f"complex.{language}",
+        dialect=None,
+        queries=(
+            {
+                "query_id": "semantic",
+                "span": _source_span(source, needle),
+                "ast_relation": relation,
+                "scope": scope,
+            },
+        ),
+    )
+
+    witness = response["witnesses"][0]
+    assert witness["relation_span_match"] is True
+    assert witness["derived_scope"] == scope
+    assert witness["scope_match"] is True
+
+
+def test_raw_ast_witness_rejects_type_and_default_expression_as_parameter_bindings():
+    source = "def f(value=old):\n return value\n"
+    response = _feature().RawAstWitnessClient().inspect(
+        source,
+        language="python",
+        path="negative.py",
+        dialect=None,
+        queries=(
+            {
+                "query_id": "default-is-not-binding",
+                "span": _source_span(source, "old"),
+                "ast_relation": "parameters.binding",
+                "scope": "module.f",
+            },
+        ),
+    )
+
+    witness = response["witnesses"][0]
+    assert witness["relation_span_match"] is False
+    assert witness["scope_match"] is False
+
+
 def test_raw_ast_witness_distinguishes_scope_entry_parent_from_exit_owner():
     response = _feature().RawAstWitnessClient().inspect(
         "def f():\n    return 1\n",

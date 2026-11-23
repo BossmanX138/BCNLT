@@ -389,7 +389,11 @@ class TreeSitterSemanticEngine:
             definition_owned_nodes.discard(key)
             mapped_nodes.discard(key)
 
-        def bind_ruby_parameter(binding: Any) -> bool:
+        def bind_ruby_parameter(
+            binding: Any,
+            *,
+            relation: str = "method_parameters.binding",
+        ) -> bool:
             """Define every name owned by a Ruby parameter pattern."""
             binding_type = str(binding.type)
             key = node_key(binding)
@@ -409,7 +413,7 @@ class TreeSitterSemanticEngine:
                     surface=name,
                     event="DEFINE",
                     unit_span=binding_span,
-                    relation="method_parameters.binding",
+                    relation=relation,
                     symbol_id=symbol_id,
                     ir=self._core.variable(name),
                 )
@@ -435,7 +439,7 @@ class TreeSitterSemanticEngine:
                 walk(value)
             name_node = binding.child_by_field_name("name")
             if name_node is not None:
-                bind_ruby_parameter(name_node)
+                bind_ruby_parameter(name_node, relation=relation)
             for child in binding.named_children:
                 child_key = node_key(child)
                 if (
@@ -443,9 +447,190 @@ class TreeSitterSemanticEngine:
                     or (name_node is not None and child_key == node_key(name_node))
                 ):
                     continue
-                if not bind_ruby_parameter(child):
+                if not bind_ruby_parameter(child, relation=relation):
                     walk(child)
             return True
+
+        def define_binding(binding: Any, *, relation: str) -> None:
+            """Define one grammar-proven identifier without widening its surface."""
+            key = node_key(binding)
+            name = text(binding)
+            definition_owned_nodes.add(key)
+            mapped_nodes.add(key)
+            if name == "_":
+                return
+            binding_span = span(binding)
+            symbol_id = symbols.define(name, binding_span)
+            document.index.define(
+                document.path,
+                symbol_id,
+                name,
+                binding_span,
+            )
+            emit(
+                surface=name,
+                event="DEFINE",
+                unit_span=binding_span,
+                relation=relation,
+                symbol_id=symbol_id,
+                ir=self._core.variable(name),
+            )
+
+        def bind_python_parameter(binding: Any, *, relation: str) -> bool:
+            """Bind Python parameters while evaluating defaults before their names."""
+            binding_type = str(binding.type)
+            key = node_key(binding)
+            if binding_type == "identifier":
+                direct_relation = (
+                    "identifier.parameter"
+                    if relation == "parameters.binding"
+                    else relation
+                )
+                define_binding(binding, relation=direct_relation)
+                return True
+            if binding_type in {"list_splat_pattern", "dictionary_splat_pattern"}:
+                mapped_nodes.add(key)
+                identifiers = [
+                    child
+                    for child in binding.named_children
+                    if str(child.type) == "identifier"
+                ]
+                if identifiers:
+                    define_binding(identifiers[-1], relation=relation)
+                return True
+            if binding_type not in {
+                "default_parameter",
+                "typed_default_parameter",
+                "typed_parameter",
+            }:
+                return False
+            mapped_nodes.add(key)
+            value = binding.child_by_field_name("value")
+            if value is not None:
+                walk(value)
+            type_node = binding.child_by_field_name("type")
+            if type_node is not None:
+                walk(type_node)
+            name_node = binding.child_by_field_name("name")
+            if name_node is None:
+                name_node = next(
+                    (
+                        child
+                        for child in binding.named_children
+                        if (
+                            type_node is None
+                            or not (
+                                int(type_node.start_byte) <= int(child.start_byte)
+                                and int(child.end_byte) <= int(type_node.end_byte)
+                            )
+                        )
+                        and (
+                            value is None
+                            or not (
+                                int(value.start_byte) <= int(child.start_byte)
+                                and int(child.end_byte) <= int(value.end_byte)
+                            )
+                        )
+                    ),
+                    None,
+                )
+            if name_node is not None:
+                if str(name_node.type) == "identifier":
+                    define_binding(name_node, relation=relation)
+                else:
+                    bind_python_parameter(name_node, relation=relation)
+            return True
+
+        def bind_c_declarator(binding: Any) -> bool:
+            """Resolve the identifier owned by a C/C++ parameter declarator."""
+            binding_type = str(binding.type)
+            key = node_key(binding)
+            mapped_nodes.add(key)
+            definition_owned_nodes.add(key)
+            if binding_type == "identifier":
+                define_binding(binding, relation="parameter_declaration.binding")
+                return True
+            nested = binding.child_by_field_name("declarator")
+            if nested is None and binding_type in {
+                "abstract_pointer_declarator",
+                "array_declarator",
+                "parenthesized_declarator",
+                "pointer_declarator",
+                "reference_declarator",
+            }:
+                nested = next(
+                    (child for child in binding.named_children if str(child.type) != "comment"),
+                    None,
+                )
+            return nested is not None and bind_c_declarator(nested)
+
+        def bind_rust_pattern(binding: Any) -> bool:
+            """Bind Rust names while excluding enum, struct, and field labels."""
+            binding_type = str(binding.type)
+            key = node_key(binding)
+            if binding_type in {"identifier", "shorthand_field_identifier"}:
+                define_binding(binding, relation="parameter.pattern_binding")
+                return True
+            supported = {
+                "captured_pattern",
+                "mut_pattern",
+                "ref_pattern",
+                "reference_pattern",
+                "slice_pattern",
+                "struct_pattern",
+                "tuple_pattern",
+                "tuple_struct_pattern",
+            }
+            if binding_type not in supported:
+                return False
+            mapped_nodes.add(key)
+            definition_owned_nodes.add(key)
+            if binding_type == "struct_pattern":
+                children = [
+                    child
+                    for child in binding.named_children
+                    if str(child.type) == "field_pattern"
+                ]
+            elif binding_type == "tuple_struct_pattern":
+                type_node = binding.child_by_field_name("type")
+                children = [
+                    child
+                    for child in binding.named_children
+                    if type_node is None or node_key(child) != node_key(type_node)
+                ]
+            elif binding_type == "captured_pattern":
+                children = [
+                    child
+                    for child in binding.named_children
+                    if str(child.type) == "identifier"
+                ]
+            else:
+                children = list(binding.named_children)
+            for child in children:
+                if str(child.type) == "field_pattern":
+                    nested = child.child_by_field_name("pattern")
+                    shorthand = child.child_by_field_name("name") if nested is None else None
+                    if nested is not None:
+                        bind_rust_pattern(nested)
+                    elif shorthand is not None:
+                        bind_rust_pattern(shorthand)
+                    mapped_nodes.add(node_key(child))
+                    definition_owned_nodes.add(node_key(child))
+                else:
+                    bind_rust_pattern(child)
+            return True
+
+        def implicit_return(owner: Any, target: Any | None, *, relation: str) -> None:
+            """Emit an implicit return only for one exact grammar-owned expression."""
+            if target is None:
+                return
+            emit(
+                surface=text(target),
+                event="RETURN",
+                unit_span=span(target),
+                relation=relation,
+                ir=self._core.return_value(),
+            )
 
         def walk(node: Any) -> None:
             nonlocal total_named_nodes, scope_enters, scope_exits
@@ -468,11 +653,39 @@ class TreeSitterSemanticEngine:
             if (
                 is_named
                 and document.language == "ruby"
+                and str(node.type) == "lambda_parameters"
+            ):
+                mapped_nodes.add(key)
+                for child in node.named_children:
+                    if not bind_ruby_parameter(
+                        child,
+                        relation="lambda_parameters.binding",
+                    ):
+                        walk(child)
+                return
+
+            if (
+                is_named
+                and document.language == "ruby"
                 and str(node.type) == "method_parameters"
             ):
                 mapped_nodes.add(key)
                 for child in node.named_children:
                     if not bind_ruby_parameter(child):
+                        walk(child)
+                return
+
+            if (
+                is_named
+                and document.language == "python"
+                and str(node.type) in {"parameters", "lambda_parameters"}
+            ):
+                mapped_nodes.add(key)
+                for child in node.named_children:
+                    if not bind_python_parameter(
+                        child,
+                        relation=f"{node.type}.binding",
+                    ):
                         walk(child)
                 return
 
@@ -565,12 +778,7 @@ class TreeSitterSemanticEngine:
 
                 if node_type in {"required_parameter", "optional_parameter"}:
                     binding = node.child_by_field_name("pattern")
-                    if binding is not None and str(binding.type) in {
-                        "object_pattern",
-                        "array_pattern",
-                        "rest_pattern",
-                        "assignment_pattern",
-                    }:
+                    if binding is not None:
                         default = node.child_by_field_name("value")
                         if default is not None:
                             walk(default)
@@ -586,6 +794,65 @@ class TreeSitterSemanticEngine:
                         )
                         js_pattern_definition = True
             roles: dict[str, tuple[str, str | None, Any, str, str]] = {}
+            owned_parameter_definition = False
+
+            if (
+                document.language in {"c", "cpp"}
+                and str(node.type) == "parameter_declaration"
+            ):
+                declarator = node.child_by_field_name("declarator")
+                if declarator is not None:
+                    mapped_nodes.add(key)
+                    bind_c_declarator(declarator)
+                    prewalked_child_keys.add(node_key(declarator))
+                    node_role_rules = tuple(
+                        rule for rule in node_role_rules if rule.role != "definition"
+                    )
+                    owned_parameter_definition = True
+
+            if document.language == "c_sharp" and str(node.type) == "parameter_list":
+                for binding in node.children_by_field_name("name"):
+                    define_binding(binding, relation="parameter_list.binding")
+                    prewalked_child_keys.add(node_key(binding))
+
+            if document.language == "java" and str(node.type) == "spread_parameter":
+                declarator = next(
+                    (
+                        child
+                        for child in node.named_children
+                        if str(child.type) == "variable_declarator"
+                    ),
+                    None,
+                )
+                binding = (
+                    declarator.child_by_field_name("name")
+                    if declarator is not None
+                    else None
+                )
+                if binding is not None:
+                    mapped_nodes.add(key)
+                    mapped_nodes.add(node_key(declarator))
+                    definition_owned_nodes.add(node_key(declarator))
+                    define_binding(binding, relation="spread_parameter.binding")
+                    prewalked_child_keys.add(node_key(declarator))
+
+            if document.language == "rust" and str(node.type) == "parameter":
+                pattern = node.child_by_field_name("pattern")
+                if pattern is not None and bind_rust_pattern(pattern):
+                    mapped_nodes.add(key)
+                    prewalked_child_keys.add(node_key(pattern))
+                    node_role_rules = tuple(
+                        rule for rule in node_role_rules if rule.role != "definition"
+                    )
+                    owned_parameter_definition = True
+
+            if document.language == "php" and str(node.type) == "variadic_parameter":
+                binding = node.child_by_field_name("name")
+                if binding is not None:
+                    mapped_nodes.add(key)
+                    define_binding(binding, relation="variadic_parameter.binding")
+                    prewalked_child_keys.add(node_key(binding))
+
             go_parameter = (
                 document.language == "go"
                 and str(node.type)
@@ -755,6 +1022,8 @@ class TreeSitterSemanticEngine:
                 if go_parameter and rule.event == "DEFINE":
                     continue
                 if js_pattern_definition and rule.event == "DEFINE":
+                    continue
+                if owned_parameter_definition and rule.event == "DEFINE":
                     continue
                 surface_node = field(node, rule.surface_field)
                 if (
@@ -949,6 +1218,257 @@ class TreeSitterSemanticEngine:
                     emit(surface=text(body), event="RETURN", unit_span=span(body),
                          relation="arrow_function.implicit_return",
                          ir=self._core.return_value())
+
+            node_type = str(node.type)
+            if document.language == "python" and node_type == "lambda":
+                implicit_return(
+                    node,
+                    node.child_by_field_name("body"),
+                    relation="lambda.implicit_return",
+                )
+
+            if document.language == "c_sharp" and node_type in {
+                "lambda_expression",
+                "method_declaration",
+            }:
+                parameters = node.child_by_field_name("parameters")
+                if (
+                    node_type == "lambda_expression"
+                    and parameters is not None
+                    and str(parameters.type) == "implicit_parameter"
+                ):
+                    define_binding(
+                        parameters,
+                        relation="lambda_expression.parameter",
+                    )
+                    prewalked_child_keys.add(node_key(parameters))
+                body = node.child_by_field_name("body")
+                if body is not None and str(body.type) == "arrow_expression_clause":
+                    target = next(iter(body.named_children), None)
+                    implicit_return(
+                        node,
+                        target,
+                        relation=f"{node_type}.implicit_return",
+                    )
+                elif body is not None and node_type == "lambda_expression" and str(
+                    body.type
+                ) != "block":
+                    implicit_return(
+                        node,
+                        body,
+                        relation="lambda_expression.implicit_return",
+                    )
+
+            if document.language == "java" and node_type == "lambda_expression":
+                parameters = node.child_by_field_name("parameters")
+                if parameters is not None and str(parameters.type) == "identifier":
+                    define_binding(
+                        parameters,
+                        relation="lambda_expression.parameter",
+                    )
+                    prewalked_child_keys.add(node_key(parameters))
+                elif parameters is not None and str(parameters.type) == "inferred_parameters":
+                    mapped_nodes.add(node_key(parameters))
+                    for parameter in parameters.named_children:
+                        if str(parameter.type) == "identifier":
+                            define_binding(
+                                parameter,
+                                relation="lambda_expression.parameter",
+                            )
+                    prewalked_child_keys.add(node_key(parameters))
+                body = node.child_by_field_name("body")
+                if body is not None and str(body.type) != "block":
+                    implicit_return(
+                        node,
+                        body,
+                        relation="lambda_expression.implicit_return",
+                    )
+
+            if document.language == "rust" and node_type == "closure_expression":
+                body = node.child_by_field_name("body")
+                if body is not None and str(body.type) == "block":
+                    children = [
+                        child
+                        for child in body.named_children
+                        if str(child.type) not in {"line_comment", "block_comment"}
+                    ]
+                    tail = children[-1] if children else None
+                    if tail is not None and str(tail.type) == "expression_statement":
+                        tail = (
+                            None
+                            if any(str(child.type) == ";" for child in tail.children)
+                            else next(iter(tail.named_children), None)
+                        )
+                    if (
+                        tail is not None
+                        and str(tail.type) != "return_expression"
+                        and (
+                            str(tail.type).endswith(("_expression", "_literal"))
+                            or str(tail.type) in {"identifier", "block", "self"}
+                        )
+                    ):
+                        implicit_return(
+                            node,
+                            tail,
+                            relation="closure_expression.implicit_return",
+                        )
+                elif body is not None:
+                    implicit_return(
+                        node,
+                        body,
+                        relation="closure_expression.implicit_return",
+                    )
+
+            if document.language == "php" and node_type == "arrow_function":
+                implicit_return(
+                    node,
+                    node.child_by_field_name("body"),
+                    relation="arrow_function.implicit_return",
+                )
+
+            if document.language == "ruby" and node_type == "method":
+                body = node.child_by_field_name("body")
+                tail = next(reversed(body.named_children), None) if body is not None else None
+                if tail is not None and str(tail.type) != "return":
+                    implicit_return(
+                        node,
+                        tail,
+                        relation="method.implicit_return",
+                    )
+
+            if document.language == "ruby" and node_type == "lambda":
+                body = node.child_by_field_name("body")
+                block_body = (
+                    body.child_by_field_name("body")
+                    if body is not None and str(body.type) == "block"
+                    else body
+                )
+                children = list(block_body.named_children) if block_body is not None else []
+                tail = children[-1] if children else None
+                if tail is not None and str(tail.type) != "return":
+                    implicit_return(
+                        node,
+                        tail,
+                        relation="lambda.implicit_return",
+                    )
+
+            if document.language == "kotlin" and node_type == "function_declaration":
+                body = next(
+                    (
+                        child
+                        for child in node.named_children
+                        if str(child.type) == "function_body"
+                    ),
+                    None,
+                )
+                is_expression_body = body is not None and text(body).lstrip().startswith("=")
+                if is_expression_body:
+                    target = next(iter(body.named_children), None) if body is not None else None
+                    implicit_return(
+                        node,
+                        target,
+                        relation="function_declaration.implicit_return",
+                    )
+
+            if document.language == "kotlin" and node_type == "lambda_literal":
+                statements = next(
+                    (
+                        child
+                        for child in node.named_children
+                        if str(child.type) == "statements"
+                    ),
+                    None,
+                )
+                children = list(statements.named_children) if statements is not None else []
+                tail = children[-1] if children else None
+                tail_type = str(tail.type) if tail is not None else ""
+                implicit_return(
+                    node,
+                    tail
+                    if tail_type.endswith(("_expression", "_literal"))
+                    or tail_type
+                    in {
+                        "boolean_literal",
+                        "integer_literal",
+                        "null_literal",
+                        "real_literal",
+                        "simple_identifier",
+                        "string_literal",
+                    }
+                    else None,
+                    relation="lambda_literal.implicit_return",
+                )
+
+            if document.language == "swift" and node_type == "lambda_parameter":
+                binding = next(
+                    (
+                        child
+                        for child in node.children_by_field_name("name")
+                        if str(child.type) == "simple_identifier"
+                    ),
+                    None,
+                )
+                if binding is not None:
+                    define_binding(binding, relation="lambda_parameter.binding")
+                    prewalked_child_keys.add(node_key(binding))
+
+            if document.language == "swift" and node_type == "lambda_literal":
+                statements = next(
+                    (
+                        child
+                        for child in node.named_children
+                        if str(child.type) == "statements"
+                    ),
+                    None,
+                )
+                children = list(statements.named_children) if statements is not None else []
+                tail = children[-1] if children else None
+                tail_type = str(tail.type) if tail is not None else ""
+                if tail is not None and (
+                    tail_type.endswith(("_expression", "_literal"))
+                    or tail_type
+                    in {
+                        "boolean_literal",
+                        "nil",
+                        "simple_identifier",
+                    }
+                ):
+                    implicit_return(
+                        node,
+                        tail,
+                        relation="lambda_literal.implicit_return",
+                    )
+
+            if document.language == "swift" and node_type == "function_declaration":
+                body = node.child_by_field_name("body")
+                statements = (
+                    next(
+                        (
+                            child
+                            for child in body.named_children
+                            if str(child.type) == "statements"
+                        ),
+                        None,
+                    )
+                    if body is not None
+                    else None
+                )
+                expressions = list(statements.named_children) if statements is not None else []
+                expression_type = str(expressions[0].type) if len(expressions) == 1 else ""
+                if len(expressions) == 1 and (
+                    expression_type.endswith(("_expression", "_literal"))
+                    or expression_type
+                    in {
+                        "boolean_literal",
+                        "nil",
+                        "simple_identifier",
+                    }
+                ):
+                    implicit_return(
+                        node,
+                        expressions[0],
+                        relation="function_declaration.implicit_return",
+                    )
 
             # Rust function tails return their final expression without a
             # `return` keyword. Only a direct function-body tail qualifies;

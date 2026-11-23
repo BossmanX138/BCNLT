@@ -20,7 +20,7 @@ os.environ["BCNLT_PARSER_CACHE"] = str(RUNTIME_ROOT / "grammars")
 PROTOCOL = "bosscrafts-raw-ast-witness-v2"
 SIDECAR_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 PARSER_RUNTIME_IDENTITY_SHA256 = (
-    "4cc9aac31f89be5c4e3f77ef61eabeea229dfa6db4c1dc80bd578a8f2d9a7917"
+    "18992265d9cc6337aac12cab6c88307cbe5a1b855c39844e7681c6f7df2885b8"
 )
 MAX_SOURCE_BYTES = 200 * 1024
 MAX_QUERIES = 16_384
@@ -327,7 +327,158 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
                 and is_within(target, left)
                 and any(str(child.type) == ":=" for child in owner.children)
             )
-        if relation == "method_parameters.binding":
+        if relation in {"parameters.binding", "lambda_parameters.binding"}:
+            if target_type != "identifier":
+                return False
+            current: _Node | None = target
+            while current is not None:
+                current_parent = getattr(current, "parent", None)
+                if (
+                    current_parent is not None
+                    and node_key(current_parent) == node_key(owner)
+                ):
+                    break
+                current = getattr(current, "parent", None)
+            if current is None:
+                return False
+            wrapper_type = str(current.type)
+            if wrapper_type == "identifier":
+                return node_key(current) == node_key(target)
+            if wrapper_type in {"list_splat_pattern", "dictionary_splat_pattern"}:
+                return is_within(target, current)
+            if wrapper_type not in {
+                "default_parameter",
+                "typed_default_parameter",
+                "typed_parameter",
+            }:
+                return False
+            name = current.child_by_field_name("name")
+            if name is not None:
+                return node_key(name) == node_key(target)
+            type_node = current.child_by_field_name("type")
+            value = current.child_by_field_name("value")
+            return is_within(target, current) and not (
+                (type_node is not None and is_within(target, type_node))
+                or (value is not None and is_within(target, value))
+            )
+        if relation == "parameter_declaration.binding":
+            declarator = owner.child_by_field_name("declarator")
+            if declarator is None or target_type != "identifier":
+                return False
+
+            def declarator_contains(binding: _Node) -> bool:
+                if str(binding.type) == "identifier":
+                    return node_key(binding) == node_key(target)
+                nested = binding.child_by_field_name("declarator")
+                if nested is None and str(binding.type) in {
+                    "abstract_pointer_declarator",
+                    "array_declarator",
+                    "parenthesized_declarator",
+                    "pointer_declarator",
+                    "reference_declarator",
+                }:
+                    nested = next(
+                        (
+                            child
+                            for child in binding.children
+                            if bool(getattr(child, "is_named", False))
+                            and str(child.type) != "comment"
+                        ),
+                        None,
+                    )
+                return nested is not None and declarator_contains(nested)
+
+            return declarator_contains(declarator)
+        if relation == "parameter_list.binding":
+            return any(
+                node_key(binding) == node_key(target)
+                for binding in owner.children_by_field_name("name")
+            )
+        if relation == "spread_parameter.binding":
+            declarator = next(
+                (
+                    child
+                    for child in owner.children
+                    if bool(getattr(child, "is_named", False))
+                    and str(child.type) == "variable_declarator"
+                ),
+                None,
+            )
+            name = declarator.child_by_field_name("name") if declarator is not None else None
+            return name is not None and node_key(name) == node_key(target)
+        if relation == "variadic_parameter.binding":
+            name = owner.child_by_field_name("name")
+            return name is not None and node_key(name) == node_key(target)
+        if relation == "lambda_expression.parameter":
+            parameters = owner.child_by_field_name("parameters")
+            return (
+                parameters is not None
+                and (
+                    node_key(target) == node_key(parameters)
+                    or (target_type == "identifier" and is_within(target, parameters))
+                )
+            )
+        if relation == "lambda_parameter.binding":
+            return (
+                target_type == "simple_identifier"
+                and any(
+                    node_key(binding) == node_key(target)
+                    for binding in owner.children_by_field_name("name")
+                )
+            )
+        if relation == "parameter.pattern_binding":
+            pattern = owner.child_by_field_name("pattern")
+            if pattern is None or target_type not in {
+                "identifier",
+                "shorthand_field_identifier",
+            }:
+                return False
+
+            def rust_pattern_contains(binding: _Node) -> bool:
+                binding_type = str(binding.type)
+                if binding_type in {"identifier", "shorthand_field_identifier"}:
+                    return node_key(binding) == node_key(target)
+                if binding_type not in {
+                    "captured_pattern",
+                    "field_pattern",
+                    "mut_pattern",
+                    "ref_pattern",
+                    "reference_pattern",
+                    "slice_pattern",
+                    "struct_pattern",
+                    "tuple_pattern",
+                    "tuple_struct_pattern",
+                }:
+                    return False
+                if binding_type == "field_pattern":
+                    nested = binding.child_by_field_name("pattern")
+                    selected = nested or binding.child_by_field_name("name")
+                    return selected is not None and rust_pattern_contains(selected)
+                if binding_type == "struct_pattern":
+                    children = [
+                        child
+                        for child in binding.children
+                        if bool(getattr(child, "is_named", False))
+                        and str(child.type) == "field_pattern"
+                    ]
+                elif binding_type == "tuple_struct_pattern":
+                    type_node = binding.child_by_field_name("type")
+                    children = [
+                        child
+                        for child in binding.children
+                        if bool(getattr(child, "is_named", False))
+                        and (type_node is None or node_key(child) != node_key(type_node))
+                    ]
+                else:
+                    children = [
+                        child
+                        for child in binding.children
+                        if bool(getattr(child, "is_named", False))
+                    ]
+                return any(rust_pattern_contains(child) for child in children)
+
+            return rust_pattern_contains(pattern)
+        if relation in {"method_parameters.binding", "lambda_parameters.binding"}:
             if target_type != "identifier":
                 return False
 
@@ -398,6 +549,200 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
         if relation == "arrow_function.implicit_return":
             body = owner.child_by_field_name("body")
             return body is not None and node_key(body) == node_key(target)
+        if relation == "lambda.implicit_return":
+            body = owner.child_by_field_name("body")
+            if language == "ruby" and body is not None:
+                block_body = (
+                    body.child_by_field_name("body")
+                    if str(body.type) == "block"
+                    else body
+                )
+                children = (
+                    [
+                        child
+                        for child in block_body.children
+                        if bool(getattr(child, "is_named", False))
+                    ]
+                    if block_body is not None
+                    else []
+                )
+                tail = children[-1] if children else None
+                return (
+                    tail is not None
+                    and str(tail.type) != "return"
+                    and node_key(tail) == node_key(target)
+                )
+            return body is not None and node_key(body) == node_key(target)
+        if relation == "lambda_expression.implicit_return":
+            body = owner.child_by_field_name("body")
+            return body is not None and node_key(body) == node_key(target)
+        if relation == "closure_expression.implicit_return":
+            body = owner.child_by_field_name("body")
+            if body is None:
+                return False
+            if str(body.type) != "block":
+                return node_key(body) == node_key(target)
+            children = [
+                child
+                for child in body.children
+                if bool(getattr(child, "is_named", False))
+                and str(child.type) not in {"line_comment", "block_comment"}
+            ]
+            tail = children[-1] if children else None
+            if tail is not None and str(tail.type) == "expression_statement":
+                if any(str(child.type) == ";" for child in tail.children):
+                    tail = None
+                else:
+                    tail = next(
+                        (
+                            child
+                            for child in tail.children
+                            if bool(getattr(child, "is_named", False))
+                        ),
+                        None,
+                    )
+            return (
+                tail is not None
+                and str(tail.type) != "return_expression"
+                and (
+                    str(tail.type).endswith(("_expression", "_literal"))
+                    or str(tail.type) in {"identifier", "block", "self"}
+                )
+                and node_key(tail) == node_key(target)
+            )
+        if relation == "lambda_literal.implicit_return":
+            statements = next(
+                (
+                    child
+                    for child in owner.children
+                    if bool(getattr(child, "is_named", False))
+                    and str(child.type) == "statements"
+                ),
+                None,
+            )
+            children = (
+                [
+                    child
+                    for child in statements.children
+                    if bool(getattr(child, "is_named", False))
+                ]
+                if statements is not None
+                else []
+            )
+            tail = children[-1] if children else None
+            tail_type = str(tail.type) if tail is not None else ""
+            if language == "kotlin":
+                expression_like = tail_type.endswith(("_expression", "_literal")) or tail_type in {
+                    "boolean_literal",
+                    "integer_literal",
+                    "null_literal",
+                    "real_literal",
+                    "simple_identifier",
+                    "string_literal",
+                }
+            elif language == "swift":
+                expression_like = tail_type.endswith(("_expression", "_literal")) or tail_type in {
+                    "boolean_literal",
+                    "nil",
+                    "simple_identifier",
+                }
+            else:
+                expression_like = False
+            return (
+                tail is not None
+                and expression_like
+                and node_key(tail) == node_key(target)
+            )
+        if relation == "method_declaration.implicit_return":
+            body = owner.child_by_field_name("body")
+            target_expression = (
+                next(
+                    (
+                        child
+                        for child in body.children
+                        if bool(getattr(child, "is_named", False))
+                    ),
+                    None,
+                )
+                if body is not None and str(body.type) == "arrow_expression_clause"
+                else None
+            )
+            return (
+                target_expression is not None
+                and node_key(target_expression) == node_key(target)
+            )
+        if relation == "method.implicit_return":
+            body = owner.child_by_field_name("body")
+            children = [
+                child
+                for child in body.children
+                if bool(getattr(child, "is_named", False))
+            ] if body is not None else []
+            tail = children[-1] if children else None
+            return tail is not None and str(tail.type) != "return" and node_key(tail) == node_key(target)
+        if relation == "function_declaration.implicit_return":
+            if language == "kotlin":
+                body = next(
+                    (
+                        child
+                        for child in owner.children
+                        if bool(getattr(child, "is_named", False))
+                        and str(child.type) == "function_body"
+                    ),
+                    None,
+                )
+                if body is None or not canonical_surface(body).lstrip().startswith("="):
+                    return False
+                expression = next(
+                    (
+                        child
+                        for child in body.children
+                        if bool(getattr(child, "is_named", False))
+                    ),
+                    None,
+                )
+                return expression is not None and node_key(expression) == node_key(target)
+            if language == "swift":
+                body = owner.child_by_field_name("body")
+                statements = (
+                    next(
+                        (
+                            child
+                            for child in body.children
+                            if bool(getattr(child, "is_named", False))
+                            and str(child.type) == "statements"
+                        ),
+                        None,
+                    )
+                    if body is not None
+                    else None
+                )
+                expressions = (
+                    [
+                        child
+                        for child in statements.children
+                        if bool(getattr(child, "is_named", False))
+                    ]
+                    if statements is not None
+                    else []
+                )
+                expression_type = (
+                    str(expressions[0].type) if len(expressions) == 1 else ""
+                )
+                return (
+                    len(expressions) == 1
+                    and (
+                        expression_type.endswith(("_expression", "_literal"))
+                        or expression_type
+                        in {
+                            "boolean_literal",
+                            "nil",
+                            "simple_identifier",
+                        }
+                    )
+                    and node_key(expressions[0]) == node_key(target)
+                )
+            return False
         if relation == "function_item.implicit_tail":
             body = owner.child_by_field_name("body")
             if body is None or not is_within(target, body):
@@ -442,7 +787,15 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
             "arrow_function.parameter",
             "arrow_function.implicit_return",
             "catch_clause.parameter",
+            "closure_expression.implicit_return",
+            "function_declaration.implicit_return",
             "function_item.implicit_tail",
+            "lambda.implicit_return",
+            "lambda_literal.implicit_return",
+            "lambda_expression.implicit_return",
+            "lambda_expression.parameter",
+            "method.implicit_return",
+            "method_declaration.implicit_return",
         }
         parent = getattr(owner, "parent", None)
         javascript_var_hoist = (
