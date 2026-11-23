@@ -14,6 +14,9 @@ from .bcnlt_source_pipeline import CURRENT_RUNTIME_SPEC_SHA256
 from .current_task_packing import FAMILIES
 from .immutable_artifacts import publish_new_files
 from .resumable_task_packing import audit_task_database
+from .task_database_audit_manifest import (
+    load_verified_task_database_audit_manifest,
+)
 from .tokenizer import NativeTokenizerBinding
 
 LOSS_MASK_AUDIT_SCHEMA = "bosscrafts-task-loss-mask-audit-v1"
@@ -197,6 +200,8 @@ class TaskLossMaskAuditor:
         self,
         databases: Mapping[str, str | Path],
         output_path: str | Path,
+        *,
+        audit_manifests: Mapping[str, str | Path] | None = None,
     ) -> TaskLossMaskAuditResult:
         if type(databases) is not dict or set(databases) != {
             "train",
@@ -204,6 +209,12 @@ class TaskLossMaskAuditor:
             "test",
         }:
             raise ValueError("loss-mask audit requires train, validation and test databases")
+        if audit_manifests is not None and (
+            type(audit_manifests) is not dict or set(audit_manifests) != set(_SPLITS)
+        ):
+            raise ValueError(
+                "loss-mask audit manifests require train, validation and test"
+            )
         output = Path(output_path).resolve()
         if output.exists():
             raise ValueError("loss-mask audit output already exists")
@@ -220,7 +231,15 @@ class TaskLossMaskAuditor:
         for split in _SPLITS:
             database = Path(databases[split]).resolve()
             resolved_databases[split] = database
-            database_audit = audit_task_database(self._binding, database)
+            database_audit = (
+                audit_task_database(self._binding, database)
+                if audit_manifests is None
+                else load_verified_task_database_audit_manifest(
+                    self._binding,
+                    database,
+                    audit_manifests[split],
+                ).audit
+            )
             (
                 cells,
                 document_ids,
@@ -273,6 +292,18 @@ class TaskLossMaskAuditor:
         _assert_cross_split_example_ids_disjoint(
             resolved_databases, split_example_counts
         )
+        if audit_manifests is not None:
+            for split in _SPLITS:
+                reverified = load_verified_task_database_audit_manifest(
+                    self._binding,
+                    resolved_databases[split],
+                    audit_manifests[split],
+                ).audit
+                if (
+                    reverified.database_identity_sha256
+                    != database_receipts[split]["database_identity_sha256"]
+                ):
+                    raise ValueError("task database changed during loss-mask audit")
 
         if minimum_target is None:
             raise ValueError("loss-mask audit found no examples")

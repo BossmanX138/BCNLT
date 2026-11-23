@@ -47,7 +47,25 @@ def main() -> int:
     parser.add_argument("--validation", type=Path, default=DEFAULT_VALIDATION)
     parser.add_argument("--test", type=Path, default=DEFAULT_TEST)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--train-audit-manifest", type=Path)
+    parser.add_argument("--validation-audit-manifest", type=Path)
+    parser.add_argument("--test-audit-manifest", type=Path)
     arguments = parser.parse_args()
+    manifest_arguments = (
+        arguments.train_audit_manifest,
+        arguments.validation_audit_manifest,
+        arguments.test_audit_manifest,
+    )
+    if any(value is None for value in manifest_arguments):
+        if not all(value is None for value in manifest_arguments):
+            parser.error("all three audit manifests must be supplied together")
+        audit_manifests = None
+    else:
+        audit_manifests = {
+            "train": arguments.train_audit_manifest,
+            "validation": arguments.validation_audit_manifest,
+            "test": arguments.test_audit_manifest,
+        }
     result = TaskLossMaskAuditor(NativeTokenizerBinding.load()).materialize(
         {
             "train": arguments.train,
@@ -55,6 +73,7 @@ def main() -> int:
             "test": arguments.test,
         },
         arguments.output,
+        audit_manifests=audit_manifests,
     )
     print(
         json.dumps(

@@ -25,6 +25,9 @@ from .reviewed_instruction_curriculum import (
     INSTRUCTION_LANGUAGE,
     INSTRUCTION_RESPONSE_FAMILY,
 )
+from .task_database_audit_manifest import (
+    load_verified_task_database_audit_manifest,
+)
 from .tokenizer import NativeTokenizerBinding
 
 MIXED_CURRICULUM_SCHEMA = "bosscrafts-semantic-reviewed-instruction-mix-v1"
@@ -426,6 +429,8 @@ def build_split_safe_mixed_training_curriculum(
     expected_semantic_train_identity_sha256: str,
     expected_instruction_identity_sha256: str,
     instruction_training_weight_fraction: float = 0.5,
+    semantic_train_audit_manifest: str | Path | None = None,
+    instruction_audit_manifest: str | Path | None = None,
 ) -> SplitSafeMixedTrainingResult:
     """Mix only training rows while retaining held-out source lineage."""
     if type(binding) is not NativeTokenizerBinding:
@@ -447,9 +452,30 @@ def build_split_safe_mixed_training_curriculum(
         raise ValueError("split-safe mixed curriculum output already exists")
     if not semantic_path.is_file() or not instruction_path.is_file():
         raise ValueError("split-safe mixed curriculum source database does not exist")
+    if (semantic_train_audit_manifest is None) != (
+        instruction_audit_manifest is None
+    ):
+        raise ValueError("split-safe mixed curriculum requires both audit manifests")
 
-    semantic_audit = audit_task_database(binding, semantic_path)
-    instruction_audit = audit_task_database(binding, instruction_path)
+    if semantic_train_audit_manifest is None:
+        semantic_audit = audit_task_database(binding, semantic_path)
+        instruction_audit = audit_task_database(binding, instruction_path)
+    else:
+        assert instruction_audit_manifest is not None
+        semantic_audit = load_verified_task_database_audit_manifest(
+            binding,
+            semantic_path,
+            semantic_train_audit_manifest,
+            expected_database_identity_sha256=(
+                expected_semantic_train_identity_sha256
+            ),
+        ).audit
+        instruction_audit = load_verified_task_database_audit_manifest(
+            binding,
+            instruction_path,
+            instruction_audit_manifest,
+            expected_database_identity_sha256=expected_instruction_identity_sha256,
+        ).audit
     if (
         semantic_audit.database_identity_sha256
         != expected_semantic_train_identity_sha256
@@ -649,8 +675,27 @@ def build_split_safe_mixed_training_curriculum(
             raise ValueError(
                 "split-safe mixed curriculum training weight fraction mismatch"
             )
-        final_semantic = audit_task_database(binding, semantic_path)
-        final_instruction = audit_task_database(binding, instruction_path)
+        if semantic_train_audit_manifest is None:
+            final_semantic = audit_task_database(binding, semantic_path)
+            final_instruction = audit_task_database(binding, instruction_path)
+        else:
+            assert instruction_audit_manifest is not None
+            final_semantic = load_verified_task_database_audit_manifest(
+                binding,
+                semantic_path,
+                semantic_train_audit_manifest,
+                expected_database_identity_sha256=(
+                    expected_semantic_train_identity_sha256
+                ),
+            ).audit
+            final_instruction = load_verified_task_database_audit_manifest(
+                binding,
+                instruction_path,
+                instruction_audit_manifest,
+                expected_database_identity_sha256=(
+                    expected_instruction_identity_sha256
+                ),
+            ).audit
         if (
             final_semantic.database_identity_sha256
             != semantic_audit.database_identity_sha256

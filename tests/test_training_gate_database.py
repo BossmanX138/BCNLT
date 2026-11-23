@@ -16,6 +16,10 @@ from bosscrafts_model.current_task_packing import (
     CurrentCorpusTaskPacker,
 )
 from bosscrafts_model.resumable_task_packing import audit_task_database
+from bosscrafts_model.task_database_audit_manifest import (
+    load_verified_task_database_audit_manifest,
+    materialize_task_database_audit_manifest,
+)
 from bosscrafts_model.tokenizer import NativeTokenizerBinding
 
 
@@ -133,6 +137,43 @@ class TrainingGateDatabaseTests(unittest.TestCase):
             audit = audit_task_database(binding, database)
             self.assertEqual(audit.example_count, 1)
 
+            audit_manifest = root / "task-audit.json"
+            materialized = materialize_task_database_audit_manifest(
+                binding, database, audit_manifest
+            )
+            self.assertEqual(
+                materialized.audit.database_identity_sha256,
+                audit.database_identity_sha256,
+            )
+            verified = load_verified_task_database_audit_manifest(
+                binding,
+                database,
+                audit_manifest,
+                expected_database_identity_sha256=audit.database_identity_sha256,
+            )
+            self.assertEqual(verified.manifest_sha256, materialized.manifest_sha256)
+            with self.assertRaisesRegex(ValueError, "output already exists"):
+                materialize_task_database_audit_manifest(
+                    binding, database, audit_manifest
+                )
+
+            tampered_manifest = root / "tampered-task-audit.json"
+            tampered_payload = json.loads(audit_manifest.read_text(encoding="utf-8"))
+            tampered_payload["example_count"] = 2
+            tampered_manifest.write_text(canonical(tampered_payload), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "lineage is invalid"):
+                load_verified_task_database_audit_manifest(
+                    binding, database, tampered_manifest
+                )
+
+            wal_sidecar = Path(f"{database}-wal")
+            wal_sidecar.write_bytes(b"live")
+            with self.assertRaisesRegex(ValueError, "SQLite sidecar"):
+                load_verified_task_database_audit_manifest(
+                    binding, database, audit_manifest
+                )
+            wal_sidecar.unlink()
+
             examples.write_text("tampered\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "examples SHA-256"):
                 build_training_gate_database(
@@ -140,6 +181,12 @@ class TrainingGateDatabaseTests(unittest.TestCase):
                     manifest_path,
                     root / "tampered.sqlite",
                     max_examples=1,
+                )
+            with database.open("ab") as stream:
+                stream.write(b"tampered")
+            with self.assertRaisesRegex(ValueError, "bytes do not match"):
+                load_verified_task_database_audit_manifest(
+                    binding, database, audit_manifest
                 )
 
     def test_invalid_task_family_is_rejected_before_database_publication(self):

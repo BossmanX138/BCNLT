@@ -36,6 +36,9 @@ from bosscrafts_model.reviewed_instruction_curriculum import (
     INSTRUCTION_RESPONSE_FAMILY,
     INSTRUCTION_SEMANTIC_SPEC_SHA256,
 )
+from bosscrafts_model.task_database_audit_manifest import (
+    materialize_task_database_audit_manifest,
+)
 from bosscrafts_model.tokenizer import NativeTokenizerBinding
 
 
@@ -337,10 +340,14 @@ def test_builds_train_only_split_safe_mix_and_excludes_both_heldout_splits(
     output = tmp_path / "mixed-train.sqlite"
     _write_complete_semantic_train_database(semantic, binding)
     _write_database(instruction, binding, instruction=True)
-    semantic_identity = audit_task_database(binding, semantic).database_identity_sha256
-    instruction_identity = audit_task_database(
-        binding, instruction
-    ).database_identity_sha256
+    semantic_manifest = tmp_path / "semantic-task-audit.json"
+    instruction_manifest = tmp_path / "instruction-task-audit.json"
+    semantic_identity = materialize_task_database_audit_manifest(
+        binding, semantic, semantic_manifest
+    ).audit.database_identity_sha256
+    instruction_identity = materialize_task_database_audit_manifest(
+        binding, instruction, instruction_manifest
+    ).audit.database_identity_sha256
 
     result = build_split_safe_mixed_training_curriculum(
         binding,
@@ -350,6 +357,8 @@ def test_builds_train_only_split_safe_mix_and_excludes_both_heldout_splits(
         expected_semantic_train_identity_sha256=semantic_identity,
         expected_instruction_identity_sha256=instruction_identity,
         instruction_training_weight_fraction=0.5,
+        semantic_train_audit_manifest=semantic_manifest,
+        instruction_audit_manifest=instruction_manifest,
     )
 
     assert result.semantic_example_count == len(CURRENT_RUNTIME_SPEC_SHA256) * len(

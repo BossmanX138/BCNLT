@@ -38,6 +38,8 @@ def main() -> None:
     parser.add_argument(
         "--instruction-identity-sha256", required=True, type=_lower_sha256
     )
+    parser.add_argument("--semantic-train-audit-manifest", type=Path)
+    parser.add_argument("--instruction-audit-manifest", type=Path)
     parser.add_argument("--instruction-weight-fraction", type=float, default=0.5)
     arguments = parser.parse_args()
     result = build_split_safe_mixed_training_curriculum(
@@ -50,6 +52,8 @@ def main() -> None:
         ),
         expected_instruction_identity_sha256=arguments.instruction_identity_sha256,
         instruction_training_weight_fraction=arguments.instruction_weight_fraction,
+        semantic_train_audit_manifest=arguments.semantic_train_audit_manifest,
+        instruction_audit_manifest=arguments.instruction_audit_manifest,
     )
     payload = asdict(result)
     payload["database_path"] = str(result.database_path)

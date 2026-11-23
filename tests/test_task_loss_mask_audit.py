@@ -11,6 +11,9 @@ from bosscrafts_model.bcnlt_source_pipeline import BCNLTSourcePipeline
 from bosscrafts_model.current_corpus import SourceCandidate
 from bosscrafts_model.resumable_current_corpus import ResumableCurrentCorpusAdmission
 from bosscrafts_model.resumable_task_packing import ResumableCurrentTaskPacking
+from bosscrafts_model.task_database_audit_manifest import (
+    materialize_task_database_audit_manifest,
+)
 from bosscrafts_model.task_loss_mask_audit import (
     TaskLossMaskAuditor,
     _assert_cross_split_example_ids_disjoint,
@@ -191,9 +194,16 @@ def test_materializes_complete_disjoint_loss_mask_receipt(tmp_path: Path):
         pipeline.close()
 
     output = tmp_path / "loss-mask-receipt.json"
+    audit_manifests = {
+        split: tmp_path / f"{split}-task-audit.json" for split in databases
+    }
+    for split, database in databases.items():
+        materialize_task_database_audit_manifest(
+            binding, database, audit_manifests[split]
+        )
     result = TaskLossMaskAuditor(
         binding, expected_languages=("python",)
-    ).materialize(databases, output)
+    ).materialize(databases, output, audit_manifests=audit_manifests)
     assert result.audit_passed is True
     assert result.training_ready is False
     assert result.minimum_target_tokens > 0
