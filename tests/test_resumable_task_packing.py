@@ -527,6 +527,73 @@ class ResumableTaskPackingTests(unittest.TestCase):
             any(statement.lstrip().upper().startswith("CREATE") for statement in statements)
         )
 
+    def test_pending_scan_fetches_heavy_payload_only_after_filters(self) -> None:
+        module = importlib.import_module("bosscrafts_model.resumable_task_packing")
+        connection = sqlite3.connect(":memory:")
+        statements: list[str] = []
+        connection.set_trace_callback(statements.append)
+        try:
+            connection.execute(
+                """CREATE TABLE documents(
+                       document_id TEXT PRIMARY KEY,
+                       content_sha256 TEXT NOT NULL,
+                       language TEXT NOT NULL,
+                       relative_path TEXT NOT NULL,
+                       status TEXT NOT NULL,
+                       semantic_spec_sha256 TEXT NOT NULL,
+                       parser_runtime_identity_sha256 TEXT NOT NULL,
+                       canonical_sha256 TEXT NOT NULL,
+                       canonical_jsonl_zlib BLOB NOT NULL,
+                       semantic_ids_zlib BLOB NOT NULL,
+                       semantic_record_count INTEGER NOT NULL,
+                       semantic_token_count INTEGER NOT NULL
+                   )"""
+            )
+            for document_id in ("chosen", "complete", "ineligible"):
+                connection.execute(
+                    "INSERT INTO documents VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        document_id,
+                        "c" * 64,
+                        "python",
+                        f"{document_id}.py",
+                        "admitted",
+                        "s" * 64,
+                        "p" * 64,
+                        "j" * 64,
+                        b"heavy-canonical-payload",
+                        b"heavy-semantic-payload",
+                        1,
+                        1,
+                    ),
+                )
+            connection.commit()
+            statements.clear()
+
+            packing = object.__new__(module.ResumableCurrentTaskPacking)
+            packing._eligible_ids = {"chosen", "complete"}
+            rows = list(
+                packing._iter_pending_admission_rows(
+                    connection,
+                    {"complete"},
+                    worker_index=0,
+                    worker_count=1,
+                )
+            )
+        finally:
+            connection.close()
+
+        self.assertEqual([row[0] for row in rows], ["chosen"])
+        payload_queries = [
+            statement
+            for statement in statements
+            if "canonical_jsonl_zlib" in statement.casefold()
+        ]
+        self.assertEqual(len(payload_queries), 1)
+        self.assertIn("document_id='chosen'", payload_queries[0])
+        self.assertNotIn("complete", payload_queries[0])
+        self.assertNotIn("ineligible", payload_queries[0])
+
     def test_worker_partitions_produce_the_same_complete_database_identity(self):
         module = importlib.import_module("bosscrafts_model.resumable_task_packing")
         candidates = tuple(

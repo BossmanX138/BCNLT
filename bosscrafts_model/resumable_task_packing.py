@@ -77,6 +77,21 @@ class TaskExample(TypedDict):
     source_sha256: str
 
 
+AdmissionTaskRow = tuple[
+    str,
+    str,
+    str,
+    str,
+    str,
+    str,
+    str,
+    bytes,
+    bytes,
+    int,
+    int,
+]
+
+
 def _canonical_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -1118,6 +1133,44 @@ class ResumableCurrentTaskPacking:
             packing_complete=complete == "true",
         )
 
+    def _iter_pending_admission_rows(
+        self,
+        admission: sqlite3.Connection,
+        completed_ids: set[str],
+        *,
+        worker_index: int,
+        worker_count: int,
+    ) -> Iterator[AdmissionTaskRow]:
+        document_ids = admission.execute(
+            """SELECT document_id FROM documents
+               WHERE status='admitted' ORDER BY document_id"""
+        )
+        for document_id_row in document_ids:
+            document_id = str(document_id_row[0])
+            if (
+                self._eligible_ids is not None
+                and document_id not in self._eligible_ids
+            ):
+                continue
+            worker_bucket = int(
+                hashlib.sha256(document_id.encode("utf-8")).hexdigest()[:16], 16
+            ) % worker_count
+            if worker_bucket != worker_index or document_id in completed_ids:
+                continue
+            admission_row = admission.execute(
+                """SELECT document_id, content_sha256, language, relative_path,
+                          semantic_spec_sha256, parser_runtime_identity_sha256,
+                          canonical_sha256,
+                          canonical_jsonl_zlib, semantic_ids_zlib,
+                          semantic_record_count, semantic_token_count
+                   FROM documents
+                   WHERE status='admitted' AND document_id=?""",
+                (document_id,),
+            ).fetchone()
+            if admission_row is None:
+                raise RuntimeError("admitted document disappeared during task packing")
+            yield cast(AdmissionTaskRow, admission_row)
+
     def process(
         self,
         *,
@@ -1150,31 +1203,14 @@ class ResumableCurrentTaskPacking:
                 row[0]
                 for row in task_connection.execute("SELECT document_id FROM documents")
             }
-            rows = admission.execute(
-                """SELECT document_id, content_sha256, language, relative_path,
-                          semantic_spec_sha256, parser_runtime_identity_sha256,
-                          canonical_sha256,
-                          canonical_jsonl_zlib, semantic_ids_zlib,
-                          semantic_record_count, semantic_token_count
-                   FROM documents
-                   WHERE status='admitted'
-                   ORDER BY document_id"""
+            rows = self._iter_pending_admission_rows(
+                admission,
+                completed_ids,
+                worker_index=worker_index,
+                worker_count=worker_count,
             )
             for admission_row in rows:
                 document_id = str(admission_row[0])
-                if (
-                    self._eligible_ids is not None
-                    and document_id not in self._eligible_ids
-                ):
-                    continue
-                worker_bucket = int(
-                    hashlib.sha256(document_id.encode("utf-8")).hexdigest()[:16],
-                    16,
-                ) % worker_count
-                if worker_bucket != worker_index:
-                    continue
-                if document_id in completed_ids:
-                    continue
                 if max_documents is not None and processed >= max_documents:
                     break
                 source_row = catalog.execute(
