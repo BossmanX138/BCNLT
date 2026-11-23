@@ -15,6 +15,12 @@ from .immutable_artifacts import publish_new_files
 
 SCHEMA_VERSION = "bosscrafts-admission-runtime-equivalence-v1"
 ADMISSION_SCHEMA_VERSION = "bosscrafts-current-corpus-resumable-v4"
+ADMISSION_SCHEMA_VERSIONS = frozenset(
+    {
+        ADMISSION_SCHEMA_VERSION,
+        "bosscrafts-current-corpus-resumable-v5",
+    }
+)
 _HEX_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _ALLOWED_METADATA_DIFFERENCES = frozenset(
     {"host_code_identity_sha256", "parser_runtime_identity_sha256"}
@@ -81,7 +87,7 @@ def _metadata(connection: sqlite3.Connection) -> dict[str, str]:
     result = dict(rows)
     if len(result) != len(rows):
         raise ValueError("admission metadata contains duplicate keys")
-    if result.get("schema_version") != ADMISSION_SCHEMA_VERSION:
+    if result.get("schema_version") not in ADMISSION_SCHEMA_VERSIONS:
         raise ValueError("admission database schema mismatch")
     return result
 
