@@ -478,15 +478,21 @@ def compare_admission_runtime_delta(
 def delta_receipt_payload(result: AdmissionRuntimeDelta) -> dict[str, object]:
     """Return the canonical, self-hashed delta receipt."""
 
-    unsigned = {
-        "schema_version": SCHEMA_VERSION,
-        **asdict(result),
-        "comparison_policy": (
-            "a document is reusable only when every admission field except "
-            "semantic-spec and parser-runtime provenance is exactly equal"
-        ),
-        "training_ready": False,
-    }
+    unsigned = json.loads(
+        _canonical_json(
+            {
+                "schema_version": SCHEMA_VERSION,
+                **asdict(result),
+                "comparison_policy": (
+                    "a document is reusable only when every admission field except "
+                    "semantic-spec and parser-runtime provenance is exactly equal"
+                ),
+                "training_ready": False,
+            }
+        )
+    )
+    if type(unsigned) is not dict:
+        raise RuntimeError("delta receipt serialization produced an invalid object")
     manifest_sha256 = hashlib.sha256(
         _canonical_json(unsigned).encode("utf-8")
     ).hexdigest()

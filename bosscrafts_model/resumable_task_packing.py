@@ -956,6 +956,14 @@ class ResumableCurrentTaskPacking:
             raise ValueError("training eligibility admission lineage mismatch")
         return eligible_ids, manifest
 
+    @property
+    def eligible_document_ids(self) -> frozenset[str] | None:
+        """Return the validated eligibility membership, if packing is gated."""
+
+        if self._eligible_ids is None:
+            return None
+        return frozenset(self._eligible_ids)
+
     @staticmethod
     def _eligible_ids_are_admitted(
         admission: sqlite3.Connection, eligible_ids: set[str]

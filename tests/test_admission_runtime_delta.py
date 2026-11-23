@@ -10,6 +10,7 @@ import pytest
 
 from bosscrafts_model.admission_runtime_delta import (
     compare_admission_runtime_delta,
+    delta_receipt_payload,
     load_delta_receipt,
     publish_delta_receipt,
 )
@@ -109,7 +110,9 @@ def test_spec_and_runtime_only_delta_is_reusable(tmp_path: Path) -> None:
     assert result.documents[0].differing_fields == ()
     receipt = tmp_path / "delta.json"
     receipt_sha256 = publish_delta_receipt(result, receipt)
-    assert load_delta_receipt(receipt)["manifest_sha256"] == receipt_sha256
+    loaded = load_delta_receipt(receipt)
+    assert loaded["manifest_sha256"] == receipt_sha256
+    assert loaded == delta_receipt_payload(result)
     with pytest.raises(ValueError, match="already exists"):
         publish_delta_receipt(result, receipt)
 
