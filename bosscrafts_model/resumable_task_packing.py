@@ -906,7 +906,16 @@ class ResumableCurrentTaskPacking:
                 connection.execute(
                     f"PRAGMA busy_timeout={TASK_DATABASE_BUSY_TIMEOUT_MS}"
                 )
-                connection.execute("PRAGMA journal_mode=WAL")
+                journal_mode_row = connection.execute(
+                    "PRAGMA journal_mode"
+                ).fetchone()
+                journal_mode = (
+                    str(journal_mode_row[0]).casefold()
+                    if journal_mode_row is not None and journal_mode_row
+                    else ""
+                )
+                if journal_mode != "wal":
+                    connection.execute("PRAGMA journal_mode=WAL")
                 connection.execute("PRAGMA synchronous=FULL")
                 return connection
             except sqlite3.OperationalError as error:

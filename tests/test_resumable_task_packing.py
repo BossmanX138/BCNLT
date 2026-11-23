@@ -388,16 +388,26 @@ class ResumableTaskPackingTests(unittest.TestCase):
     def test_connection_setup_retries_locked_wal_initialization(self) -> None:
         module = importlib.import_module("bosscrafts_model.resumable_task_packing")
 
+        class SetupCursor:
+            def __init__(self, row: tuple[str] | None = None) -> None:
+                self.row = row
+
+            def fetchone(self) -> tuple[str] | None:
+                return self.row
+
         class SetupConnection:
             def __init__(self, *, lock_journal: bool) -> None:
                 self.lock_journal = lock_journal
                 self.closed = False
                 self.statements: list[str] = []
 
-            def execute(self, statement: str) -> None:
+            def execute(self, statement: str) -> SetupCursor:
                 self.statements.append(statement)
+                if statement == "PRAGMA journal_mode":
+                    return SetupCursor(("delete",))
                 if self.lock_journal and statement == "PRAGMA journal_mode=WAL":
                     raise sqlite3.OperationalError("database is locked")
+                return SetupCursor()
 
             def close(self) -> None:
                 self.closed = True
@@ -421,12 +431,53 @@ class ResumableTaskPackingTests(unittest.TestCase):
             ready.statements,
             [
                 f"PRAGMA busy_timeout={module.TASK_DATABASE_BUSY_TIMEOUT_MS}",
+                "PRAGMA journal_mode",
                 "PRAGMA journal_mode=WAL",
                 "PRAGMA synchronous=FULL",
             ],
         )
         sleep.assert_called_once_with(
             module.TASK_DATABASE_LOCK_RETRY_INITIAL_SECONDS
+        )
+
+    def test_connection_setup_does_not_reassert_existing_wal_mode(self) -> None:
+        module = importlib.import_module("bosscrafts_model.resumable_task_packing")
+
+        class SetupCursor:
+            def __init__(self, row: tuple[str] | None = None) -> None:
+                self.row = row
+
+            def fetchone(self) -> tuple[str] | None:
+                return self.row
+
+        class ExistingWalConnection:
+            def __init__(self) -> None:
+                self.statements: list[str] = []
+
+            def execute(self, statement: str) -> SetupCursor:
+                self.statements.append(statement)
+                if statement == "PRAGMA journal_mode":
+                    return SetupCursor(("wal",))
+                return SetupCursor()
+
+            def close(self) -> None:
+                raise AssertionError("ready connection must remain open")
+
+        ready = ExistingWalConnection()
+        packing = object.__new__(module.ResumableCurrentTaskPacking)
+        packing.database_path = Path("task-packing.sqlite")
+
+        with patch.object(module.sqlite3, "connect", return_value=ready):
+            connection = packing._connect()
+
+        self.assertIs(connection, ready)
+        self.assertEqual(
+            ready.statements,
+            [
+                f"PRAGMA busy_timeout={module.TASK_DATABASE_BUSY_TIMEOUT_MS}",
+                "PRAGMA journal_mode",
+                "PRAGMA synchronous=FULL",
+            ],
         )
 
     def test_worker_partitions_produce_the_same_complete_database_identity(self):
