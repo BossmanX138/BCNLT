@@ -46,6 +46,9 @@ def main() -> int:
     parser.add_argument(
         "--semantic-wire", choices=("compact_v2", "full_v3"), default="compact_v2"
     )
+    parser.add_argument(
+        "--forced-split", choices=("train", "validation", "test")
+    )
     parser.add_argument("--build-cell-index", action="store_true")
     arguments = parser.parse_args()
 
@@ -66,6 +69,7 @@ def main() -> int:
         max_sequence=arguments.max_sequence,
         semantic_wire=arguments.semantic_wire,
         defer_cell_index=not arguments.build_cell_index,
+        forced_split=arguments.forced_split,
     )
     payload = asdict(result)
     payload["target_database"] = str(result.target_database)

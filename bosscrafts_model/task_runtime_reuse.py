@@ -242,6 +242,7 @@ def _copy_reusable_rows(
     candidate_admission_database: Path,
     delta: AdmissionRuntimeDelta,
     eligible_ids: frozenset[str],
+    task_split: str,
 ) -> tuple[int, int, int, int, str]:
     reusable = {
         item.document_id: item
@@ -342,12 +343,12 @@ def _copy_reusable_rows(
             """SELECT t.example_id
                FROM baseline_tasks.tasks AS t
                JOIN copy_documents AS c USING(document_id)
-               WHERE t.language!=c.language OR t.split!='train'
+               WHERE t.language!=c.language OR t.split!=?
                   OR t.semantic_spec_sha256!=c.baseline_semantic_spec_sha256
                   OR t.parser_runtime_identity_sha256!=?
                   OR t.source_sha256!=c.source_sha256
                LIMIT 1""",
-            (delta.baseline_parser_runtime_identity_sha256,),
+            (task_split, delta.baseline_parser_runtime_identity_sha256),
         ).fetchone()
         if task_mismatch is not None:
             raise ValueError("baseline reusable task provenance mismatch")
@@ -544,6 +545,7 @@ def migrate_reusable_tasks(
     max_sequence: int = 2048,
     semantic_wire: str = "compact_v2",
     defer_cell_index: bool = True,
+    forced_split: str | None = None,
 ) -> TaskRuntimeReuseResult:
     """Bootstrap a current task DB with only proof-reusable baseline rows."""
 
@@ -595,6 +597,7 @@ def migrate_reusable_tasks(
             candidate_eligibility_manifest_sha256
         ),
         defer_cell_index=defer_cell_index,
+        forced_split=forced_split,
     )
     eligible_ids = packing.eligible_document_ids
     if eligible_ids is None:
@@ -607,6 +610,7 @@ def migrate_reusable_tasks(
             candidate_admission,
             delta,
             eligible_ids,
+            forced_split or "train",
         )
     )
     target_connection = _ro_connection(target)

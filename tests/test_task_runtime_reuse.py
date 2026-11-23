@@ -145,6 +145,8 @@ def _eligibility(
     admission: Path,
     catalog_sha256: str,
     document_ids: tuple[str, ...],
+    *,
+    source_split: str = "train",
 ) -> str:
     root.mkdir()
     eligible_text = "".join(
@@ -156,7 +158,7 @@ def _eligibility(
         "eligibility_complete": True,
         "training_ready": False,
         "source_catalog_sha256": catalog_sha256,
-        "source_split": "train",
+        "source_split": source_split,
         "source_admission_identity_sha256": _admission_identity(admission),
         "source_audit_identity_sha256": "3" * 64,
         "eligible_file": "eligible.jsonl",
@@ -226,7 +228,15 @@ def _convert_to_historical_tasks(path: Path, admission: Path) -> None:
         connection.close()
 
 
-def test_reuse_then_repack_matches_fresh_current_pack(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("source_split", "forced_split"),
+    (("train", None), ("validation", "validation")),
+)
+def test_reuse_then_repack_matches_fresh_current_pack(
+    tmp_path: Path,
+    source_split: str,
+    forced_split: str | None,
+) -> None:
     binding = NativeTokenizerBinding.load()
     pipeline = BCNLTSourcePipeline(binding)
     candidates = (
@@ -264,6 +274,7 @@ def test_reuse_then_repack_matches_fresh_current_pack(tmp_path: Path) -> None:
         candidate_admission,
         catalog_sha256,
         ("doc-a",),
+        source_split=source_split,
     )
     baseline_packer = ResumableCurrentTaskPacking(
         binding,
@@ -273,6 +284,7 @@ def test_reuse_then_repack_matches_fresh_current_pack(tmp_path: Path) -> None:
         semantic_wire="compact_v2",
         eligibility_root=baseline_eligibility,
         expected_eligibility_manifest_sha256=baseline_eligibility_sha,
+        forced_split=forced_split,
     )
     assert baseline_packer.process().packing_complete is True
     _convert_to_historical_tasks(baseline_tasks, baseline_admission)
@@ -295,6 +307,7 @@ def test_reuse_then_repack_matches_fresh_current_pack(tmp_path: Path) -> None:
         candidate_admission,
         catalog_sha256,
         ("doc-a", "doc-b"),
+        source_split=source_split,
     )
 
     result = migrate_reusable_tasks(
@@ -309,6 +322,7 @@ def test_reuse_then_repack_matches_fresh_current_pack(tmp_path: Path) -> None:
         candidate_eligibility_manifest_sha256=candidate_eligibility_sha,
         target_database=target_tasks,
         output_receipt=reuse_receipt,
+        forced_split=forced_split,
     )
     assert result.copied_document_count == 1
     assert result.repack_document_count == 1
@@ -325,6 +339,7 @@ def test_reuse_then_repack_matches_fresh_current_pack(tmp_path: Path) -> None:
         eligibility_root=candidate_eligibility,
         expected_eligibility_manifest_sha256=candidate_eligibility_sha,
         defer_cell_index=True,
+        forced_split=forced_split,
     )
     resumed_status = resumed.process()
     assert resumed_status.processed_this_run == 1
@@ -340,6 +355,7 @@ def test_reuse_then_repack_matches_fresh_current_pack(tmp_path: Path) -> None:
         eligibility_root=candidate_eligibility,
         expected_eligibility_manifest_sha256=candidate_eligibility_sha,
         defer_cell_index=True,
+        forced_split=forced_split,
     )
     assert fresh.process().packing_complete is True
     fresh_audit = audit_task_database(binding, fresh_tasks)

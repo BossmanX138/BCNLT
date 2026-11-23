@@ -812,8 +812,17 @@ class ResumableCurrentTaskPacking:
                 str(expected_catalog_sha256),
             )
             eligibility_source_split = str(eligibility_manifest["source_split"])
-            if (forced_split is None and eligibility_source_split != "train") or (
-                forced_split is not None and eligibility_source_split == "train"
+            expected_forced_split = (
+                "test"
+                if eligibility_source_split == "reserved_heldout"
+                else eligibility_source_split
+            )
+            if (
+                eligibility_source_split == "train"
+                and forced_split is not None
+            ) or (
+                eligibility_source_split != "train"
+                and forced_split != expected_forced_split
             ):
                 raise ValueError(
                     "eligibility source split and task split policy mismatch"

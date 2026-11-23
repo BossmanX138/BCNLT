@@ -976,6 +976,20 @@ class ResumableTaskPackingTests(unittest.TestCase):
                 json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
                 encoding="utf-8",
             )
+            with self.assertRaisesRegex(
+                ValueError,
+                "eligibility source split and task split policy mismatch",
+            ):
+                module.ResumableCurrentTaskPacking(
+                    self.binding,
+                    admission_path,
+                    catalog_path,
+                    root / "wrong-split-tasks.sqlite",
+                    max_sequence=2048,
+                    eligibility_root=eligibility_root,
+                    expected_eligibility_manifest_sha256=manifest_sha,
+                    forced_split="test",
+                )
             packer = module.ResumableCurrentTaskPacking(
                 self.binding,
                 admission_path,

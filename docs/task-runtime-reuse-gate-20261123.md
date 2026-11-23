@@ -40,9 +40,15 @@ python scripts/migrate_reusable_runtime_tasks.py `
   --source-catalog <frozen-catalog.sqlite> `
   --candidate-eligibility-root <current-eligibility-directory> `
   --candidate-eligibility-manifest-sha256 <sha256> `
+  --forced-split <validation-or-test-for-frozen-evaluation-only> `
   --target-database <new-current-tasks.sqlite> `
   --output-receipt <new-reuse-receipt.json>
 ```
+
+Omit `--forced-split` for the training inventory. Frozen validation and test
+inventories must supply their exact task split; `reserved_heldout` inventories use
+`test`. The migration rejects a forced split that does not match the eligibility
+manifest's source split policy.
 
 Both output paths must be new. The target remains `packing_complete=false` until the
 normal packer processes all non-reused documents and performs its normal completion
