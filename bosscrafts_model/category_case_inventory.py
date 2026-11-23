@@ -9,6 +9,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from .heldout_suite_builder import (
     CATEGORY_CASE_INVENTORY_SCHEMA,
@@ -485,7 +486,7 @@ def _build_category_case_inventory_from_contents(
             example_id = record.get("example_id")
             if not _is_sha256(example_id) or example_id != _sha256(body):
                 raise ValueError(f"{category} category case content identity is invalid")
-            example_id_value = example_id
+            example_id_value = cast(str, example_id)
             language = _validate_case_payload(
                 category,
                 record.get("case_kind"),

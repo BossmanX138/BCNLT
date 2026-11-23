@@ -546,7 +546,7 @@ def build_audited_balanced_curriculum(
                                 example_id_value = item.get("example_id")
                                 if family not in FAMILIES:
                                     raise ValueError("packed task family is invalid")
-                                family_value = family
+                                family_value = cast(str, family)
                                 if type(raw_ids_value) is not list:
                                     raise ValueError(
                                         "packed task input IDs are invalid"

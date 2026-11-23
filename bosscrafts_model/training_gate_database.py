@@ -197,7 +197,7 @@ def build_training_gate_database(
             ):
                 stale_spec_skipped_count += 1
                 continue
-            cell = (language, family_value)
+            cell = (language, cast(str, family_value))
             if cell in selected_cells:
                 continue
             input_ids = row.get("input_ids")
