@@ -23,10 +23,15 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--database", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--audit-manifest", type=Path)
     arguments = parser.parse_args()
     result = SplitSafeMixedTrainingLossMaskAuditor(
         NativeTokenizerBinding.load()
-    ).materialize(arguments.database, arguments.output)
+    ).materialize(
+        arguments.database,
+        arguments.output,
+        audit_manifest=arguments.audit_manifest,
+    )
     payload = asdict(result)
     payload["output_path"] = str(result.output_path)
     print(json.dumps(payload, indent=2, sort_keys=True))

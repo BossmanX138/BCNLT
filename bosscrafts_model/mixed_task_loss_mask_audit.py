@@ -26,6 +26,9 @@ from .reviewed_instruction_curriculum import (
     INSTRUCTION_LANGUAGE,
     INSTRUCTION_RESPONSE_FAMILY,
 )
+from .task_database_audit_manifest import (
+    load_verified_task_database_audit_manifest,
+)
 from .task_loss_mask_audit import _read_loss_mask_summary
 from .tokenizer import NativeTokenizerBinding
 
@@ -424,6 +427,8 @@ class SplitSafeMixedTrainingLossMaskAuditor:
         self,
         database_path: str | Path,
         output_path: str | Path,
+        *,
+        audit_manifest: str | Path | None = None,
     ) -> SplitSafeMixedTrainingLossMaskAuditResult:
         database = Path(database_path).resolve()
         output = Path(output_path).resolve()
@@ -432,7 +437,13 @@ class SplitSafeMixedTrainingLossMaskAuditor:
         if output.exists():
             raise ValueError("split-safe mixed loss-mask audit output already exists")
 
-        database_audit = audit_task_database(self._binding, database)
+        database_audit = (
+            audit_task_database(self._binding, database)
+            if audit_manifest is None
+            else load_verified_task_database_audit_manifest(
+                self._binding, database, audit_manifest
+            ).audit
+        )
         dataset = ResumableTaskDataset(self._binding, database)
         metadata = dataset.metadata
         if (
@@ -544,6 +555,19 @@ class SplitSafeMixedTrainingLossMaskAuditor:
             "replay": semantic_examples,
         }:
             raise ValueError("split-safe mixed source identity counts are inconsistent")
+        if audit_manifest is not None:
+            reverified = load_verified_task_database_audit_manifest(
+                self._binding,
+                database,
+                audit_manifest,
+                expected_database_identity_sha256=(
+                    database_audit.database_identity_sha256
+                ),
+            ).audit
+            if reverified.content_sha256 != database_audit.content_sha256:
+                raise ValueError(
+                    "split-safe mixed training database changed during audit"
+                )
 
         unsigned = {
             "schema_version": "bosscrafts-split-safe-mixed-loss-mask-audit-v1",

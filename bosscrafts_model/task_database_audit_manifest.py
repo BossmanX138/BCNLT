@@ -90,6 +90,25 @@ def materialize_task_database_audit_manifest(
         or before.st_ino != after.st_ino
     ):
         raise ValueError("task database changed during its logical audit")
+    return _publish_task_database_audit_manifest(
+        binding,
+        audit,
+        database,
+        output,
+        database_file_sha256=database_file_sha256,
+        database_file_size_bytes=database_file_size_bytes,
+    )
+
+
+def _publish_task_database_audit_manifest(
+    binding: NativeTokenizerBinding,
+    audit: TaskDatabaseAuditResult,
+    database: Path,
+    output: Path,
+    *,
+    database_file_sha256: str,
+    database_file_size_bytes: int,
+) -> VerifiedTaskDatabaseAudit:
     unsigned = {
         **asdict(audit),
         "database_path": str(database),
@@ -113,6 +132,44 @@ def materialize_task_database_audit_manifest(
         database_file_sha256=database_file_sha256,
         database_file_size_bytes=database_file_size_bytes,
         manifest_sha256=manifest_sha256,
+    )
+
+
+def publish_task_database_audit_manifest_from_result(
+    binding: NativeTokenizerBinding,
+    audit: TaskDatabaseAuditResult,
+    database_path: str | Path,
+    output_path: str | Path,
+) -> VerifiedTaskDatabaseAudit:
+    """Bind an audit just produced for the same immutable SQLite inode.
+
+    This is for builders that audit a private temporary database before
+    hard-linking that exact inode to its immutable destination.
+    """
+    if type(binding) is not NativeTokenizerBinding:
+        raise TypeError("binding must be a verified NativeTokenizerBinding")
+    if type(audit) is not TaskDatabaseAuditResult or audit.audit_passed is not True:
+        raise TypeError("audit must be a passed TaskDatabaseAuditResult")
+    database = Path(database_path).resolve()
+    output = Path(output_path).resolve()
+    if not database.is_file() or not audit.database_path.is_file():
+        raise ValueError("audited task database does not exist")
+    try:
+        same_database = audit.database_path.samefile(database)
+    except OSError as error:
+        raise ValueError("audited task database identity cannot be resolved") from error
+    if not same_database:
+        raise ValueError("audit result belongs to another task database inode")
+    if output.exists():
+        raise ValueError("task database audit manifest output already exists")
+    database_file_sha256, database_file_size_bytes = _stable_file_identity(database)
+    return _publish_task_database_audit_manifest(
+        binding,
+        audit,
+        database,
+        output,
+        database_file_sha256=database_file_sha256,
+        database_file_size_bytes=database_file_size_bytes,
     )
 
 

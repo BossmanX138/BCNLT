@@ -37,6 +37,7 @@ from bosscrafts_model.reviewed_instruction_curriculum import (
     INSTRUCTION_SEMANTIC_SPEC_SHA256,
 )
 from bosscrafts_model.task_database_audit_manifest import (
+    load_verified_task_database_audit_manifest,
     materialize_task_database_audit_manifest,
 )
 from bosscrafts_model.tokenizer import NativeTokenizerBinding
@@ -342,6 +343,7 @@ def test_builds_train_only_split_safe_mix_and_excludes_both_heldout_splits(
     _write_database(instruction, binding, instruction=True)
     semantic_manifest = tmp_path / "semantic-task-audit.json"
     instruction_manifest = tmp_path / "instruction-task-audit.json"
+    output_manifest = tmp_path / "mixed-task-audit.json"
     semantic_identity = materialize_task_database_audit_manifest(
         binding, semantic, semantic_manifest
     ).audit.database_identity_sha256
@@ -359,6 +361,7 @@ def test_builds_train_only_split_safe_mix_and_excludes_both_heldout_splits(
         instruction_training_weight_fraction=0.5,
         semantic_train_audit_manifest=semantic_manifest,
         instruction_audit_manifest=instruction_manifest,
+        output_audit_manifest=output_manifest,
     )
 
     assert result.semantic_example_count == len(CURRENT_RUNTIME_SPEC_SHA256) * len(
@@ -368,6 +371,14 @@ def test_builds_train_only_split_safe_mix_and_excludes_both_heldout_splits(
     assert result.excluded_instruction_validation_example_count == 1
     assert result.excluded_instruction_test_example_count == 1
     assert result.instruction_training_weight_fraction == pytest.approx(0.5)
+    assert result.audit_manifest_sha256 is not None
+    verified_output = load_verified_task_database_audit_manifest(
+        binding,
+        output,
+        output_manifest,
+        expected_database_identity_sha256=result.database_identity_sha256,
+    )
+    assert verified_output.manifest_sha256 == result.audit_manifest_sha256
     audit = audit_task_database(binding, output)
     assert audit.split_counts == {"train": result.example_count}
     dataset = ResumableTaskDataset(binding, output)
@@ -393,7 +404,9 @@ def test_builds_train_only_split_safe_mix_and_excludes_both_heldout_splits(
     finally:
         connection.close()
     receipt = SplitSafeMixedTrainingLossMaskAuditor(binding).materialize(
-        output, tmp_path / "split-safe-loss-mask.json"
+        output,
+        tmp_path / "split-safe-loss-mask.json",
+        audit_manifest=output_manifest,
     )
     assert receipt.audit_passed is True
     assert receipt.training_ready is False

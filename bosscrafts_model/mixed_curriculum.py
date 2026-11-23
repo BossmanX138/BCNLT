@@ -27,6 +27,7 @@ from .reviewed_instruction_curriculum import (
 )
 from .task_database_audit_manifest import (
     load_verified_task_database_audit_manifest,
+    publish_task_database_audit_manifest_from_result,
 )
 from .tokenizer import NativeTokenizerBinding
 
@@ -63,6 +64,7 @@ class SplitSafeMixedTrainingResult:
     excluded_instruction_validation_example_count: int
     excluded_instruction_test_example_count: int
     instruction_training_weight_fraction: float
+    audit_manifest_sha256: str | None = None
 
 
 def _is_sha256(value: object) -> bool:
@@ -431,6 +433,7 @@ def build_split_safe_mixed_training_curriculum(
     instruction_training_weight_fraction: float = 0.5,
     semantic_train_audit_manifest: str | Path | None = None,
     instruction_audit_manifest: str | Path | None = None,
+    output_audit_manifest: str | Path | None = None,
 ) -> SplitSafeMixedTrainingResult:
     """Mix only training rows while retaining held-out source lineage."""
     if type(binding) is not NativeTokenizerBinding:
@@ -448,8 +451,17 @@ def build_split_safe_mixed_training_curriculum(
     semantic_path = Path(semantic_train_database).resolve()
     instruction_path = Path(instruction_database).resolve()
     destination = Path(output_database).resolve()
+    audit_manifest_destination = (
+        None
+        if output_audit_manifest is None
+        else Path(output_audit_manifest).resolve()
+    )
     if destination.exists():
         raise ValueError("split-safe mixed curriculum output already exists")
+    if audit_manifest_destination == destination:
+        raise ValueError("split-safe mixed audit manifest must differ from its database")
+    if audit_manifest_destination is not None and audit_manifest_destination.exists():
+        raise ValueError("split-safe mixed audit manifest output already exists")
     if not semantic_path.is_file() or not instruction_path.is_file():
         raise ValueError("split-safe mixed curriculum source database does not exist")
     if (semantic_train_audit_manifest is None) != (
@@ -713,6 +725,24 @@ def build_split_safe_mixed_training_curriculum(
             raise ValueError(
                 "split-safe mixed curriculum output already exists"
             ) from error
+        try:
+            audit_manifest_sha256 = (
+                None
+                if audit_manifest_destination is None
+                else publish_task_database_audit_manifest_from_result(
+                    binding,
+                    mixed_audit,
+                    destination,
+                    audit_manifest_destination,
+                ).manifest_sha256
+            )
+        except BaseException:
+            try:
+                if destination.exists() and destination.samefile(temporary):
+                    destination.unlink()
+            except OSError:
+                pass
+            raise
     except BaseException:
         if temporary.exists():
             temporary.unlink()
@@ -731,4 +761,5 @@ def build_split_safe_mixed_training_curriculum(
         ),
         excluded_instruction_test_example_count=excluded_instruction_test_count,
         instruction_training_weight_fraction=observed_fraction,
+        audit_manifest_sha256=audit_manifest_sha256,
     )
