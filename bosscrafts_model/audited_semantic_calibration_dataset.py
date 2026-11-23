@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from bisect import bisect_left
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -305,7 +306,12 @@ class AuditedSemanticCalibrationDatasetBuilder:
                     f"{source_split} audit and admission inventories differ"
                 )
 
-            observations: list[dict[str, object]] = []
+            bounded_observations: dict[
+                str, dict[bool, list[tuple[str, dict[str, object]]]]
+            ] = {
+                language: {False: [], True: []}
+                for language in self.expected_languages
+            }
             unlabeled_document_failures = 0
             for row in audited:
                 document_id = str(row["document_id"])
@@ -379,37 +385,54 @@ class AuditedSemanticCalibrationDatasetBuilder:
                         "audit_receipt_sha256": row["receipt_sha256"],
                     }
                     sample_id = _sha256_text(_canonical(identity))
-                    observations.append(
-                        {
-                            "schema_version": OBSERVATION_SCHEMA,
-                            "sample_id": sample_id,
-                            "review_id": f"{document_id}:{record_index}",
-                            "language": row["language"],
-                            "raw_uncertainty": (
-                                SemanticCalibrationDatasetBuilder._raw_uncertainty(
-                                    record
-                                )
-                            ),
-                            "incorrect": incorrect,
-                            "decision": "reject" if incorrect else "keep",
-                            "resolution": "qualified_semantic_audit",
-                            "resolver": audit_metadata[
-                                "audit_host_code_identity_sha256"
-                            ],
-                            "reviewer_entry_sha256": [
-                                row["deterministic_evidence_sha256"],
-                                row["raw_ast_evidence_sha256"],
-                            ],
-                            "parser_runtime_identity_sha256": (
-                                PARSER_RUNTIME_IDENTITY_SHA256
-                            ),
-                            "source_split": source_split,
-                            "document_id": document_id,
-                            "record_index": record_index,
-                            "audit_receipt_sha256": row["receipt_sha256"],
-                            "audit_finding_codes": codes,
-                        }
+                    language_buckets = bounded_observations.get(str(row["language"]))
+                    if language_buckets is None:
+                        continue
+                    bucket = language_buckets[incorrect]
+                    if (
+                        len(bucket) >= self.samples_per_language
+                        and sample_id >= bucket[-1][0]
+                    ):
+                        continue
+                    observation: dict[str, object] = {
+                        "schema_version": OBSERVATION_SCHEMA,
+                        "sample_id": sample_id,
+                        "review_id": f"{document_id}:{record_index}",
+                        "language": row["language"],
+                        "raw_uncertainty": (
+                            SemanticCalibrationDatasetBuilder._raw_uncertainty(record)
+                        ),
+                        "incorrect": incorrect,
+                        "decision": "reject" if incorrect else "keep",
+                        "resolution": "qualified_semantic_audit",
+                        "resolver": audit_metadata[
+                            "audit_host_code_identity_sha256"
+                        ],
+                        "reviewer_entry_sha256": [
+                            row["deterministic_evidence_sha256"],
+                            row["raw_ast_evidence_sha256"],
+                        ],
+                        "parser_runtime_identity_sha256": (
+                            PARSER_RUNTIME_IDENTITY_SHA256
+                        ),
+                        "source_split": source_split,
+                        "document_id": document_id,
+                        "record_index": record_index,
+                        "audit_receipt_sha256": row["receipt_sha256"],
+                        "audit_finding_codes": codes,
+                    }
+                    insert_at = bisect_left(
+                        [existing_id for existing_id, _ in bucket], sample_id
                     )
+                    bucket.insert(insert_at, (sample_id, observation))
+                    if len(bucket) > self.samples_per_language:
+                        bucket.pop()
+            observations = [
+                observation
+                for language in self.expected_languages
+                for incorrect in (False, True)
+                for _, observation in bounded_observations[language][incorrect]
+            ]
             return observations, {
                 "admission_identity_sha256": admission_identity,
                 "audit_identity_sha256": audit_identity,

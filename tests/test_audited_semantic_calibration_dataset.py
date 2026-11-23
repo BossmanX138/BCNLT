@@ -69,13 +69,14 @@ def _build_split(
     *,
     include_findings: bool = True,
     document_failure: bool = False,
+    record_count: int = 4,
 ) -> tuple[Path, Path]:
     split_root = root / split
     split_root.mkdir(parents=True)
     admission_path = split_root / "admission.sqlite"
     audit_path = split_root / "audit.sqlite"
     document_id = f"{split}-document"
-    records = [_record(index) for index in range(4)]
+    records = [_record(index) for index in range(record_count)]
     canonical_jsonl = "".join(f"{_canonical(record)}\n" for record in records)
     canonical_blob = zlib.compress(canonical_jsonl.encode("utf-8"))
     semantic_blob = zlib.compress(b"semantic-ids")
@@ -149,7 +150,11 @@ def _build_split(
 
     deterministic_sha = "3" * 64
     raw_ast_sha = "4" * 64
-    finding_indices = (1, 3) if include_findings and not document_failure else ()
+    finding_indices = (
+        tuple(range(1, record_count, 2))
+        if include_findings and not document_failure
+        else ()
+    )
     finding_count = 1 if document_failure else len(finding_indices)
     failed_record_count = len(records) if document_failure else len(finding_indices)
     summary = {
@@ -320,6 +325,71 @@ def test_builds_balanced_disjoint_dataset_from_frozen_audits(tmp_path: Path) -> 
         "heldout": {"keep": 1, "reject": 1},
     }
     assert manifest["training_ready"] is False
+
+
+def test_bounded_selection_keeps_the_same_lowest_ids_as_full_sort(
+    tmp_path: Path,
+) -> None:
+    validation_admission, validation_audit = _build_split(
+        tmp_path, "validation", record_count=12
+    )
+    test_admission, test_audit = _build_split(
+        tmp_path, "test", record_count=12
+    )
+    output = tmp_path / "output"
+    AuditedSemanticCalibrationDatasetBuilder(
+        samples_per_language=2,
+        expected_languages=("python",),
+    ).materialize(
+        validation_admission,
+        validation_audit,
+        test_admission,
+        test_audit,
+        output,
+    )
+
+    selected = {
+        split: {
+            row["sample_id"]
+            for row in (
+                json.loads(line)
+                for line in (output / filename).read_text(encoding="utf-8").splitlines()
+            )
+        }
+        for split, filename in (
+            ("validation", "calibration_observations.jsonl"),
+            ("test", "heldout_observations.jsonl"),
+        )
+    }
+    for split, admission_path, audit_path in (
+        ("validation", validation_admission, validation_audit),
+        ("test", test_admission, test_audit),
+    ):
+        with sqlite3.connect(admission_path) as admission:
+            document_id, canonical_sha = admission.execute(
+                "SELECT document_id,canonical_sha256 FROM documents"
+            ).fetchone()
+        with sqlite3.connect(audit_path) as audit:
+            receipt_sha = audit.execute(
+                "SELECT receipt_sha256 FROM documents"
+            ).fetchone()[0]
+        ids_by_class = {False: [], True: []}
+        for index in range(12):
+            identity = {
+                "source_split": split,
+                "document_id": document_id,
+                "record_index": index,
+                "canonical_sha256": canonical_sha,
+                "audit_receipt_sha256": receipt_sha,
+            }
+            ids_by_class[index % 2 == 1].append(
+                _sha(_canonical(identity).encode("utf-8"))
+            )
+        expected = {
+            min(ids_by_class[False]),
+            min(ids_by_class[True]),
+        }
+        assert selected[split] == expected
 
 
 def test_built_dataset_is_accepted_by_existing_promotion_pipeline(

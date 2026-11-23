@@ -107,6 +107,27 @@ and the independent audit passed with manifest SHA-256
 The receipt file SHA-256 is
 `a46f9d41fab6632e9749bb28a70c558f3728e7706fb7811963bbe8a069a6f7a3`.
 
+## Current-lineage calibration preflight
+
+The complete repaired-runtime validation and test audits were traversed to
+materialize a bounded-memory calibration preflight at:
+
+- `D:\BCNLT-runs\calibration\audited-semantic-uncertainty-4cc9-fa4c-v1`
+
+The artifact is bound to parser runtime
+`4cc9aac31f89be5c4e3f77ef61eabeea229dfa6db4c1dc80bd578a8f2d9a7917`
+and contains 140 calibration plus 140 disjoint held-out observations, ten per
+language in each split. Its manifest identity is
+`a99684207ad4a80f873360551b8c2a2b60865cdf45f1bb203db2bed2b53b06ec`;
+the manifest file SHA-256 is
+`e6e9f7a9a875be0a6e1c70cc71996bc0149e0d0733f4425e9933f1019ed282d4`.
+
+The preflight correctly remains non-promotable. Every selected natural record
+is a qualified keep, producing zero observed rejects and 28 explicit
+`language_split_missing_reject` blockers across all 14 languages and both
+splits. No synthetic defect was relabeled as a natural calibration error.
+Genuine class-diverse adversarial calibration evidence remains required.
+
 ## Remaining gate order
 
 1. Finish packing the eligible train documents with the pinned `compact_v2`
