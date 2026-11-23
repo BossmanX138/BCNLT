@@ -334,6 +334,57 @@ def test_raw_ast_witness_rejects_ruby_default_expression_as_a_binding():
     assert by_id["default-expression"]["relation_span_match"] is False
 
 
+@pytest.mark.parametrize(
+    ("source", "binding", "default_expression"),
+    (
+        (
+            "f = ->(cookie_store = Store.new) { cookie_store }\n",
+            "cookie_store",
+            "Store.new",
+        ),
+        ("f = ->(*args) { args.max }\n", "args", None),
+    ),
+)
+def test_raw_ast_witness_validates_ruby_lambda_parameter_wrappers(
+    source: str,
+    binding: str,
+    default_expression: str | None,
+) -> None:
+    queries = [
+        {
+            "query_id": "binding",
+            "span": _source_span(source, binding),
+            "ast_relation": "lambda_parameters.binding",
+            "scope": "module.lambda",
+            "surface": binding,
+        }
+    ]
+    if default_expression is not None:
+        queries.append(
+            {
+                "query_id": "default-expression",
+                "span": _source_span(source, default_expression),
+                "ast_relation": "lambda_parameters.binding",
+            }
+        )
+    response = _feature().RawAstWitnessClient().inspect(
+        source,
+        language="ruby",
+        path="lambda-parameters.rb",
+        dialect=None,
+        queries=tuple(queries),
+    )
+
+    by_id = {row["query_id"]: row for row in response["witnesses"]}
+    assert by_id["binding"]["relation_span_match"] is True
+    assert by_id["binding"]["derived_scope"] == "module.lambda"
+    assert by_id["binding"]["scope_match"] is True
+    assert by_id["binding"]["derived_surface"] == binding
+    assert by_id["binding"]["surface_match"] is True
+    if default_expression is not None:
+        assert by_id["default-expression"]["relation_span_match"] is False
+
+
 def test_raw_ast_witness_models_javascript_var_hoisting():
     source = "function f() { if (ready) { var value = 1; } }\n"
     start = source.index("value")

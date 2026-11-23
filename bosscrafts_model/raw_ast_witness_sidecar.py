@@ -327,7 +327,10 @@ def _run(payload: dict[str, object]) -> dict[str, object]:
                 and is_within(target, left)
                 and any(str(child.type) == ":=" for child in owner.children)
             )
-        if relation in {"parameters.binding", "lambda_parameters.binding"}:
+        if (
+            relation in {"parameters.binding", "lambda_parameters.binding"}
+            and language != "ruby"
+        ):
             if target_type != "identifier":
                 return False
             current: _Node | None = target
