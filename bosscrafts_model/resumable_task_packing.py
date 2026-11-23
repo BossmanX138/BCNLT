@@ -40,6 +40,7 @@ FULL_SEMANTIC_WIRE_SCHEMA = "bosscrafts-full-semantic-wire-v3"
 CELL_WEIGHT_MULTIPLIERS_METADATA_KEY = "training_cell_weight_multipliers_v1_json"
 SALTED_SOURCE_EXAMPLE_ID_POLICY = "bosscrafts-v11-salted-source-example-id-v1"
 TASK_DATABASE_BUSY_TIMEOUT_MS = 300_000
+TASK_DATABASE_WAL_AUTOCHECKPOINT_PAGES = 0
 TASK_DATABASE_LOCK_RETRY_LIMIT = 12
 TASK_DATABASE_LOCK_RETRY_INITIAL_SECONDS = 1.0
 TASK_DATABASE_LOCK_RETRY_MAX_SECONDS = 30.0
@@ -1003,6 +1004,13 @@ class ResumableCurrentTaskPacking:
                 if journal_mode != "wal":
                     connection.execute("PRAGMA journal_mode=WAL")
                 connection.execute("PRAGMA synchronous=FULL")
+                # FULL keeps committed WAL transactions durable.  Deferring
+                # checkpoints avoids rewriting the growing main database on
+                # every small bulk-build threshold, especially on USB media.
+                connection.execute(
+                    "PRAGMA wal_autocheckpoint="
+                    f"{TASK_DATABASE_WAL_AUTOCHECKPOINT_PAGES}"
+                )
                 return connection
             except sqlite3.OperationalError as error:
                 connection.close()

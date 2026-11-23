@@ -454,6 +454,7 @@ class ResumableTaskPackingTests(unittest.TestCase):
                 "PRAGMA journal_mode",
                 "PRAGMA journal_mode=WAL",
                 "PRAGMA synchronous=FULL",
+                "PRAGMA wal_autocheckpoint=0",
             ],
         )
         sleep.assert_called_once_with(
@@ -497,6 +498,7 @@ class ResumableTaskPackingTests(unittest.TestCase):
                 f"PRAGMA busy_timeout={module.TASK_DATABASE_BUSY_TIMEOUT_MS}",
                 "PRAGMA journal_mode",
                 "PRAGMA synchronous=FULL",
+                "PRAGMA wal_autocheckpoint=0",
             ],
         )
 
