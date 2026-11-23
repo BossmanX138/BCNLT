@@ -43,6 +43,7 @@ TASK_DATABASE_BUSY_TIMEOUT_MS = 300_000
 TASK_DATABASE_LOCK_RETRY_LIMIT = 12
 TASK_DATABASE_LOCK_RETRY_INITIAL_SECONDS = 1.0
 TASK_DATABASE_LOCK_RETRY_MAX_SECONDS = 30.0
+ELIGIBILITY_LOOKUP_CHUNK_SIZE = 500
 _TASK_FAMILIES = frozenset(
     {
         "instruction_to_code",
@@ -890,19 +891,36 @@ class ResumableCurrentTaskPacking:
             identity = ResumableTrainingSemanticAudit._admission_identity(
                 admission, metadata
             )
-            admitted_ids = {
-                str(row[0])
-                for row in admission.execute(
-                    "SELECT document_id FROM documents WHERE status='admitted'"
-                )
-            }
+            eligibility_is_admitted = self._eligible_ids_are_admitted(
+                admission, eligible_ids
+            )
         finally:
             admission.close()
         if manifest.get(
             "source_admission_identity_sha256"
-        ) != identity or not eligible_ids.issubset(admitted_ids):
+        ) != identity or not eligibility_is_admitted:
             raise ValueError("training eligibility admission lineage mismatch")
         return eligible_ids, manifest
+
+    @staticmethod
+    def _eligible_ids_are_admitted(
+        admission: sqlite3.Connection, eligible_ids: set[str]
+    ) -> bool:
+        ordered_ids = sorted(eligible_ids)
+        for offset in range(0, len(ordered_ids), ELIGIBILITY_LOOKUP_CHUNK_SIZE):
+            chunk = ordered_ids[offset : offset + ELIGIBILITY_LOOKUP_CHUNK_SIZE]
+            placeholders = ",".join("?" for _ in chunk)
+            admitted_ids = {
+                str(row[0])
+                for row in admission.execute(
+                    "SELECT document_id FROM documents "
+                    f"WHERE status='admitted' AND document_id IN ({placeholders})",
+                    chunk,
+                )
+            }
+            if admitted_ids != set(chunk):
+                return False
+        return True
 
     @staticmethod
     def _ro_connect(path: Path) -> sqlite3.Connection:
@@ -1141,17 +1159,18 @@ class ResumableCurrentTaskPacking:
         worker_index: int,
         worker_count: int,
     ) -> Iterator[AdmissionTaskRow]:
-        document_ids = admission.execute(
-            """SELECT document_id FROM documents
-               WHERE status='admitted' ORDER BY document_id"""
-        )
-        for document_id_row in document_ids:
-            document_id = str(document_id_row[0])
-            if (
-                self._eligible_ids is not None
-                and document_id not in self._eligible_ids
-            ):
-                continue
+        document_ids: Iterator[str]
+        if self._eligible_ids is None:
+            document_ids = (
+                str(row[0])
+                for row in admission.execute(
+                    """SELECT document_id FROM documents
+                       WHERE status='admitted' ORDER BY document_id"""
+                )
+            )
+        else:
+            document_ids = iter(sorted(self._eligible_ids))
+        for document_id in document_ids:
             worker_bucket = int(
                 hashlib.sha256(document_id.encode("utf-8")).hexdigest()[:16], 16
             ) % worker_count

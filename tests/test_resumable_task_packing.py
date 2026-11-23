@@ -593,6 +593,45 @@ class ResumableTaskPackingTests(unittest.TestCase):
         self.assertIn("document_id='chosen'", payload_queries[0])
         self.assertNotIn("complete", payload_queries[0])
         self.assertNotIn("ineligible", payload_queries[0])
+        self.assertFalse(
+            any(
+                "select document_id from documents" in statement.casefold()
+                and "order by document_id" in statement.casefold()
+                for statement in statements
+            )
+        )
+
+    def test_eligibility_admission_check_uses_indexed_id_lookups(self) -> None:
+        module = importlib.import_module("bosscrafts_model.resumable_task_packing")
+        connection = sqlite3.connect(":memory:")
+        statements: list[str] = []
+        try:
+            connection.execute(
+                "CREATE TABLE documents(document_id TEXT PRIMARY KEY, status TEXT NOT NULL)"
+            )
+            connection.executemany(
+                "INSERT INTO documents VALUES(?,?)",
+                (("alpha", "admitted"), ("beta", "admitted"), ("gamma", "rejected")),
+            )
+            connection.commit()
+            connection.set_trace_callback(statements.append)
+
+            self.assertTrue(
+                module.ResumableCurrentTaskPacking._eligible_ids_are_admitted(
+                    connection, {"alpha", "beta"}
+                )
+            )
+            self.assertFalse(
+                module.ResumableCurrentTaskPacking._eligible_ids_are_admitted(
+                    connection, {"alpha", "gamma"}
+                )
+            )
+        finally:
+            connection.close()
+
+        self.assertTrue(statements)
+        self.assertTrue(all(" IN (" in statement for statement in statements))
+        self.assertTrue(all("status='admitted'" in statement for statement in statements))
 
     def test_worker_partitions_produce_the_same_complete_database_identity(self):
         module = importlib.import_module("bosscrafts_model.resumable_task_packing")
