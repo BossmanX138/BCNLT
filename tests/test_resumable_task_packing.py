@@ -312,6 +312,26 @@ class ResumableTaskPackingTests(unittest.TestCase):
             self.assertRegex(audit.content_sha256, r"^[0-9a-f]{64}$")
             original_content_sha256 = audit.content_sha256
             original_database_identity = audit.database_identity_sha256
+            ledger_tamper = sqlite3.connect(tasks_path)
+            try:
+                ledger_tamper.execute(
+                    "UPDATE documents SET task_count=task_count+1 WHERE document_id=?",
+                    (rows[0]["document_id"],),
+                )
+                ledger_tamper.commit()
+            finally:
+                ledger_tamper.close()
+            with self.assertRaisesRegex(ValueError, "ledger count mismatch"):
+                audit_task_database(self.binding, tasks_path)
+            ledger_restore = sqlite3.connect(tasks_path)
+            try:
+                ledger_restore.execute(
+                    "UPDATE documents SET task_count=task_count-1 WHERE document_id=?",
+                    (rows[0]["document_id"],),
+                )
+                ledger_restore.commit()
+            finally:
+                ledger_restore.close()
             lineage_tamper = sqlite3.connect(tasks_path)
             try:
                 lineage_tamper.execute(

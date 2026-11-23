@@ -532,6 +532,42 @@ def audit_task_database(
             "task database maximum sequence metadata is invalid"
         ) from error
     example_id_policy = dataset.metadata.get("training_example_id_policy")
+    document_ledger: dict[str, tuple[int, int]] | None = None
+    ledger_rejection_counts: Counter[str] = Counter()
+    ledger_connection = ResumableCurrentTaskPacking._ro_connect(dataset.database_path)
+    try:
+        table_names = {
+            str(row[0])
+            for row in ledger_connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        if "documents" in table_names:
+            if "rejections" not in table_names:
+                raise ValueError("task database document ledger is incomplete")
+            document_ledger = {}
+            for document_id, task_count, rejected_count in ledger_connection.execute(
+                "SELECT document_id,task_count,rejected_count FROM documents"
+            ):
+                if (
+                    type(document_id) is not str
+                    or type(task_count) is not int
+                    or task_count < 0
+                    or type(rejected_count) is not int
+                    or rejected_count < 0
+                ):
+                    raise ValueError("task database document ledger is invalid")
+                document_ledger[document_id] = (task_count, rejected_count)
+            if not document_ledger:
+                raise ValueError("task database document ledger is empty")
+            for document_id, rejected_count in ledger_connection.execute(
+                "SELECT document_id,COUNT(*) FROM rejections GROUP BY document_id"
+            ):
+                if type(document_id) is not str or type(rejected_count) is not int:
+                    raise ValueError("task database rejection ledger is invalid")
+                ledger_rejection_counts[document_id] = rejected_count
+    finally:
+        ledger_connection.close()
     source_identity_connection: sqlite3.Connection | None = None
     source_identity_cursor: sqlite3.Cursor | None = None
     mapping_digest = hashlib.sha256()
@@ -554,6 +590,7 @@ def audit_task_database(
     language_counts: Counter[str] = Counter()
     family_counts: Counter[str] = Counter()
     document_splits: dict[str, set[str]] = defaultdict(set)
+    document_task_counts: Counter[str] = Counter()
     content_digest = hashlib.sha256()
     example_count = 0
     total_sequence_tokens = 0
@@ -618,7 +655,11 @@ def audit_task_database(
             split_counts[split] += 1
             language_counts[language] += 1
             family_counts[family] += 1
-            document_splits[str(row["document_id"])].add(split)
+            document_id = str(row["document_id"])
+            if document_ledger is not None and document_id not in document_ledger:
+                raise ValueError("task row is absent from the document ledger")
+            document_splits[document_id].add(split)
+            document_task_counts[document_id] += 1
             content_digest.update(
                 _canonical_json(
                     {
@@ -662,6 +703,18 @@ def audit_task_database(
             source_identity_connection.close()
     if not example_count:
         raise ValueError("task database audit found no examples")
+    if document_ledger is not None:
+        unknown_rejection_documents = set(ledger_rejection_counts).difference(
+            document_ledger
+        )
+        if unknown_rejection_documents:
+            raise ValueError("task rejection is absent from the document ledger")
+        for document_id, (task_count, rejected_count) in document_ledger.items():
+            if (
+                document_task_counts[document_id] != task_count
+                or ledger_rejection_counts[document_id] != rejected_count
+            ):
+                raise ValueError("task database document ledger count mismatch")
     if any(len(splits) != 1 for splits in document_splits.values()):
         raise ValueError("task document appears in multiple splits")
     content_sha256 = content_digest.hexdigest()
