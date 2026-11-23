@@ -385,6 +385,50 @@ class ResumableTaskPackingTests(unittest.TestCase):
             module.TASK_DATABASE_LOCK_RETRY_INITIAL_SECONDS
         )
 
+    def test_connection_setup_retries_locked_wal_initialization(self) -> None:
+        module = importlib.import_module("bosscrafts_model.resumable_task_packing")
+
+        class SetupConnection:
+            def __init__(self, *, lock_journal: bool) -> None:
+                self.lock_journal = lock_journal
+                self.closed = False
+                self.statements: list[str] = []
+
+            def execute(self, statement: str) -> None:
+                self.statements.append(statement)
+                if self.lock_journal and statement == "PRAGMA journal_mode=WAL":
+                    raise sqlite3.OperationalError("database is locked")
+
+            def close(self) -> None:
+                self.closed = True
+
+        locked = SetupConnection(lock_journal=True)
+        ready = SetupConnection(lock_journal=False)
+        packing = object.__new__(module.ResumableCurrentTaskPacking)
+        packing.database_path = Path("task-packing.sqlite")
+
+        with (
+            patch.object(module.sqlite3, "connect", side_effect=(locked, ready)) as connect,
+            patch.object(module.time, "sleep") as sleep,
+        ):
+            connection = packing._connect()
+
+        self.assertIs(connection, ready)
+        self.assertTrue(locked.closed)
+        self.assertFalse(ready.closed)
+        self.assertEqual(connect.call_count, 2)
+        self.assertEqual(
+            ready.statements,
+            [
+                f"PRAGMA busy_timeout={module.TASK_DATABASE_BUSY_TIMEOUT_MS}",
+                "PRAGMA journal_mode=WAL",
+                "PRAGMA synchronous=FULL",
+            ],
+        )
+        sleep.assert_called_once_with(
+            module.TASK_DATABASE_LOCK_RETRY_INITIAL_SECONDS
+        )
+
     def test_worker_partitions_produce_the_same_complete_database_identity(self):
         module = importlib.import_module("bosscrafts_model.resumable_task_packing")
         candidates = tuple(

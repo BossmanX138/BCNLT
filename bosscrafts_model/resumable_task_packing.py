@@ -896,14 +896,30 @@ class ResumableCurrentTaskPacking:
         return connection
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(
-            self.database_path,
-            timeout=TASK_DATABASE_BUSY_TIMEOUT_MS / 1000,
-        )
-        connection.execute(f"PRAGMA busy_timeout={TASK_DATABASE_BUSY_TIMEOUT_MS}")
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("PRAGMA synchronous=FULL")
-        return connection
+        retry_index = 0
+        while True:
+            connection = sqlite3.connect(
+                self.database_path,
+                timeout=TASK_DATABASE_BUSY_TIMEOUT_MS / 1000,
+            )
+            try:
+                connection.execute(
+                    f"PRAGMA busy_timeout={TASK_DATABASE_BUSY_TIMEOUT_MS}"
+                )
+                connection.execute("PRAGMA journal_mode=WAL")
+                connection.execute("PRAGMA synchronous=FULL")
+                return connection
+            except sqlite3.OperationalError as error:
+                connection.close()
+                lock_error = "locked" in str(error).casefold()
+                if not lock_error or retry_index >= TASK_DATABASE_LOCK_RETRY_LIMIT:
+                    raise
+                delay = min(
+                    TASK_DATABASE_LOCK_RETRY_INITIAL_SECONDS * (2**retry_index),
+                    TASK_DATABASE_LOCK_RETRY_MAX_SECONDS,
+                )
+                retry_index += 1
+                time.sleep(delay)
 
     @staticmethod
     def _insert_document_rows(
