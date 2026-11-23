@@ -480,6 +480,53 @@ class ResumableTaskPackingTests(unittest.TestCase):
             ],
         )
 
+    def test_existing_complete_schema_initializes_without_ddl(self) -> None:
+        module = importlib.import_module("bosscrafts_model.resumable_task_packing")
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "tasks.sqlite"
+            connection = sqlite3.connect(database)
+            try:
+                connection.executescript(
+                    """
+                    CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                    CREATE TABLE documents(
+                        document_id TEXT PRIMARY KEY,
+                        task_count INTEGER NOT NULL,
+                        rejected_count INTEGER NOT NULL
+                    );
+                    CREATE TABLE tasks(example_id TEXT PRIMARY KEY);
+                    CREATE TABLE rejections(rejection_id TEXT PRIMARY KEY);
+                    INSERT INTO metadata VALUES('fixture_key', 'fixture_value');
+                    """
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            statements: list[str] = []
+
+            def traced_connection() -> sqlite3.Connection:
+                traced = sqlite3.connect(database)
+                traced.set_trace_callback(statements.append)
+                return traced
+
+            packing = object.__new__(module.ResumableCurrentTaskPacking)
+            packing.database_path = database
+            packing._defer_cell_index = True
+            packing._expected_metadata = {"fixture_key": "fixture_value"}
+
+            with patch.object(
+                module.ResumableCurrentTaskPacking,
+                "_connect",
+                autospec=True,
+                side_effect=lambda _packing: traced_connection(),
+            ):
+                packing._initialize()
+
+        self.assertFalse(
+            any(statement.lstrip().upper().startswith("CREATE") for statement in statements)
+        )
+
     def test_worker_partitions_produce_the_same_complete_database_identity(self):
         module = importlib.import_module("bosscrafts_model.resumable_task_packing")
         candidates = tuple(

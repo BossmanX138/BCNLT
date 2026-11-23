@@ -1002,9 +1002,38 @@ class ResumableCurrentTaskPacking:
             raise RuntimeError("admission database count query returned no row")
         return metadata, int(counts[0] or 0), int(counts[1] or 0)
 
+    def _initialized_schema_is_ready(self, connection: sqlite3.Connection) -> bool:
+        required_tables = {"metadata", "documents", "tasks", "rejections"}
+        existing_tables = {
+            str(row[0])
+            for row in connection.execute(
+                """SELECT name FROM sqlite_schema
+                   WHERE type='table' AND name IN ('metadata','documents','tasks','rejections')"""
+            )
+        }
+        if existing_tables != required_tables:
+            return False
+        if self._defer_cell_index:
+            return True
+        return (
+            connection.execute(
+                "SELECT 1 FROM sqlite_schema WHERE type='index' AND name='tasks_cell'"
+            ).fetchone()
+            is not None
+        )
+
     def _initialize(self) -> None:
         connection = self._connect()
         try:
+            if self._initialized_schema_is_ready(connection):
+                existing = dict(connection.execute("SELECT key, value FROM metadata"))
+                if existing:
+                    actual = {
+                        key: existing.get(key) for key in self._expected_metadata
+                    }
+                    if actual != self._expected_metadata:
+                        raise ValueError("resumable task packing lineage mismatch")
+                    return
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
             )
