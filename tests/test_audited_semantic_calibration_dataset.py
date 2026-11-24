@@ -6,6 +6,7 @@ import sqlite3
 import subprocess
 import sys
 import zlib
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -365,11 +366,11 @@ def test_bounded_selection_keeps_the_same_lowest_ids_as_full_sort(
         ("validation", validation_admission, validation_audit),
         ("test", test_admission, test_audit),
     ):
-        with sqlite3.connect(admission_path) as admission:
+        with closing(sqlite3.connect(admission_path)) as admission:
             document_id, canonical_sha = admission.execute(
                 "SELECT document_id,canonical_sha256 FROM documents"
             ).fetchone()
-        with sqlite3.connect(audit_path) as audit:
+        with closing(sqlite3.connect(audit_path)) as audit:
             receipt_sha = audit.execute(
                 "SELECT receipt_sha256 FROM documents"
             ).fetchone()[0]
