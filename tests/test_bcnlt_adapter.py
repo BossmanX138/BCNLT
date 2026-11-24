@@ -1,16 +1,16 @@
 import copy
-from dataclasses import replace
 import hashlib
 import json
-from pathlib import Path
 import unittest
+from dataclasses import replace
+from pathlib import Path
 
 from bosscrafts_model.bcnlt_adapter import (
-    BCNLTMultilingualOutputAdapter,
-    BCNLTParserOutputProvenance,
     LANGUAGE_SPEC_SHA256,
     PARSER_BUNDLE_SHA256,
     SOURCE_CANDIDATES_SHA256,
+    BCNLTMultilingualOutputAdapter,
+    BCNLTParserOutputProvenance,
 )
 from bosscrafts_model.semantic import NativeSemanticRecordCodec
 from bosscrafts_model.tokenizer import (
@@ -18,7 +18,6 @@ from bosscrafts_model.tokenizer import (
     EXPECTED_TOKENIZER_SHA256,
     NativeTokenizerBinding,
 )
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_ROOT = PROJECT_ROOT / "artifacts" / "bcnlt" / "multilingual-parser-output-v1"
@@ -197,6 +196,53 @@ class BCNLTMultilingualOutputAdapterTests(unittest.TestCase):
                 output,
                 BCNLTParserOutputProvenance.expected("python"),
             )
+
+    def test_common_core_return_may_have_no_name(self):
+        payload = json.loads(self.output_lines[0])
+        payload["event"] = "RETURN"
+        payload["surface"] = "value"
+        payload["ir"] = {
+            "children": [],
+            "kind": "return",
+            "metadata": {},
+            "name": None,
+            "value": None,
+        }
+
+        records = self.adapter.parse_jsonl(
+            canonical_output(payload),
+            BCNLTParserOutputProvenance.expected("python"),
+        )
+
+        self.assertEqual(records[0].event, "RETURN")
+
+    def test_ir_kind_and_required_name_contract_fails_closed(self):
+        base = json.loads(self.output_lines[0])
+        invalid_ir_nodes = (
+            {
+                "children": [],
+                "kind": "invented_kind",
+                "metadata": {},
+                "name": "x",
+                "value": None,
+            },
+            {
+                "children": [],
+                "kind": "variable",
+                "metadata": {},
+                "name": None,
+                "value": None,
+            },
+        )
+
+        for ir in invalid_ir_nodes:
+            payload = copy.deepcopy(base)
+            payload["ir"] = ir
+            with self.subTest(ir=ir), self.assertRaisesRegex(ValueError, "IR"):
+                self.adapter.parse_jsonl(
+                    canonical_output(payload),
+                    BCNLTParserOutputProvenance.expected("python"),
+                )
 
 
 if __name__ == "__main__":

@@ -2,12 +2,11 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter
 import hashlib
 import json
-from pathlib import Path
 import sys
-
+from collections import Counter
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -16,7 +15,6 @@ if str(PROJECT_ROOT) not in sys.path:
 from bosscrafts_model.compact_task_packing import CompactCurrentCorpusTaskPacker
 from bosscrafts_model.current_task_packing import CurrentCorpusTaskPacker
 from bosscrafts_model.tokenizer import NativeTokenizerBinding
-
 
 DEFAULT_ADMISSION = (
     PROJECT_ROOT
@@ -29,10 +27,13 @@ DEFAULT_OUTPUT = PROJECT_ROOT / "artifacts" / "audits" / "compact-task-packing-h
 
 
 def _key(example: dict[str, object]) -> tuple[str, str, int]:
+    record_index = example["record_index"]
+    if type(record_index) is not int:
+        raise ValueError("task record_index must be an integer")
     return (
         str(example["document_id"]),
         str(example["family"]),
-        int(example["record_index"]),
+        record_index,
     )
 
 

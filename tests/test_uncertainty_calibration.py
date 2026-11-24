@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import replace
-from pathlib import Path
+import math
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from runtime_import import select_bcnlt_runtime
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_SOURCE = (
@@ -19,10 +19,10 @@ RUNTIME_SOURCE = (
 )
 select_bcnlt_runtime(RUNTIME_SOURCE)
 
-from bcnlt.cache import ProjectIndex
-from bcnlt.core import ContextualUnit
-from bcnlt.uncertainty import HeuristicUncertaintyScorer
-from bcnlt.uncertainty_calibration import (
+from bcnlt.cache import ProjectIndex  # noqa: E402
+from bcnlt.core import ContextualUnit  # noqa: E402
+from bcnlt.uncertainty import HeuristicUncertaintyScorer  # noqa: E402
+from bcnlt.uncertainty_calibration import (  # noqa: E402
     CalibratedUncertaintyScorer,
     CalibrationThresholds,
     UncertaintyObservation,
@@ -152,6 +152,53 @@ class UncertaintyCalibrationTests(unittest.TestCase):
         tampered = replace(artifact, heldout_manifest_sha256="3" * 64)
         with self.assertRaisesRegex(ValueError, "integrity"):
             CalibratedUncertaintyScorer(HeuristicUncertaintyScorer(), tampered)
+
+
+class EntropyProviderPolicyTests(unittest.TestCase):
+    @staticmethod
+    def _unit() -> ContextualUnit:
+        return ContextualUnit(
+            surface="value",
+            event="ASSIGN",
+            scope="module",
+            span=(1, 0, 1, 5),
+            ast_relation="assignment.left",
+        )
+
+    def test_default_scorer_explicitly_has_no_model_entropy_provider(self):
+        scorer = HeuristicUncertaintyScorer()
+
+        self.assertIsNone(scorer.entropy_provider)
+        score = scorer.score(self._unit(), ProjectIndex())
+        self.assertNotIn("model entropy", score.signals)
+
+    def test_injected_model_entropy_is_applied_and_labeled(self):
+        class Provider:
+            def entropy_for(self, unit: ContextualUnit) -> float:
+                return 0.5
+
+        score = HeuristicUncertaintyScorer(Provider()).score(
+            self._unit(), ProjectIndex()
+        )
+
+        self.assertAlmostEqual(score.uncertainty, 0.15)
+        self.assertAlmostEqual(score.confidence, 0.85)
+        self.assertIn("model entropy", score.signals)
+
+    def test_invalid_model_entropy_fails_closed(self):
+        class Provider:
+            def __init__(self, value: float) -> None:
+                self.value = value
+
+            def entropy_for(self, unit: ContextualUnit) -> float:
+                return self.value
+
+        for value in (-0.1, 1.1, math.inf, math.nan):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "model entropy"):
+                    HeuristicUncertaintyScorer(Provider(value)).score(
+                        self._unit(), ProjectIndex()
+                    )
 
 
 

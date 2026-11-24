@@ -1,12 +1,11 @@
 """Inference prompts that exactly mirror the frozen BCNLT training protocol."""
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Iterable, Sequence
 
 from .bcnlt_source_pipeline import _NativeSemanticStreamCodec
 from .tokenizer import NativeTokenizerBinding
-
 
 INFERENCE_TASKS = (
     "raw",
@@ -14,6 +13,7 @@ INFERENCE_TASKS = (
     "semantic_to_code",
     "semantic_continuation",
     "instruction_to_code",
+    "instruction_to_response",
 )
 
 
@@ -26,7 +26,7 @@ class HeldoutInferenceCase:
 
 
 def select_heldout_inference_case(
-    examples: Iterable[dict[str, object]],
+    examples: Iterable[Mapping[str, object]],
     *,
     family: str,
     max_new_tokens: int,
@@ -40,8 +40,6 @@ def select_heldout_inference_case(
     if type(maximum_sequence) is not int or maximum_sequence < 2:
         raise ValueError("maximum_sequence must be at least two")
     for example in examples:
-        if type(example) is not dict:
-            raise TypeError("held-out examples must be dictionaries")
         if example.get("family") != family:
             continue
         example_id = example.get("example_id")
@@ -101,13 +99,14 @@ def build_inference_prompt(
             *binding.encode_payload(prompt),
             _id(binding, "stream:end"),
         ]
-    if task == "instruction_to_code":
+    if task in {"instruction_to_code", "instruction_to_response"}:
         if type(prompt) is not str or not prompt:
             raise ValueError("instruction prompt must be a non-empty string")
+        mode = "mode:raw_code" if task == "instruction_to_code" else "mode:text"
         return [
             _id(binding, "task:mixed_instruction"),
             _id(binding, "stream:begin"),
-            _id(binding, "mode:raw_code"),
+            _id(binding, mode),
             *binding.encode_payload(prompt),
             _id(binding, "stream:end"),
         ]
@@ -178,11 +177,12 @@ def response_protocol_complete(
     if generated_ids[-1:] != [_id(binding, "task:end")]:
         return False
     response = generated_ids[:-1]
-    expected_mode = (
-        "mode:raw_code"
-        if task in {"semantic_to_code", "instruction_to_code"}
-        else "mode:semantic_code"
-    )
+    if task in {"semantic_to_code", "instruction_to_code"}:
+        expected_mode = "mode:raw_code"
+    elif task == "instruction_to_response":
+        expected_mode = "mode:text"
+    else:
+        expected_mode = "mode:semantic_code"
     framing_valid = (
         len(response) >= 3
         and response[:2]
@@ -191,7 +191,11 @@ def response_protocol_complete(
     )
     if not framing_valid:
         return False
-    if task in {"semantic_to_code", "instruction_to_code"}:
+    if task in {
+        "semantic_to_code",
+        "instruction_to_code",
+        "instruction_to_response",
+    }:
         return not any(0 <= token_id <= 76 for token_id in response[2:-1])
     try:
         _NativeSemanticStreamCodec(binding).decode(response)

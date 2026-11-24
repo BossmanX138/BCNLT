@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
 import hashlib
 import importlib
 import importlib.util
 import json
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from threading import Thread
 
 import pytest
@@ -168,6 +168,41 @@ def _review_server(decisions: dict[str, dict[str, object]], *, response_models=N
         server.server_close()
 
 
+@contextmanager
+def _raw_review_server(responses: dict[str, bytes | list[bytes]]):
+    state = {"calls": []}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            length = int(self.headers["Content-Length"])
+            request = json.loads(self.rfile.read(length))
+            model = request["model"]
+            state["calls"].append(model)
+            configured = responses[model]
+            if isinstance(configured, list):
+                configured = configured[
+                    sum(1 for called in state["calls"] if called == model) - 1
+                ]
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(configured)))
+            self.end_headers()
+            self.wfile.write(configured)
+
+        def log_message(self, format, *args):  # noqa: A003
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", state
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def _reviewers(feature, base_url: str):
     return (
         feature.LocalReviewerSpec("reviewer-a", base_url, "model-a", timeout_seconds=5),
@@ -210,6 +245,16 @@ def test_reviewer_configuration_rejects_non_loopback_endpoint():
     with pytest.raises(ValueError, match="loopback"):
         feature.LocalReviewerSpec(
             "external-reviewer", "https://api.example.com", "remote-model"
+        )
+
+
+def test_reviewer_configuration_requires_a_literal_loopback_address():
+    feature = _feature()
+    with pytest.raises(ValueError, match="loopback"):
+        feature.LocalReviewerSpec(
+            "hostname-reviewer",
+            "http://localhost:8000",
+            "local-model",
         )
 
 
@@ -514,6 +559,61 @@ def test_transport_failure_is_preserved_without_fabricated_response_artifact():
         assert failure["response_file"] is None
         assert failure["response_model"] is None
         assert not (Path(output_dir) / "responses").exists()
+
+
+def test_invalid_json_is_durable_and_exhausts_after_one_repair():
+    feature = _feature()
+    with tempfile.TemporaryDirectory() as queue_dir, tempfile.TemporaryDirectory() as output_dir:
+        _queue(Path(queue_dir))
+        with _raw_review_server(
+            {"model-a": [b"not-json", b"still-not-json"], "model-b": b"not-json"}
+        ) as (base_url, state):
+            runner = feature.DualLocalSemanticReviewer(
+                queue_dir, output_dir, _reviewers(feature, base_url)
+            )
+            runner.run(limit=1, continue_on_failure=True)
+            runner.run(limit=1, continue_on_failure=True)
+            terminal = runner.run(continue_on_failure=True)
+
+        assert state["calls"] == ["model-a", "model-a", "model-b"]
+        assert terminal.failed_attempts == 3
+        failures = [
+            json.loads(line)
+            for line in (Path(output_dir) / "reviewer_failures.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        assert [entry["failure_type"] for entry in failures] == [
+            "invalid_json",
+            "invalid_json",
+            "invalid_json",
+        ]
+        assert failures[1]["request_kind"] == "repair"
+        evidence = json.loads(
+            (Path(output_dir) / failures[0]["response_file"]).read_text(encoding="utf-8")
+        )
+        assert evidence["raw_response_sha256"] == hashlib.sha256(b"not-json").hexdigest()
+
+
+def test_oversized_response_is_recorded_before_repair(monkeypatch: pytest.MonkeyPatch):
+    feature = _feature()
+    monkeypatch.setattr(feature, "_MAX_RESPONSE_BYTES", 32)
+    with tempfile.TemporaryDirectory() as queue_dir, tempfile.TemporaryDirectory() as output_dir:
+        _queue(Path(queue_dir))
+        with _raw_review_server({"model-a": b"x" * 64, "model-b": b"x" * 64}) as (
+            base_url,
+            _state,
+        ):
+            result = feature.DualLocalSemanticReviewer(
+                queue_dir, output_dir, _reviewers(feature, base_url)
+            ).run(limit=1, continue_on_failure=True)
+
+        failure = json.loads(
+            (Path(output_dir) / "reviewer_failures.jsonl").read_text(encoding="utf-8")
+        )
+        assert result.failed_attempts == 1
+        assert failure["failure_type"] == "response_too_large"
+        assert (Path(output_dir) / failure["response_file"]).is_file()
 
 
 def test_continue_on_failure_runs_independent_reviewer_and_reports_attempt():

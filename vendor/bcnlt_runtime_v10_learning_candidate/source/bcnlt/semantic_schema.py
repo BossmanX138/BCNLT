@@ -15,6 +15,7 @@ UNCERTAINTY_METADATA_KEYS = (
     "preprocessor_condition",
     "unknown_node",
     "surface_truncated",
+    "implicit_binding",
     "knowledge_state",
     "uyr_rounds",
     "uncertainty_signals",
@@ -47,6 +48,7 @@ def validate_uncertainty_metadata(key: str, value: Any) -> None:
         "macro_expansion",
         "overload_unresolved",
         "surface_truncated",
+        "implicit_binding",
     }:
         if not isinstance(value, bool):
             raise ValueError(f"{key} metadata must be bool")

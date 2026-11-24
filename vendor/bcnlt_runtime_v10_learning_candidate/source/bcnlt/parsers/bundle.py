@@ -9,11 +9,10 @@ import re
 import shutil
 import sys
 import urllib.request
-from urllib.parse import urlsplit
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
-
+from urllib.parse import urlsplit
 
 REQUIRED_GRAMMARS = (
     "python",
@@ -38,6 +37,13 @@ _SHA40 = re.compile(r"^[0-9a-f]{40}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 MAX_PROVENANCE_BYTES = 4 * 1024 * 1024
 _PROVENANCE_PATH_PREFIX = "/xberg-io/tree-sitter-language-pack/releases/download/"
+_PROVENANCE_REDIRECT_HOSTS = frozenset(
+    (
+        "github.com",
+        "objects.githubusercontent.com",
+        "release-assets.githubusercontent.com",
+    )
+)
 
 
 class ParseNode(Protocol):
@@ -274,27 +280,55 @@ def _load_config(path: Path) -> dict[str, Any]:
     return payload
 
 
+def _validate_provenance_url(url: str, *, release_origin: bool) -> None:
+    parsed = urlsplit(url)
+    valid = (
+        parsed.scheme == "https"
+        and parsed.hostname in _PROVENANCE_REDIRECT_HOSTS
+        and parsed.username is None
+        and parsed.password is None
+        and parsed.port is None
+        and bool(parsed.path)
+    )
+    if release_origin:
+        valid = (
+            valid
+            and parsed.hostname == "github.com"
+            and parsed.path.startswith(_PROVENANCE_PATH_PREFIX)
+            and bool(Path(parsed.path).name)
+        )
+    if not valid:
+        raise ValueError("Parser provenance URL is outside the pinned HTTPS release origin")
+
+
+class _PinnedProvenanceRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        req: Any,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> Any:
+        _validate_provenance_url(newurl, release_origin=False)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _load_provenance(config: dict[str, Any], cache_root: Path) -> dict[str, Any]:
     url = str(config.get("provenance_url", ""))
     expected = str(config.get("provenance_sha256", ""))
-    parsed = urlsplit(url)
-    if (
-        parsed.scheme != "https"
-        or parsed.hostname != "github.com"
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.port is not None
-        or not parsed.path.startswith(_PROVENANCE_PATH_PREFIX)
-        or not Path(parsed.path).name
-    ):
-        raise ValueError("Parser provenance URL is outside the pinned HTTPS release origin")
+    _validate_provenance_url(url, release_origin=True)
     if not _SHA256.fullmatch(expected):
         raise ValueError("Parser provenance SHA-256 is invalid")
+    parsed = urlsplit(url)
     target = cache_root / Path(parsed.path).name
     target.parent.mkdir(parents=True, exist_ok=True)
     if not target.exists():
         too_large = False
-        with urllib.request.urlopen(url, timeout=60) as response, target.open("wb") as output:
+        opener = urllib.request.build_opener(_PinnedProvenanceRedirectHandler())
+        with opener.open(url, timeout=60) as response, target.open("wb") as output:
+            _validate_provenance_url(response.geturl(), release_origin=False)
             remaining = MAX_PROVENANCE_BYTES + 1
             while remaining:
                 block = response.read(min(1024 * 1024, remaining))
@@ -353,10 +387,12 @@ def freeze_parser_bundle(
     try:
         from tree_sitter_language_pack import (
             PackConfig,
-            cache_dir as active_cache_dir,
             configure,
             download,
             get_language,
+        )
+        from tree_sitter_language_pack import (
+            cache_dir as active_cache_dir,
         )
     except ImportError as exc:
         raise ValueError("Install the pinned BCNLT multilingual parser dependencies") from exc

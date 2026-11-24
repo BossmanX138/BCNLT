@@ -6,12 +6,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from audit_project_codenet_source import audit_dataset  # noqa: E402
-
 
 FIELDS = [
     "submission_id",
@@ -86,6 +84,17 @@ class ProjectCodeNetAuditTests(unittest.TestCase):
             )
         return dataset
 
+    @staticmethod
+    def _change_first_metadata_row(dataset: Path, key: str, value: str) -> None:
+        path = dataset / "metadata" / "p00001.csv"
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        rows[0][key] = value
+        with path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=FIELDS)
+            writer.writeheader()
+            writer.writerows(rows)
+
     def test_counts_and_verifies_accepted_source(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             dataset = self._fixture(Path(temporary), include_source=True)
@@ -104,6 +113,18 @@ class ProjectCodeNetAuditTests(unittest.TestCase):
             len(report["integrity_findings"]["missing_accepted_files_first_1000"]),
             1,
         )
+
+    def test_invalid_accepted_metadata_fails_integrity(self) -> None:
+        for key, value in (("code_size", "invalid"), ("submission_id", "../escape")):
+            with self.subTest(key=key):
+                with tempfile.TemporaryDirectory() as temporary:
+                    dataset = self._fixture(Path(temporary), include_source=True)
+                    self._change_first_metadata_row(dataset, key, value)
+                    report = audit_dataset(dataset, verify_accepted_files=False)
+                self.assertFalse(report["verification"]["integrity_passed"])
+                self.assertTrue(
+                    report["integrity_findings"]["invalid_accepted_metadata_first_1000"]
+                )
 
 
 if __name__ == "__main__":

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
 from bosscrafts_model.balanced_binary_shards import (
     BalancedBinaryShardWriter,
@@ -128,6 +129,109 @@ class BalancedBinaryShardTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("--max-tokens-per-shard", completed.stdout)
+
+    def test_existing_binary_generation_is_never_overwritten(self):
+        with (
+            tempfile.TemporaryDirectory() as admission_dir,
+            tempfile.TemporaryDirectory() as tasks_dir,
+            tempfile.TemporaryDirectory() as output_dir,
+        ):
+            self._packed_fixture(admission_dir, tasks_dir)
+            root = Path(output_dir)
+            writer = BalancedBinaryShardWriter(self.binding)
+            writer.materialize(tasks_dir, root)
+            original = {
+                path.name: path.read_bytes()
+                for path in root.iterdir()
+                if path.is_file()
+            }
+
+            with self.assertRaisesRegex(ValueError, "already contains"):
+                writer.materialize(tasks_dir, root)
+
+            self.assertEqual(
+                {
+                    path.name: path.read_bytes()
+                    for path in root.iterdir()
+                    if path.is_file()
+                },
+                original,
+            )
+
+    def test_encoder_failure_leaves_no_published_binary_files(self):
+        with (
+            tempfile.TemporaryDirectory() as admission_dir,
+            tempfile.TemporaryDirectory() as tasks_dir,
+            tempfile.TemporaryDirectory() as output_dir,
+        ):
+            self._packed_fixture(admission_dir, tasks_dir)
+            root = Path(output_dir)
+            from bosscrafts_model import balanced_binary_shards as module
+
+            real_encode = module.encode_u16_tokens
+            encode_calls = 0
+
+            def fail_second_encode(token_ids: list[int]) -> bytes:
+                nonlocal encode_calls
+                encode_calls += 1
+                if encode_calls == 2:
+                    raise RuntimeError("deliberate encoder failure")
+                return real_encode(token_ids)
+
+            with (
+                mock.patch.object(
+                    module,
+                    "encode_u16_tokens",
+                    side_effect=fail_second_encode,
+                ),
+                self.assertRaisesRegex(RuntimeError, "deliberate encoder failure"),
+            ):
+                BalancedBinaryShardWriter(self.binding).materialize(tasks_dir, root)
+
+            self.assertEqual(list(root.iterdir()), [])
+
+    def test_reader_rejects_manifest_shard_path_escape(self):
+        with (
+            tempfile.TemporaryDirectory() as admission_dir,
+            tempfile.TemporaryDirectory() as tasks_dir,
+            tempfile.TemporaryDirectory() as directory,
+        ):
+            self._packed_fixture(admission_dir, tasks_dir)
+            root = Path(directory)
+            output = root / "output"
+            output.mkdir()
+            BalancedBinaryShardWriter(self.binding).materialize(tasks_dir, output)
+            manifest_path = output / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest.pop("manifest_sha256")
+            first_shard = manifest["shards"][0]
+            original_token = output / first_shard["token_file"]
+            escaped_token = root / "outside.u16"
+            escaped_token.write_bytes(original_token.read_bytes())
+            first_shard["token_file"] = "../outside.u16"
+            canonical_manifest = json.dumps(
+                manifest,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            manifest["manifest_sha256"] = hashlib.sha256(
+                canonical_manifest.encode("utf-8")
+            ).hexdigest()
+            manifest_path.write_text(
+                json.dumps(
+                    manifest,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+
+            with self.assertRaisesRegex(ValueError, "file inventory"):
+                list(iter_binary_examples(output))
 
 
 if __name__ == "__main__":

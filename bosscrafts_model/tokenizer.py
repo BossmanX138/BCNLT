@@ -3,17 +3,19 @@
 This adapter performs raw text/byte-BPE tokenization. It can round-trip a
 serialized semantic record, but it does not parse or produce BCNLT semantics.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import hashlib
 import importlib.util
 import json
-from pathlib import Path
 import re
 import sys
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
 from types import MappingProxyType, ModuleType
-from typing import TYPE_CHECKING, Mapping, Sequence
+from typing import TYPE_CHECKING
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _TOKENIZERS_RUNTIME_ROOT = _PROJECT_ROOT / "vendor" / "tokenizers_runtime_0_23"
@@ -32,6 +34,7 @@ EXPECTED_RUNTIME_BYTES = 8_241_791
 
 if TYPE_CHECKING:
     from tokenizers import Tokenizer as TokenizerType
+
     from .config import ModelConfig
 
 
@@ -61,7 +64,7 @@ def _runtime_tree_identity(root: Path) -> tuple[str, int, int]:
     total_bytes = 0
     for path in paths:
         relative = path.relative_to(root).as_posix()
-        digest.update(f"{relative}\t{_sha256(path)}\n".encode("utf-8"))
+        digest.update(f"{relative}\t{_sha256(path)}\n".encode())
         total_bytes += path.stat().st_size
     return digest.hexdigest(), len(paths), total_bytes
 
@@ -158,18 +161,29 @@ EXPECTED_VOCABULARY_SIZE = 65_536
 EXPECTED_RUNTIME_MAJOR_MINOR = "0.23"
 EXPECTED_RUNTIME_VERSION = "0.23.2"
 DEFAULT_BUNDLE = (
-    _PROJECT_ROOT
-    / "artifacts"
-    / "tokenizers"
-    / "bcnlt-native-foundation-65536-v1"
+    _PROJECT_ROOT / "artifacts" / "tokenizers" / "bcnlt-native-foundation-65536-v1"
 )
 _STANDARD_SPECIAL_LITERALS = ("<|unk|>", "<|bos|>", "<|eos|>", "<|pad|>")
+_BOUND_TOKENIZER_FILES = frozenset(
+    {
+        "binding.json",
+        "binding.sha256",
+        "tokenizer.json",
+        "source-manifest.json",
+        "structural-tokens.json",
+        "structural-token-ids.json",
+        "model-config-65536.json",
+    }
+)
 
 
 def validate_contiguous_vocab(vocab: dict[str, int], *, expected_size: int) -> None:
     if type(vocab) is not dict or len(vocab) != expected_size:
         raise ValueError("tokenizer vocabulary size mismatch")
-    if any(type(token) is not str or type(token_id) is not int for token, token_id in vocab.items()):
+    if any(
+        type(token) is not str or type(token_id) is not int
+        for token, token_id in vocab.items()
+    ):
         raise ValueError("tokenizer vocabulary must map strings to integer IDs")
     ids = set(vocab.values())
     if len(ids) != expected_size or ids != set(range(expected_size)):
@@ -196,7 +210,10 @@ class _FrozenTokenizerFacade:
         )
 
     def decode(self, ids: Sequence[int]) -> str:
-        return self.__tokenizer.decode(list(ids), skip_special_tokens=False)
+        decoded = self.__tokenizer.decode(list(ids), skip_special_tokens=False)
+        if type(decoded) is not str:
+            raise ValueError("owned tokenizer returned a non-string decode result")
+        return decoded
 
 
 @dataclass(frozen=True)
@@ -220,13 +237,18 @@ class NativeTokenizerBinding:
         return False
 
     @classmethod
-    def load(cls, bundle_path: str | Path = DEFAULT_BUNDLE) -> "NativeTokenizerBinding":
+    def load(cls, bundle_path: str | Path = DEFAULT_BUNDLE) -> NativeTokenizerBinding:
+        # Recheck the complete owned runtime on every trust-boundary load.  The
+        # module-level verification only proves its state at import time.
+        _verify_owned_tokenizers_runtime(_TOKENIZERS_RUNTIME_ROOT.resolve())
         runtime_file = getattr(tokenizers, "__file__", None)
         if not isinstance(runtime_file, str):
             raise ValueError("owned tokenizers runtime has no package path")
         runtime_package_root = Path(runtime_file).resolve().parent
         if runtime_package_root != (_TOKENIZERS_RUNTIME_ROOT / "tokenizers").resolve():
-            raise ValueError("tokenizers runtime was not loaded from the owned project bundle")
+            raise ValueError(
+                "tokenizers runtime was not loaded from the owned project bundle"
+            )
         runtime_binary = runtime_package_root / "tokenizers.pyd"
         if (
             not runtime_binary.is_file()
@@ -234,6 +256,14 @@ class NativeTokenizerBinding:
         ):
             raise ValueError("owned tokenizers runtime binary SHA-256 mismatch")
         root = Path(bundle_path).resolve()
+        if not root.is_dir():
+            raise ValueError("tokenizer bundle is not a directory")
+        entries = tuple(root.iterdir())
+        if (
+            {entry.name for entry in entries} != _BOUND_TOKENIZER_FILES
+            or any(not entry.is_file() or entry.is_symlink() for entry in entries)
+        ):
+            raise ValueError("tokenizer bundle inventory mismatch")
         binding_path = root / "binding.json"
         actual_binding_hash = _sha256(binding_path)
         if actual_binding_hash != EXPECTED_BINDING_SHA256:
@@ -292,7 +322,11 @@ class NativeTokenizerBinding:
             actual_hash = _sha256(path)
             observed_hashes[name] = actual_hash
             if actual_hash != contract.get("sha256"):
-                label = "tokenizer SHA-256 mismatch" if name == "tokenizer.json" else f"bound file SHA-256 mismatch: {name}"
+                label = (
+                    "tokenizer SHA-256 mismatch"
+                    if name == "tokenizer.json"
+                    else f"bound file SHA-256 mismatch: {name}"
+                )
                 raise ValueError(label)
         tokenizer_path = root / "tokenizer.json"
         tokenizer_hash = observed_hashes["tokenizer.json"]
@@ -365,8 +399,13 @@ class NativeTokenizerBinding:
         for (token, expected_id), encoding in zip(
             structural_items, encoded_structural, strict=True
         ):
-            if encoding.ids != [expected_id] or loaded.token_to_id(token) != expected_id:
-                raise ValueError(f"structural token is not atomic at frozen ID: {token}")
+            if (
+                encoding.ids != [expected_id]
+                or loaded.token_to_id(token) != expected_id
+            ):
+                raise ValueError(
+                    f"structural token is not atomic at frozen ID: {token}"
+                )
         return cls(
             bundle_path=root,
             binding_sha256=actual_binding_hash,
@@ -392,7 +431,10 @@ class NativeTokenizerBinding:
         if type(text) is not str:
             raise TypeError("text must be a string")
         ids = list(self._frozen_tokenizer.encode_ids(text))
-        if any(type(token_id) is not int or not 0 <= token_id < self.vocab_size for token_id in ids):
+        if any(
+            type(token_id) is not int or not 0 <= token_id < self.vocab_size
+            for token_id in ids
+        ):
             raise ValueError("tokenizer emitted an out-of-bounds ID")
         return ids
 

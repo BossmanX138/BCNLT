@@ -8,7 +8,6 @@ from typing import Sequence
 from .bcnlt_adapter import BCNLTCanonicalRecord, validate_canonical_record_payload
 from .tokenizer import NativeTokenizerBinding
 
-
 COMPACT_SEMANTIC_WIRE_SCHEMA = "bosscrafts-compact-semantic-wire-v2"
 _FIELDS = (
     "surface",

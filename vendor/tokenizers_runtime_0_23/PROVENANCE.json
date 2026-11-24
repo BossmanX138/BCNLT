@@ -1,0 +1,12 @@
+{
+  "artifact": "project-contained Python tokenizers runtime",
+  "bytes_excluding_provenance": 8241791,
+  "copied_at": "2026-11-09",
+  "file_count_excluding_provenance": 34,
+  "platform": "CPython 3.12, Windows x86-64",
+  "source": "C:\\Users\\bossm\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.12_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python312\\site-packages",
+  "tokenizers_pyd_sha256": "05848a2a85e1466d19242499ed6b8c016a886db79aca020792aa5598ded77ef9",
+  "tree_hash_algorithm": "sha256 of UTF-8 sorted relative-path, tab, file-sha256 rows with LF; excludes PROVENANCE.json",
+  "tree_sha256_excluding_provenance": "8debceae31cb21378fb540a16987905c81095cfc8c8fd1f10a67175820480d8e",
+  "version": "0.23.2"
+}

@@ -2,14 +2,13 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict
 import hashlib
 import json
 import os
-from pathlib import Path
 import sys
 import tempfile
-
+from dataclasses import asdict
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -18,7 +17,6 @@ if str(PROJECT_ROOT) not in sys.path:
 from bosscrafts_model.resumable_training_semantic_audit import (
     ResumableTrainingSemanticAudit,
 )
-
 
 DEFAULT_ADMISSION = (
     PROJECT_ROOT

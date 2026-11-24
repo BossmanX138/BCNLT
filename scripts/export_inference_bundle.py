@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict
 import json
-from pathlib import Path
 import sys
+from dataclasses import asdict
+from pathlib import Path
 
 import torch
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -25,7 +24,6 @@ from bosscrafts_model.inference_bundle import export_inference_bundle
 from bosscrafts_model.model import EngineeringModel
 from bosscrafts_model.resumable_task_packing import audit_task_database
 from bosscrafts_model.tokenizer import NativeTokenizerBinding, bound_native_65k_config
-
 
 DEFAULT_DATABASE = (
     PROJECT_ROOT

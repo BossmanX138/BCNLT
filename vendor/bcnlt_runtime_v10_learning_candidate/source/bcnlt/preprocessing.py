@@ -120,6 +120,10 @@ class SemanticPreprocessor:
                 )
             ),
         )
+        unresolved_unknown = (
+            unit.event == "UNKNOWN_SEMANTIC"
+            and result.extended_core_resolution is None
+        )
         if result.extended_core_resolution is not None:
             return KnowledgeBoundaryAssessment(
                 unit=result.resolved_unit(),
@@ -129,7 +133,10 @@ class SemanticPreprocessor:
                 rounds=result.rounds,
                 evidence=result.retrievals,
             )
-        if initial.confidence >= self.uyr.config.confidence_threshold:
+        if (
+            not unresolved_unknown
+            and initial.confidence >= self.uyr.config.confidence_threshold
+        ):
             return KnowledgeBoundaryAssessment(
                 unit=unit,
                 initial_score=initial,
@@ -138,7 +145,11 @@ class SemanticPreprocessor:
                 rounds=result.rounds,
                 evidence=result.retrievals,
             )
-        if result.retrievals and final.confidence >= self.uyr.config.confidence_threshold:
+        if (
+            not unresolved_unknown
+            and result.retrievals
+            and final.confidence >= self.uyr.config.confidence_threshold
+        ):
             return KnowledgeBoundaryAssessment(
                 unit=unit,
                 initial_score=initial,
@@ -163,6 +174,11 @@ class SemanticPreprocessor:
             rounds=result.rounds,
         )
         confidence = max(final.confidence, assessment.final_score.confidence)
+        if unresolved_unknown:
+            confidence = min(
+                confidence,
+                self.uyr.config.confidence_threshold - 0.01,
+            )
         assessment = replace(
             assessment,
             final_score=UncertaintyScore(

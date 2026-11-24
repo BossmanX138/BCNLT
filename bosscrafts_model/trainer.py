@@ -1,9 +1,11 @@
 """Deterministic batch-one training primitives for verified task rows."""
+
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
-from typing import Callable, Iterable
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
+from typing import Callable
 
 import torch
 from torch import nn
@@ -40,7 +42,7 @@ def _device_matches(actual: torch.device, requested: torch.device) -> bool:
 def run_training_steps(
     model: nn.Module,
     optimizer: torch.optim.Optimizer,
-    examples: Iterable[dict[str, object]],
+    examples: Iterable[Mapping[str, object]],
     *,
     device: torch.device,
     max_steps: int,
@@ -62,9 +64,30 @@ def run_training_steps(
         raise ValueError("step_offset must be a nonnegative integer")
     if learning_rate_schedule is not None and not callable(learning_rate_schedule):
         raise TypeError("learning_rate_schedule must be callable or None")
-    parameter = next(model.parameters(), None)
-    if parameter is None or not _device_matches(parameter.device, device):
+    model_parameters = list(model.parameters())
+    if not model_parameters or any(
+        not _device_matches(parameter.device, device)
+        for parameter in model_parameters
+    ):
         raise ValueError("model parameters must already be on the requested device")
+    trainable_parameters = [
+        parameter for parameter in model_parameters if parameter.requires_grad
+    ]
+    optimizer_parameters = [
+        parameter
+        for group in optimizer.param_groups
+        for parameter in group.get("params", [])
+    ]
+    optimizer_parameter_ids = [id(parameter) for parameter in optimizer_parameters]
+    if (
+        not trainable_parameters
+        or len(optimizer_parameter_ids) != len(set(optimizer_parameter_ids))
+        or set(optimizer_parameter_ids)
+        != {id(parameter) for parameter in trainable_parameters}
+    ):
+        raise ValueError(
+            "optimizer parameters must match the trainable model parameters exactly"
+        )
 
     model.train()
     optimizer.zero_grad(set_to_none=True)
@@ -86,36 +109,51 @@ def run_training_steps(
                 if current.grad is not None:
                     current.grad.mul_(correction)
         for current in model.parameters():
-            if current.grad is not None and not bool(torch.isfinite(current.grad).all()):
+            if current.grad is not None and not bool(
+                torch.isfinite(current.grad).all()
+            ):
                 gradients_finite = False
                 break
         if not gradients_finite:
             raise RuntimeError("training produced a non-finite gradient")
         if learning_rate_schedule is not None:
-            learning_rate = float(
-                learning_rate_schedule(step_offset + optimizer_steps)
-            )
+            learning_rate = float(learning_rate_schedule(step_offset + optimizer_steps))
             if not math.isfinite(learning_rate) or learning_rate <= 0:
                 raise RuntimeError("learning-rate schedule produced an invalid value")
             for group in optimizer.param_groups:
                 group["lr"] = learning_rate
             last_learning_rate = learning_rate
         optimizer.step()
+        if any(
+            not bool(torch.isfinite(current.detach()).all())
+            for current in model_parameters
+        ):
+            optimizer.zero_grad(set_to_none=True)
+            raise RuntimeError("training produced a non-finite model parameter")
+        if any(
+            isinstance(value, torch.Tensor)
+            and (value.is_floating_point() or value.is_complex())
+            and not bool(torch.isfinite(value).all())
+            for state in optimizer.state.values()
+            for value in state.values()
+        ):
+            optimizer.zero_grad(set_to_none=True)
+            raise RuntimeError("training produced non-finite optimizer state")
         optimizer.zero_grad(set_to_none=True)
         optimizer_steps += 1
         pending = 0
 
     for example in examples:
-        if type(example) is not dict:
-            raise TypeError("training examples must be dictionaries")
         example_id = example.get("example_id")
         input_ids = example.get("input_ids")
         loss_start = example.get("loss_start_index")
         sampling_weight = example.get("sampling_weight")
         if not _is_sha256(example_id):
             raise ValueError("training example_id is invalid")
-        if type(input_ids) is not list or len(input_ids) < 2 or any(
-            type(token_id) is not int for token_id in input_ids
+        if (
+            type(input_ids) is not list
+            or len(input_ids) < 2
+            or any(type(token_id) is not int for token_id in input_ids)
         ):
             raise ValueError("training input_ids are invalid")
         if type(loss_start) is not int or not 0 < loss_start < len(input_ids):
@@ -133,7 +171,7 @@ def run_training_steps(
         weighted_loss = loss * weight
         if not bool(torch.isfinite(weighted_loss)):
             raise RuntimeError("training produced a non-finite loss")
-        (weighted_loss / gradient_accumulation).backward()
+        torch.autograd.backward(weighted_loss / gradient_accumulation)
         loss_sum += float(weighted_loss.detach().float().item())
         examples_seen += 1
         sequence_tokens_seen += len(input_ids)

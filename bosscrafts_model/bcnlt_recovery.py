@@ -1,13 +1,12 @@
 """Fail-closed readiness gate for the recovered BCNLT parser lineage."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 from .tokenizer import EXPECTED_BINDING_SHA256, EXPECTED_TOKENIZER_SHA256
-
 
 EXPECTED_RECOVERY_MANIFEST_SHA256 = "e2cda5ca4785a2e4d79845ab2dd942cb116546a81b37d999651bce92354fafdc"
 

@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 from bosscrafts_model.bcnlt_source_pipeline import BCNLTSourcePipeline
 from bosscrafts_model.tokenizer import NativeTokenizerBinding
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 UNKNOWN_CPP = "int f() { return JNI_ERR; }\n"

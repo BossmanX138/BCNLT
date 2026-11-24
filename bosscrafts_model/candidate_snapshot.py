@@ -1,18 +1,20 @@
 """Freeze a committed resumable task prefix into an immutable candidate pool."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
-from pathlib import Path
+import os
 import sqlite3
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
 
+from .bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
 from .resumable_task_packing import (
     TASK_DATABASE_SCHEMA,
     _canonical_json,
     audit_task_database,
 )
 from .tokenizer import NativeTokenizerBinding
-
 
 CANDIDATE_SNAPSHOT_SCHEMA = "bosscrafts-task-candidate-snapshot-v1"
 
@@ -60,6 +62,8 @@ def freeze_candidate_snapshot(
             metadata.get("binding_sha256") != binding.binding_sha256
             or metadata.get("tokenizer_sha256") != binding.tokenizer_sha256
             or metadata.get("vocabulary_size") != str(binding.vocab_size)
+            or metadata.get("parser_runtime_identity_sha256")
+            != PARSER_RUNTIME_IDENTITY_SHA256
         ):
             raise ValueError("resumable task tokenizer lineage mismatch")
         integrity = str(source.execute("PRAGMA integrity_check").fetchone()[0])
@@ -124,9 +128,14 @@ def freeze_candidate_snapshot(
         ).hexdigest()
 
         destination.parent.mkdir(parents=True, exist_ok=True)
-        temporary = destination.with_name(f".{destination.name}.tmp")
-        if temporary.exists():
-            temporary.unlink()
+        temporary_handle = tempfile.NamedTemporaryFile(
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        )
+        temporary = Path(temporary_handle.name)
+        temporary_handle.close()
         output = sqlite3.connect(temporary)
         try:
             source.backup(output)
@@ -157,11 +166,26 @@ def freeze_candidate_snapshot(
             raise
         else:
             output.close()
-            temporary.replace(destination)
+        try:
+            audit = audit_task_database(binding, temporary)
+            with temporary.open("r+b") as stream:
+                os.fsync(stream.fileno())
+            if destination.exists():
+                raise ValueError("candidate snapshot database already exists")
+            try:
+                os.link(temporary, destination)
+            except FileExistsError as error:
+                raise ValueError(
+                    "candidate snapshot database already exists"
+                ) from error
+        except BaseException:
+            if temporary.exists():
+                temporary.unlink()
+            raise
+        temporary.unlink()
     finally:
         source.close()
 
-    audit = audit_task_database(binding, destination)
     return CandidateSnapshotStatus(
         database_path=destination,
         database_identity_sha256=audit.database_identity_sha256,

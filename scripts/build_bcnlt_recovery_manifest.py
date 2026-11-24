@@ -1,12 +1,12 @@
 """Build deterministic BCNLT recovery evidence from project-local copies only."""
 from __future__ import annotations
 
-from dataclasses import asdict
 import hashlib
 import json
-from pathlib import Path
 import sys
-
+from dataclasses import asdict
+from pathlib import Path
+from typing import Any, Protocol
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RECOVERY_ROOT = PROJECT_ROOT / "artifacts" / "bcnlt" / "runtime-recovery-v1"
@@ -36,6 +36,26 @@ OBSERVED_SPEC_SHA256 = {
 }
 
 
+class _SemanticSpec(Protocol):
+    @property
+    def semantic_spec_version(self) -> str: ...
+
+    @property
+    def resolved_node_rules(self) -> tuple[Any, ...]: ...
+
+    @property
+    def resolved_identifier_roles(self) -> tuple[Any, ...]: ...
+
+    @property
+    def resolved_scope_rules(self) -> tuple[Any, ...]: ...
+
+    @property
+    def resolved_uncertainty_rules(self) -> tuple[Any, ...]: ...
+
+    @property
+    def resolved_excluded_node_types(self) -> tuple[str, ...]: ...
+
+
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -45,7 +65,7 @@ def canonical_hash(payload: object) -> str:
     return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
 
-def spec_payload(spec: object) -> dict[str, object]:
+def spec_payload(spec: _SemanticSpec) -> dict[str, object]:
     return {
         "semantic_spec_version": spec.semantic_spec_version,
         "node_rules": [asdict(item) for item in spec.resolved_node_rules],

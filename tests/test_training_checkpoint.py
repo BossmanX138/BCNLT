@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import importlib
 import importlib.util
-from pathlib import Path
+import os
 import tempfile
 import unittest
+from pathlib import Path
 
 import torch
 
@@ -13,6 +15,148 @@ from bosscrafts_model.model import EngineeringModel, next_token_loss
 
 
 class TrainingCheckpointTests(unittest.TestCase):
+    def test_checkpoint_binds_both_frozen_evaluation_databases(self):
+        module = importlib.import_module("bosscrafts_model.training_checkpoint")
+        config = ModelConfig.tiny()
+        model = EngineeringModel(config)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
+        evaluation_database_identities = {
+            "validation": "e" * 64,
+            "test": "f" * 64,
+        }
+        heldout_suite_identity = "9" * 64
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "checkpoint.pt"
+            module.save_training_checkpoint(
+                path,
+                model,
+                optimizer,
+                step=1,
+                examples_seen=1,
+                epoch_index=0,
+                target_epochs=1,
+                last_example_id="c" * 64,
+                cursor_after_example_id="c" * 64,
+                task_database_identity_sha256="a" * 64,
+                evaluation_task_database_identities_sha256=(
+                    evaluation_database_identities
+                ),
+                heldout_suite_manifest_sha256=heldout_suite_identity,
+                binding_sha256="b" * 64,
+                model_fingerprint=config.fingerprint(),
+                training_plan_sha256="d" * 64,
+            )
+            state = module.load_training_checkpoint(
+                path,
+                model,
+                optimizer,
+                expected_task_database_identity_sha256="a" * 64,
+                expected_evaluation_task_database_identities_sha256=(
+                    evaluation_database_identities
+                ),
+                expected_heldout_suite_manifest_sha256=heldout_suite_identity,
+                expected_binding_sha256="b" * 64,
+                expected_model_fingerprint=config.fingerprint(),
+                expected_target_epochs=1,
+                expected_training_plan_sha256="d" * 64,
+            )
+            payload = torch.load(path, map_location="cpu", weights_only=True)
+            self.assertEqual(
+                payload["schema_version"],
+                "bosscrafts-training-checkpoint-v6",
+            )
+            self.assertEqual(
+                state.evaluation_task_database_identities_sha256,
+                evaluation_database_identities,
+            )
+
+            before = model.embedding.weight.detach().clone()
+            substituted = dict(evaluation_database_identities)
+            substituted["validation"] = "0" * 64
+            with self.assertRaisesRegex(ValueError, "evaluation.*lineage"):
+                module.load_training_checkpoint(
+                    path,
+                    model,
+                    optimizer,
+                    expected_task_database_identity_sha256="a" * 64,
+                    expected_evaluation_task_database_identities_sha256=substituted,
+                    expected_heldout_suite_manifest_sha256=heldout_suite_identity,
+                    expected_binding_sha256="b" * 64,
+                    expected_model_fingerprint=config.fingerprint(),
+                    expected_target_epochs=1,
+                    expected_training_plan_sha256="d" * 64,
+                )
+            self.assertTrue(torch.equal(model.embedding.weight, before))
+
+    def test_checkpoint_binds_frozen_evaluation_database_and_heldout_suite(self):
+        module = importlib.import_module("bosscrafts_model.training_checkpoint")
+        config = ModelConfig.tiny()
+        model = EngineeringModel(config)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
+        evaluation_database_identity = "e" * 64
+        heldout_suite_identity = "f" * 64
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "checkpoint.pt"
+            module.save_training_checkpoint(
+                path,
+                model,
+                optimizer,
+                step=1,
+                examples_seen=1,
+                epoch_index=0,
+                target_epochs=1,
+                last_example_id="c" * 64,
+                cursor_after_example_id="c" * 64,
+                task_database_identity_sha256="a" * 64,
+                evaluation_task_database_identity_sha256=(
+                    evaluation_database_identity
+                ),
+                heldout_suite_manifest_sha256=heldout_suite_identity,
+                binding_sha256="b" * 64,
+                model_fingerprint=config.fingerprint(),
+                training_plan_sha256="d" * 64,
+            )
+            state = module.load_training_checkpoint(
+                path,
+                model,
+                optimizer,
+                expected_task_database_identity_sha256="a" * 64,
+                expected_evaluation_task_database_identity_sha256=(
+                    evaluation_database_identity
+                ),
+                expected_heldout_suite_manifest_sha256=heldout_suite_identity,
+                expected_binding_sha256="b" * 64,
+                expected_model_fingerprint=config.fingerprint(),
+                expected_target_epochs=1,
+                expected_training_plan_sha256="d" * 64,
+            )
+            self.assertEqual(
+                state.evaluation_task_database_identity_sha256,
+                evaluation_database_identity,
+            )
+            self.assertEqual(
+                state.heldout_suite_manifest_sha256,
+                heldout_suite_identity,
+            )
+
+            before = model.embedding.weight.detach().clone()
+            with self.assertRaisesRegex(ValueError, "evaluation.*lineage"):
+                module.load_training_checkpoint(
+                    path,
+                    model,
+                    optimizer,
+                    expected_task_database_identity_sha256="a" * 64,
+                    expected_evaluation_task_database_identity_sha256=("0" * 64),
+                    expected_heldout_suite_manifest_sha256=heldout_suite_identity,
+                    expected_binding_sha256="b" * 64,
+                    expected_model_fingerprint=config.fingerprint(),
+                    expected_target_epochs=1,
+                    expected_training_plan_sha256="d" * 64,
+                )
+            self.assertTrue(torch.equal(model.embedding.weight, before))
+
     def test_atomic_checkpoint_restores_model_optimizer_cursor_and_rng(self):
         module_name = "bosscrafts_model.training_checkpoint"
         spec = importlib.util.find_spec(module_name)
@@ -57,7 +201,9 @@ class TrainingCheckpointTests(unittest.TestCase):
             expected_random = torch.rand(4)
             torch.manual_seed(999)
             restored_model = EngineeringModel(config)
-            restored_optimizer = torch.optim.AdamW(restored_model.parameters(), lr=0.001)
+            restored_optimizer = torch.optim.AdamW(
+                restored_model.parameters(), lr=0.001
+            )
             state = module.load_training_checkpoint(
                 path,
                 restored_model,
@@ -69,6 +215,10 @@ class TrainingCheckpointTests(unittest.TestCase):
                 expected_training_plan_sha256=plan_identity,
             )
             self.assertEqual(state.step, 7)
+            self.assertEqual(
+                state.checkpoint_sha256,
+                hashlib.sha256(path.read_bytes()).hexdigest(),
+            )
             self.assertEqual(state.examples_seen, 19)
             self.assertEqual(state.epoch_index, 2)
             self.assertEqual(state.target_epochs, 3)
@@ -167,6 +317,259 @@ class TrainingCheckpointTests(unittest.TestCase):
                             expected_target_epochs=1,
                             expected_training_plan_sha256="d" * 64,
                         )
+
+    def test_rejects_incompatible_state_before_mutating_model(self):
+        module = importlib.import_module("bosscrafts_model.training_checkpoint")
+        config = ModelConfig.tiny()
+        source_model = EngineeringModel(config)
+        source_optimizer = torch.optim.AdamW(source_model.parameters(), lr=0.001)
+        ids = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
+        loss = next_token_loss(source_model(ids)[0], ids)
+        loss.backward()
+        source_optimizer.step()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.pt"
+            module.save_training_checkpoint(
+                source,
+                source_model,
+                source_optimizer,
+                step=1,
+                examples_seen=1,
+                epoch_index=0,
+                target_epochs=1,
+                last_example_id="c" * 64,
+                cursor_after_example_id="c" * 64,
+                task_database_identity_sha256="a" * 64,
+                binding_sha256="b" * 64,
+                model_fingerprint=config.fingerprint(),
+                training_plan_sha256="d" * 64,
+            )
+            valid = torch.load(source, map_location="cpu", weights_only=True)
+
+            target_model = EngineeringModel(config)
+            target_optimizer = torch.optim.AdamW(target_model.parameters(), lr=0.001)
+            before = {
+                name: tensor.detach().clone()
+                for name, tensor in target_model.state_dict().items()
+            }
+
+            bad_model = dict(valid)
+            bad_model_state = dict(valid["model_state_dict"])
+            first_name = next(iter(bad_model_state))
+            first_tensor = bad_model_state[first_name]
+            bad_model_state[first_name] = torch.zeros(
+                first_tensor.numel() + 1,
+                dtype=first_tensor.dtype,
+            )
+            bad_model["model_state_dict"] = bad_model_state
+            bad_model_path = root / "bad-model.pt"
+            torch.save(bad_model, bad_model_path)
+            with self.assertRaisesRegex(ValueError, "model state is incompatible"):
+                module.load_training_checkpoint(
+                    bad_model_path,
+                    target_model,
+                    target_optimizer,
+                    expected_task_database_identity_sha256="a" * 64,
+                    expected_binding_sha256="b" * 64,
+                    expected_model_fingerprint=config.fingerprint(),
+                    expected_target_epochs=1,
+                    expected_training_plan_sha256="d" * 64,
+                )
+            for name, tensor in target_model.state_dict().items():
+                self.assertTrue(torch.equal(tensor, before[name]), name)
+
+            bad_rng = dict(valid)
+            bad_rng["cpu_rng_state"] = torch.zeros(1, dtype=torch.uint8)
+            bad_rng_path = root / "bad-rng.pt"
+            torch.save(bad_rng, bad_rng_path)
+            with self.assertRaisesRegex(ValueError, "CPU RNG state is incompatible"):
+                module.load_training_checkpoint(
+                    bad_rng_path,
+                    target_model,
+                    target_optimizer,
+                    expected_task_database_identity_sha256="a" * 64,
+                    expected_binding_sha256="b" * 64,
+                    expected_model_fingerprint=config.fingerprint(),
+                    expected_target_epochs=1,
+                    expected_training_plan_sha256="d" * 64,
+                )
+            for name, tensor in target_model.state_dict().items():
+                self.assertTrue(torch.equal(tensor, before[name]), name)
+
+            inference_model = EngineeringModel(config).to(dtype=torch.bfloat16)
+            inference_state = module.load_model_checkpoint_for_inference(
+                source,
+                inference_model,
+                expected_task_database_identity_sha256="a" * 64,
+                expected_binding_sha256="b" * 64,
+                expected_model_fingerprint=config.fingerprint(),
+            )
+            self.assertRegex(inference_state.checkpoint_sha256, r"^[0-9a-f]{64}$")
+            for tensor in inference_model.state_dict().values():
+                self.assertEqual(tensor.dtype, torch.bfloat16)
+
+            bad_optimizer = dict(valid)
+            bad_optimizer_state = dict(valid["optimizer_state_dict"])
+            bad_groups = [dict(group) for group in bad_optimizer_state["param_groups"]]
+            bad_groups[0]["params"] = bad_groups[0]["params"][:-1]
+            bad_optimizer_state["param_groups"] = bad_groups
+            bad_optimizer["optimizer_state_dict"] = bad_optimizer_state
+            bad_optimizer_path = root / "bad-optimizer.pt"
+            torch.save(bad_optimizer, bad_optimizer_path)
+            with self.assertRaisesRegex(ValueError, "optimizer state is incompatible"):
+                module.load_training_checkpoint(
+                    bad_optimizer_path,
+                    target_model,
+                    target_optimizer,
+                    expected_task_database_identity_sha256="a" * 64,
+                    expected_binding_sha256="b" * 64,
+                    expected_model_fingerprint=config.fingerprint(),
+                    expected_target_epochs=1,
+                    expected_training_plan_sha256="d" * 64,
+                )
+            for name, tensor in target_model.state_dict().items():
+                self.assertTrue(torch.equal(tensor, before[name]), name)
+
+    def test_rejects_incoherent_resume_cursor_and_unexpected_fields(self):
+        module = importlib.import_module("bosscrafts_model.training_checkpoint")
+        config = ModelConfig.tiny()
+        model = EngineeringModel(config)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.pt"
+            module.save_training_checkpoint(
+                source,
+                model,
+                optimizer,
+                step=1,
+                examples_seen=1,
+                epoch_index=0,
+                target_epochs=1,
+                last_example_id="c" * 64,
+                cursor_after_example_id="c" * 64,
+                task_database_identity_sha256="a" * 64,
+                binding_sha256="b" * 64,
+                model_fingerprint=config.fingerprint(),
+                training_plan_sha256="d" * 64,
+            )
+            valid = torch.load(source, map_location="cpu", weights_only=True)
+            cases = {
+                "cursor": {"cursor_after_example_id": "e" * 64},
+                "cursor at completion": {
+                    "epoch_index": 1,
+                    "cursor_after_example_id": "c" * 64,
+                },
+                "fields": {"unverified_override": True},
+                "progress": {"step": 2, "examples_seen": 1},
+            }
+            for label, changes in cases.items():
+                with self.subTest(label=label):
+                    malformed = dict(valid)
+                    malformed.update(changes)
+                    path = root / f"{label.replace(' ', '-')}.pt"
+                    torch.save(malformed, path)
+                    with self.assertRaisesRegex(ValueError, label):
+                        module.load_training_checkpoint(
+                            path,
+                            model,
+                            optimizer,
+                            expected_task_database_identity_sha256="a" * 64,
+                            expected_binding_sha256="b" * 64,
+                            expected_model_fingerprint=config.fingerprint(),
+                            expected_target_epochs=1,
+                            expected_training_plan_sha256="d" * 64,
+                        )
+
+            with self.assertRaisesRegex(ValueError, "cursor"):
+                module.save_training_checkpoint(
+                    root / "invalid-save.pt",
+                    model,
+                    optimizer,
+                    step=1,
+                    examples_seen=1,
+                    epoch_index=0,
+                    target_epochs=1,
+                    last_example_id="c" * 64,
+                    cursor_after_example_id="e" * 64,
+                    task_database_identity_sha256="a" * 64,
+                    binding_sha256="b" * 64,
+                    model_fingerprint=config.fingerprint(),
+                    training_plan_sha256="d" * 64,
+                )
+
+    def test_corrupt_checkpoint_fails_as_unreadable_evidence(self):
+        module = importlib.import_module("bosscrafts_model.training_checkpoint")
+        config = ModelConfig.tiny()
+        model = EngineeringModel(config)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "checkpoint.pt"
+            path.write_bytes(os.urandom(128))
+            with self.assertRaisesRegex(ValueError, "unreadable"):
+                module.load_training_checkpoint(
+                    path,
+                    model,
+                    optimizer,
+                    expected_task_database_identity_sha256="a" * 64,
+                    expected_binding_sha256="b" * 64,
+                    expected_model_fingerprint=config.fingerprint(),
+                    expected_target_epochs=1,
+                    expected_training_plan_sha256="d" * 64,
+                )
+
+    def test_rejects_nonfinite_checkpoint_state_on_save_and_load(self):
+        module = importlib.import_module("bosscrafts_model.training_checkpoint")
+        config = ModelConfig.tiny()
+        model = EngineeringModel(config)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
+        common = {
+            "step": 1,
+            "examples_seen": 1,
+            "epoch_index": 0,
+            "target_epochs": 1,
+            "last_example_id": "c" * 64,
+            "cursor_after_example_id": "c" * 64,
+            "task_database_identity_sha256": "a" * 64,
+            "binding_sha256": "b" * 64,
+            "model_fingerprint": config.fingerprint(),
+            "training_plan_sha256": "d" * 64,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            valid_path = root / "valid.pt"
+            module.save_training_checkpoint(valid_path, model, optimizer, **common)
+            payload = torch.load(valid_path, map_location="cpu", weights_only=True)
+            poisoned_state = dict(payload["model_state_dict"])
+            first_name = next(iter(poisoned_state))
+            poisoned_tensor = poisoned_state[first_name].clone()
+            poisoned_tensor.view(-1)[0] = float("nan")
+            poisoned_state[first_name] = poisoned_tensor
+            payload["model_state_dict"] = poisoned_state
+            poisoned_path = root / "poisoned.pt"
+            torch.save(payload, poisoned_path)
+
+            with self.assertRaisesRegex(ValueError, "non-finite model state"):
+                module.load_training_checkpoint(
+                    poisoned_path,
+                    model,
+                    optimizer,
+                    expected_task_database_identity_sha256="a" * 64,
+                    expected_binding_sha256="b" * 64,
+                    expected_model_fingerprint=config.fingerprint(),
+                    expected_target_epochs=1,
+                    expected_training_plan_sha256="d" * 64,
+                )
+
+            with torch.no_grad():
+                next(model.parameters()).view(-1)[0] = float("inf")
+            rejected_path = root / "rejected.pt"
+            with self.assertRaisesRegex(ValueError, "non-finite model state"):
+                module.save_training_checkpoint(
+                    rejected_path, model, optimizer, **common
+                )
+            self.assertFalse(rejected_path.exists())
 
 
 if __name__ == "__main__":

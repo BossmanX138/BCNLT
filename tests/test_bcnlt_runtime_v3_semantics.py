@@ -2,30 +2,43 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
-
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = PROJECT_ROOT / "vendor" / "bcnlt_runtime_v3_candidate"
+RUNTIME = PROJECT_ROOT / "vendor" / "bcnlt_runtime_v10_learning_candidate"
 SIDECAR = RUNTIME / "bcnlt_source_sidecar.py"
-PYTHON_313 = Path(r"C:\ProgramData\anaconda3\python.exe")
-PROTOCOL = "bosscrafts-bcnlt-source-sidecar-v1"
+PYTHON_313 = Path(sys.executable).resolve()
+PROTOCOL = "bosscrafts-bcnlt-source-sidecar-v4"
 
 
 def _run_raw_sidecar(request: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [str(PYTHON_313), "-I", "-S", "-B", "-X", "utf8", str(SIDECAR)],
-        input=request,
-        text=True,
-        encoding="utf-8",
-        capture_output=True,
-        timeout=30,
-        check=False,
-        cwd=RUNTIME,
-    )
+    with tempfile.TemporaryDirectory(
+        prefix="bosscrafts-runtime-test-pycache-"
+    ) as bytecode_cache:
+        return subprocess.run(
+            [
+                str(PYTHON_313),
+                "-I",
+                "-S",
+                "-B",
+                "-X",
+                f"pycache_prefix={bytecode_cache}",
+                "-X",
+                "utf8",
+                str(SIDECAR),
+            ],
+            input=request,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            timeout=30,
+            check=False,
+            cwd=RUNTIME,
+        )
 
 
 def _run_sidecar(language: str, source: str) -> list[dict[str, object]]:
@@ -35,6 +48,8 @@ def _run_sidecar(language: str, source: str) -> list[dict[str, object]]:
         "language": language,
         "path": f"v3-audit.{language}",
         "dialect": None,
+        "learning_mode": "ephemeral",
+        "learned_memory_root": None,
     }
     completed = _run_raw_sidecar(json.dumps(request))
     if completed.returncode:
@@ -153,6 +168,38 @@ def _type_method_ownership(records: list[dict[str, object]]) -> bool:
         marker in str(scope)
         for marker, scope in zip(("A", "B"), scopes, strict=True)
     )
+
+
+def _bound_names(*names: str):
+    def evaluate(records: list[dict[str, object]]) -> bool:
+        for name in names:
+            definitions = _definition(records, name)
+            references = _references(records, name)
+            if len(definitions) != 1 or not references:
+                return False
+            if any(
+                record.get("defines") != definitions[0].get("symbol_id")
+                for record in references
+            ):
+                return False
+        return True
+
+    return evaluate
+
+
+def _has_relation(relation: str):
+    return lambda records: any(
+        record.get("event") == "RETURN" and record.get("ast_relation") == relation
+        for record in records
+    )
+
+
+def _lacks_relation(relation: str):
+    return lambda records: all(record.get("ast_relation") != relation for record in records)
+
+
+def _all_of(*evaluators):
+    return lambda records: all(evaluator(records) for evaluator in evaluators)
 
 
 CASES = (
@@ -283,17 +330,170 @@ CASES = (
         "struct A; impl A { fn run(&self) {} } struct B; impl B { fn run(&self) {} }",
         _type_method_ownership,
     ),
+    (
+        "python_complex_parameters",
+        "python",
+        "def f(a:int,b=old,*args:bytes,c:str=other,**kwargs:object):\n"
+        " return a+b+len(args)+len(c)+len(kwargs)\n",
+        _bound_names("a", "b", "args", "c", "kwargs"),
+    ),
+    (
+        "python_lambda_implicit_return",
+        "python",
+        "f=lambda x=old,*ys,**kw: x+len(ys)+len(kw)\n",
+        _has_relation("lambda.implicit_return"),
+    ),
+    (
+        "typescript_optional_and_rest_parameters",
+        "typescript",
+        "function f(x?:number,...ys:number[]){ return (x ?? 0)+ys.length; }\n",
+        _bound_names("x", "ys"),
+    ),
+    (
+        "c_parameter_declarators",
+        "c",
+        "int f(const char *name,int values[]){ return name[0]+values[0]; }\n",
+        _bound_names("name", "values"),
+    ),
+    (
+        "cpp_parameter_declarators",
+        "cpp",
+        "int f(const std::string& name,int&& value){ return name.size()+value; }\n",
+        _bound_names("name", "value"),
+    ),
+    (
+        "c_sharp_params_binding",
+        "c_sharp",
+        "class A { int F(params int[] zs) { return zs.Length; } }",
+        _bound_names("zs"),
+    ),
+    (
+        "c_sharp_expression_body",
+        "c_sharp",
+        "class A { int F(int x) => x * 2; }",
+        _has_relation("method_declaration.implicit_return"),
+    ),
+    (
+        "java_vararg_binding",
+        "java",
+        "class A { int f(int... values) { return values[0]; } }",
+        _bound_names("values"),
+    ),
+    (
+        "java_lambda_implicit_return",
+        "java",
+        "class A { void f(){ java.util.function.Function<Integer,Integer> g=x->x*2; } }",
+        _has_relation("lambda_expression.implicit_return"),
+    ),
+    (
+        "rust_destructured_parameter",
+        "rust",
+        "fn f((x,y):(i32,i32),z:i32)->i32{x+y+z}\n",
+        _bound_names("x", "y", "z"),
+    ),
+    (
+        "rust_closure_implicit_return",
+        "rust",
+        "fn f(){ let g=|x:i32| x*2; use_value(g); }\n",
+        _has_relation("closure_expression.implicit_return"),
+    ),
+    (
+        "php_variadic_binding",
+        "php",
+        "<?php function f(int &...$ys) { return count($ys); }",
+        _bound_names("$ys"),
+    ),
+    (
+        "php_arrow_implicit_return",
+        "php",
+        "<?php $f=fn($x)=>$x*2;",
+        _has_relation("arrow_function.implicit_return"),
+    ),
+    (
+        "ruby_implicit_return",
+        "ruby",
+        "def f(x)\n x*2\nend\n",
+        _has_relation("method.implicit_return"),
+    ),
+    (
+        "kotlin_expression_body",
+        "kotlin",
+        "fun f(x:Int):Int=x*2\n",
+        _has_relation("function_declaration.implicit_return"),
+    ),
+    (
+        "swift_single_expression_return",
+        "swift",
+        "func f(_ x:Int)->Int { x*2 }\n",
+        _has_relation("function_declaration.implicit_return"),
+    ),
+    (
+        "c_sharp_implicit_lambda_parameter",
+        "c_sharp",
+        "class A { void F(){ System.Func<int,int> g=x=>x*2; } }",
+        _all_of(
+            _bound_names("x"),
+            _has_relation("lambda_expression.implicit_return"),
+        ),
+    ),
+    (
+        "kotlin_lambda_tail",
+        "kotlin",
+        "val f={ x:Int -> x*2 }\n",
+        _all_of(_bound_names("x"), _has_relation("lambda_literal.implicit_return")),
+    ),
+    (
+        "swift_lambda_parameter_and_tail",
+        "swift",
+        "let f={ (x:Int) -> Int in x }\n",
+        _all_of(_bound_names("x"), _has_relation("lambda_literal.implicit_return")),
+    ),
+    (
+        "rust_block_closure_tail",
+        "rust",
+        "fn f(){let g=|x:i32| {x*2};}\n",
+        _has_relation("closure_expression.implicit_return"),
+    ),
+    (
+        "ruby_lambda_parameter_and_tail",
+        "ruby",
+        "f=->(x){x*2}\n",
+        _all_of(_bound_names("x"), _has_relation("lambda.implicit_return")),
+    ),
+    (
+        "rust_explicit_closure_return_is_not_implicit",
+        "rust",
+        "fn f(){let g=|x:i32| {return x*2;};}\n",
+        _lacks_relation("closure_expression.implicit_return"),
+    ),
+    (
+        "kotlin_lambda_declaration_is_not_implicit_return",
+        "kotlin",
+        "val f={ val x=1 }\n",
+        _lacks_relation("lambda_literal.implicit_return"),
+    ),
+    (
+        "swift_function_declaration_is_not_implicit_return",
+        "swift",
+        "func f() { let x=1 }\n",
+        _lacks_relation("function_declaration.implicit_return"),
+    ),
 )
 
 
-class BCNltRuntimeV3SemanticTests(unittest.TestCase):
+class BCNltCurrentRuntimeSemanticTests(unittest.TestCase):
     def test_all_reviewed_semantic_repairs_are_present(self):
         for name, language, source, evaluator in CASES:
             with self.subTest(case=name):
                 self.assertTrue(evaluator(_run_sidecar(language, source)))
 
     def test_missing_owned_grammar_fails_without_pack_fallback(self):
-        with tempfile.TemporaryDirectory(prefix="bcnlt-v3-offline-test-") as temporary:
+        with (
+            tempfile.TemporaryDirectory(prefix="bcnlt-v10-offline-test-") as temporary,
+            tempfile.TemporaryDirectory(
+                prefix="bosscrafts-runtime-test-pycache-"
+            ) as bytecode_cache,
+        ):
             code = f"""
 import os
 from pathlib import Path
@@ -316,7 +516,18 @@ with patch('tree_sitter_language_pack.get_parser', side_effect=AssertionError('p
             environment = os.environ.copy()
             environment.pop("PYTHONPATH", None)
             completed = subprocess.run(
-                [str(PYTHON_313), "-I", "-S", "-B", "-X", "utf8", "-c", code],
+                [
+                    str(PYTHON_313),
+                    "-I",
+                    "-S",
+                    "-B",
+                    "-X",
+                    f"pycache_prefix={bytecode_cache}",
+                    "-X",
+                    "utf8",
+                    "-c",
+                    code,
+                ],
                 text=True,
                 encoding="utf-8",
                 capture_output=True,
@@ -330,7 +541,8 @@ with patch('tree_sitter_language_pack.get_parser', side_effect=AssertionError('p
         request = (
             '{"protocol":"' + PROTOCOL + '","source":"x = 1\\n",'
             '"source":"x = 2\\n","language":"python",'
-            '"path":"duplicate.py","dialect":null}'
+            '"path":"duplicate.py","dialect":null,'
+            '"learning_mode":"ephemeral","learned_memory_root":null}'
         )
         completed = _run_raw_sidecar(request)
         self.assertEqual(completed.returncode, 2)
@@ -346,6 +558,8 @@ with patch('tree_sitter_language_pack.get_parser', side_effect=AssertionError('p
                 "language": "python",
                 "path": "dialect.py",
                 "dialect": "x" * 257,
+                "learning_mode": "ephemeral",
+                "learned_memory_root": None,
             }
         )
         completed = _run_raw_sidecar(request)

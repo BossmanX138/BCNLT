@@ -1,0 +1,6045 @@
+{
+  "schema_version": "bosscrafts-bcnlt-semantic-spec-snapshot-v1",
+  "source_head": "4857b8ec0d765c4ecf50da352aa610b1571c0ffb",
+  "specs": {
+    "bash": {
+      "canonical_sha256": "5addb26a6c5ea02b3c68585a64a40016f76e3fe5acaa7df7fac62caf45b7b42e",
+      "payload": {
+        "excluded_node_types": [
+          "program",
+          "compound_statement",
+          "do_group",
+          "declaration_command",
+          "command_name",
+          "arithmetic_expansion",
+          "simple_expansion",
+          "concatenation",
+          "expansion",
+          "command_substitution",
+          "file_redirect",
+          "redirected_statement",
+          "heredoc_body",
+          "heredoc_content",
+          "heredoc_end",
+          "heredoc_redirect",
+          "heredoc_start",
+          "file_descriptor",
+          "list",
+          "comment"
+        ],
+        "identifier_roles": [
+          {
+            "field_name": "name",
+            "node_type": "variable_assignment",
+            "role": "definition"
+          },
+          {
+            "field_name": "",
+            "node_type": "variable_name",
+            "role": "reference"
+          },
+          {
+            "field_name": "",
+            "node_type": "special_variable_name",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "function_definition",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "command",
+            "role": "reference"
+          }
+        ],
+        "node_rules": [
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "string",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "raw_string",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "number",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "word",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "variable",
+            "node_type": "variable_assignment",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "variable_name",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "parameter",
+            "node_type": "special_variable_name",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "function_definition",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "CALL",
+            "ir_kind": "call",
+            "node_type": "command",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "ASSIGN",
+            "ir_kind": "assignment",
+            "node_type": "variable_assignment",
+            "surface_equals": null,
+            "surface_field": "left",
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "for_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "while_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "c_style_for_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "if_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "case_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "RETURN",
+            "ir_kind": "return",
+            "node_type": "command",
+            "surface_equals": "return",
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "binary_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "unary_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "comparison",
+            "node_type": "test_operator",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "array",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "subscript",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "IMPORT",
+            "ir_kind": "import",
+            "node_type": "source_command",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          }
+        ],
+        "scope_rules": [
+          {
+            "name_field": "name",
+            "node_type": "function_definition",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": null,
+            "node_type": "command_substitution",
+            "scope_kind": "subshell"
+          },
+          {
+            "name_field": null,
+            "node_type": "subshell",
+            "scope_kind": "subshell"
+          }
+        ],
+        "semantic_spec_version": "bcnlt-language-spec-v1",
+        "uncertainty_rules": []
+      }
+    },
+    "c": {
+      "canonical_sha256": "1043ac0f961f48674c85b7ca99c1671ec1c5a2238bb39d9dca738b38ab666c29",
+      "payload": {
+        "excluded_node_types": [
+          "translation_unit",
+          "compound_statement",
+          "parameter_list",
+          "argument_list",
+          "declaration",
+          "expression_statement",
+          "function_declarator",
+          "parenthesized_expression",
+          "primitive_type",
+          "abstract_pointer_declarator",
+          "pointer_declarator",
+          "type_descriptor",
+          "storage_class_specifier",
+          "else_clause",
+          "escape_sequence",
+          "comment"
+        ],
+        "identifier_roles": [
+          {
+            "field_name": "declarator",
+            "node_type": "init_declarator",
+            "role": "definition"
+          },
+          {
+            "field_name": "",
+            "node_type": "identifier",
+            "role": "reference"
+          },
+          {
+            "field_name": "",
+            "node_type": "field_identifier",
+            "role": "reference"
+          },
+          {
+            "field_name": "",
+            "node_type": "type_identifier",
+            "role": "reference"
+          },
+          {
+            "field_name": "declarator",
+            "node_type": "parameter_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "declarator.declarator",
+            "node_type": "function_definition",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "struct_specifier",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "union_specifier",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "enum_specifier",
+            "role": "definition"
+          },
+          {
+            "field_name": "function",
+            "node_type": "call_expression",
+            "role": "reference"
+          }
+        ],
+        "node_rules": [
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "string_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "char_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "number_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "true",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "false",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "null",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "variable",
+            "node_type": "init_declarator",
+            "surface_equals": null,
+            "surface_field": "declarator",
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "identifier",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "field_identifier",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "type_identifier",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "parameter",
+            "node_type": "parameter_declaration",
+            "surface_equals": null,
+            "surface_field": "declarator",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "function_definition",
+            "surface_equals": null,
+            "surface_field": "declarator.declarator",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "struct_specifier",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "union_specifier",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "enum_specifier",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "CALL",
+            "ir_kind": "call",
+            "node_type": "call_expression",
+            "surface_equals": null,
+            "surface_field": "function",
+            "surface_prefix": null
+          },
+          {
+            "event": "ASSIGN",
+            "ir_kind": "assignment",
+            "node_type": "assignment_expression",
+            "surface_equals": null,
+            "surface_field": "left",
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "for_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "while_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "do_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "if_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "switch_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "conditional_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "RETURN",
+            "ir_kind": "return",
+            "node_type": "return_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "binary_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "unary_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "cast_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "pointer_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "update_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "comparison",
+            "node_type": "conditional_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "initializer_list",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "field_expression",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "subscript_expression",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "IMPORT",
+            "ir_kind": "import",
+            "node_type": "preproc_include",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          }
+        ],
+        "scope_rules": [
+          {
+            "name_field": "declarator.declarator",
+            "node_type": "function_definition",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "struct_specifier",
+            "scope_kind": "type"
+          },
+          {
+            "name_field": "name",
+            "node_type": "union_specifier",
+            "scope_kind": "type"
+          },
+          {
+            "name_field": "name",
+            "node_type": "enum_specifier",
+            "scope_kind": "type"
+          }
+        ],
+        "semantic_spec_version": "bcnlt-language-spec-v1",
+        "uncertainty_rules": []
+      }
+    },
+    "c_sharp": {
+      "canonical_sha256": "9782b1a20c3abf79b019fc819eccf24605c20d81dcadb4eccfee1b845cf323a8",
+      "payload": {
+        "excluded_node_types": [
+          "compilation_unit",
+          "declaration_list",
+          "block",
+          "parameter_list",
+          "argument_list",
+          "argument",
+          "expression_statement",
+          "local_declaration_statement",
+          "modifier",
+          "predefined_type",
+          "variable_declaration",
+          "type_argument_list",
+          "attribute",
+          "attribute_list",
+          "base_list",
+          "bracketed_argument_list",
+          "comment"
+        ],
+        "identifier_roles": [
+          {
+            "field_name": "name",
+            "node_type": "variable_declarator",
+            "role": "definition"
+          },
+          {
+            "field_name": "",
+            "node_type": "identifier",
+            "role": "reference"
+          },
+          {
+            "field_name": "name",
+            "node_type": "parameter",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "method_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "constructor_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "lambda_expression",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "class_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "struct_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "interface_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "enum_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "function",
+            "node_type": "invocation_expression",
+            "role": "reference"
+          },
+          {
+            "field_name": "function",
+            "node_type": "object_creation_expression",
+            "role": "reference"
+          }
+        ],
+        "node_rules": [
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "string_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "character_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "integer_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "real_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "boolean_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "null_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "variable",
+            "node_type": "variable_declarator",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "identifier",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "parameter",
+            "node_type": "parameter",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "method_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "constructor_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "lambda_expression",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "class_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "struct_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "interface_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "enum_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "CALL",
+            "ir_kind": "call",
+            "node_type": "invocation_expression",
+            "surface_equals": null,
+            "surface_field": "function",
+            "surface_prefix": null
+          },
+          {
+            "event": "CALL",
+            "ir_kind": "call",
+            "node_type": "object_creation_expression",
+            "surface_equals": null,
+            "surface_field": "function",
+            "surface_prefix": null
+          },
+          {
+            "event": "ASSIGN",
+            "ir_kind": "assignment",
+            "node_type": "assignment_expression",
+            "surface_equals": null,
+            "surface_field": "left",
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "for_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "foreach_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "while_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "do_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "if_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "switch_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "switch_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "conditional_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "RETURN",
+            "ir_kind": "return",
+            "node_type": "return_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "binary_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "prefix_unary_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "cast_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "postfix_unary_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "comparison",
+            "node_type": "relational_pattern",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "array_creation_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "collection_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "RAISE",
+            "ir_kind": "error",
+            "node_type": "throw_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "member_access_expression",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "element_access_expression",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "qualified_name",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "generic_name",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "IMPORT",
+            "ir_kind": "import",
+            "node_type": "using_directive",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          }
+        ],
+        "scope_rules": [
+          {
+            "name_field": "name",
+            "node_type": "method_declaration",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "constructor_declaration",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "lambda_expression",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "class_declaration",
+            "scope_kind": "type"
+          },
+          {
+            "name_field": "name",
+            "node_type": "struct_declaration",
+            "scope_kind": "type"
+          },
+          {
+            "name_field": "name",
+            "node_type": "interface_declaration",
+            "scope_kind": "type"
+          },
+          {
+            "name_field": "name",
+            "node_type": "enum_declaration",
+            "scope_kind": "type"
+          }
+        ],
+        "semantic_spec_version": "bcnlt-language-spec-v1",
+        "uncertainty_rules": []
+      }
+    },
+    "cpp": {
+      "canonical_sha256": "bc5169cc32c9879a574ed296765d79871cf8df60f233705f2a0d329883b3e86a",
+      "payload": {
+        "excluded_node_types": [
+          "translation_unit",
+          "compound_statement",
+          "parameter_list",
+          "argument_list",
+          "condition_clause",
+          "declaration",
+          "expression_statement",
+          "function_declarator",
+          "primitive_type",
+          "abstract_pointer_declarator",
+          "pointer_declarator",
+          "type_descriptor",
+          "type_qualifier",
+          "template_argument_list",
+          "subscript_argument_list",
+          "else_clause",
+          "comment"
+        ],
+        "identifier_roles": [
+          {
+            "field_name": "declarator",
+            "node_type": "init_declarator",
+            "role": "definition"
+          },
+          {
+            "field_name": "",
+            "node_type": "identifier",
+            "role": "reference"
+          },
+          {
+            "field_name": "",
+            "node_type": "field_identifier",
+            "role": "reference"
+          },
+          {
+            "field_name": "",
+            "node_type": "namespace_identifier",
+            "role": "reference"
+          },
+          {
+            "field_name": "",
+            "node_type": "type_identifier",
+            "role": "reference"
+          },
+          {
+            "field_name": "declarator",
+            "node_type": "parameter_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "declarator.declarator",
+            "node_type": "function_definition",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "lambda_expression",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "class_specifier",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "struct_specifier",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "union_specifier",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "enum_specifier",
+            "role": "definition"
+          },
+          {
+            "field_name": "function",
+            "node_type": "call_expression",
+            "role": "reference"
+          }
+        ],
+        "node_rules": [
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "string_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "char_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "number_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "true",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "false",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "null",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "variable",
+            "node_type": "init_declarator",
+            "surface_equals": null,
+            "surface_field": "declarator",
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "identifier",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "field_identifier",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "namespace_identifier",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "type_identifier",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "parameter",
+            "node_type": "parameter_declaration",
+            "surface_equals": null,
+            "surface_field": "declarator",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "function_definition",
+            "surface_equals": null,
+            "surface_field": "declarator.declarator",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "lambda_expression",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "class_specifier",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "struct_specifier",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "union_specifier",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "enum_specifier",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "CALL",
+            "ir_kind": "call",
+            "node_type": "call_expression",
+            "surface_equals": null,
+            "surface_field": "function",
+            "surface_prefix": null
+          },
+          {
+            "event": "ASSIGN",
+            "ir_kind": "assignment",
+            "node_type": "assignment_expression",
+            "surface_equals": null,
+            "surface_field": "left",
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "for_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "for_range_loop",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "while_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "do_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "if_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "switch_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "conditional_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "RETURN",
+            "ir_kind": "return",
+            "node_type": "return_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "binary_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "unary_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "cast_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "pointer_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "update_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "comparison",
+            "node_type": "conditional_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "initializer_list",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "RAISE",
+            "ir_kind": "error",
+            "node_type": "throw_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "field_expression",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "subscript_expression",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "qualified_identifier",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "IMPORT",
+            "ir_kind": "import",
+            "node_type": "preproc_include",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "IMPORT",
+            "ir_kind": "import",
+            "node_type": "using_declaration",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          }
+        ],
+        "scope_rules": [
+          {
+            "name_field": "declarator.declarator",
+            "node_type": "function_definition",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "lambda_expression",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "class_specifier",
+            "scope_kind": "type"
+          },
+          {
+            "name_field": "name",
+            "node_type": "struct_specifier",
+            "scope_kind": "type"
+          },
+          {
+            "name_field": "name",
+            "node_type": "union_specifier",
+            "scope_kind": "type"
+          },
+          {
+            "name_field": "name",
+            "node_type": "enum_specifier",
+            "scope_kind": "type"
+          }
+        ],
+        "semantic_spec_version": "bcnlt-language-spec-v1",
+        "uncertainty_rules": []
+      }
+    },
+    "go": {
+      "canonical_sha256": "7552a8e2ceba6f27de122f40c1dffd5aa31d950215f2173c8b8b7015231cfe41",
+      "payload": {
+        "excluded_node_types": [
+          "source_file",
+          "statement_list",
+          "block",
+          "parameter_list",
+          "argument_list",
+          "expression_list",
+          "expression_statement",
+          "for_clause",
+          "package_identifier",
+          "qualified_type",
+          "pointer_type",
+          "slice_type",
+          "literal_element",
+          "keyed_element",
+          "import_spec",
+          "field_declaration_list",
+          "comment"
+        ],
+        "identifier_roles": [
+          {
+            "field_name": "name",
+            "node_type": "var_spec",
+            "role": "definition"
+          },
+          {
+            "field_name": "left",
+            "node_type": "short_var_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "",
+            "node_type": "identifier",
+            "role": "reference"
+          },
+          {
+            "field_name": "",
+            "node_type": "field_identifier",
+            "role": "reference"
+          },
+          {
+            "field_name": "",
+            "node_type": "type_identifier",
+            "role": "reference"
+          },
+          {
+            "field_name": "name",
+            "node_type": "parameter_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "function_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "method_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "func_literal",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "type_spec",
+            "role": "definition"
+          },
+          {
+            "field_name": "function",
+            "node_type": "call_expression",
+            "role": "reference"
+          }
+        ],
+        "node_rules": [
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "interpreted_string_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "raw_string_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "rune_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "int_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "float_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "true",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "false",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "nil",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "variable",
+            "node_type": "var_spec",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "variable",
+            "node_type": "short_var_declaration",
+            "surface_equals": null,
+            "surface_field": "left",
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "identifier",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "field_identifier",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "type_identifier",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "parameter",
+            "node_type": "parameter_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "function_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "method_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "func_literal",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "type_spec",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "CALL",
+            "ir_kind": "call",
+            "node_type": "call_expression",
+            "surface_equals": null,
+            "surface_field": "function",
+            "surface_prefix": null
+          },
+          {
+            "event": "ASSIGN",
+            "ir_kind": "assignment",
+            "node_type": "assignment_statement",
+            "surface_equals": null,
+            "surface_field": "left",
+            "surface_prefix": null
+          },
+          {
+            "event": "ASSIGN",
+            "ir_kind": "assignment",
+            "node_type": "short_var_declaration",
+            "surface_equals": null,
+            "surface_field": "left",
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "for_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "if_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "expression_switch_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "type_switch_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "RETURN",
+            "ir_kind": "return",
+            "node_type": "return_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "binary_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "unary_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "inc_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "comparison",
+            "node_type": "expression_switch_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "composite_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "selector_expression",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "index_expression",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "IMPORT",
+            "ir_kind": "import",
+            "node_type": "import_declaration",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "IMPORT",
+            "ir_kind": "import",
+            "node_type": "package_clause",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          }
+        ],
+        "scope_rules": [
+          {
+            "name_field": "name",
+            "node_type": "function_declaration",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "method_declaration",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "func_literal",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "type_spec",
+            "scope_kind": "type"
+          }
+        ],
+        "semantic_spec_version": "bcnlt-language-spec-v1",
+        "uncertainty_rules": []
+      }
+    },
+    "java": {
+      "canonical_sha256": "c6b55b9f2c70d9e9f3e578172ad7b9dfa64af6388b33450d3f11ef637be96776",
+      "payload": {
+        "excluded_node_types": [
+          "program",
+          "class_body",
+          "block",
+          "formal_parameters",
+          "argument_list",
+          "expression_statement",
+          "local_variable_declaration",
+          "modifiers",
+          "dimensions",
+          "integral_type",
+          "parenthesized_expression",
+          "void_type",
+          "line_comment",
+          "block_comment",
+          "type_arguments",
+          "generic_type",
+          "annotation",
+          "marker_annotation",
+          "annotation_argument_list",
+          "array_type",
+          "boolean_type",
+          "comment"
+        ],
+        "identifier_roles": [
+          {
+            "field_name": "name",
+            "node_type": "variable_declarator",
+            "role": "definition"
+          },
+          {
+            "field_name": "",
+            "node_type": "identifier",
+            "role": "reference"
+          },
+          {
+            "field_name": "",
+            "node_type": "type_identifier",
+            "role": "reference"
+          },
+          {
+            "field_name": "",
+            "node_type": "this",
+            "role": "reference"
+          },
+          {
+            "field_name": "name",
+            "node_type": "formal_parameter",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "method_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "constructor_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "lambda_expression",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "class_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "interface_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "enum_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "record_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "method_invocation",
+            "role": "reference"
+          },
+          {
+            "field_name": "function",
+            "node_type": "object_creation_expression",
+            "role": "reference"
+          }
+        ],
+        "node_rules": [
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "string_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "character_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "decimal_integer_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "decimal_floating_point_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "true",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "false",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "null_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "variable",
+            "node_type": "variable_declarator",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "identifier",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "type_identifier",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "this",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "parameter",
+            "node_type": "formal_parameter",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "method_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "constructor_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "lambda_expression",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "class_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "interface_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "enum_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "record_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "CALL",
+            "ir_kind": "call",
+            "node_type": "method_invocation",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "CALL",
+            "ir_kind": "call",
+            "node_type": "object_creation_expression",
+            "surface_equals": null,
+            "surface_field": "function",
+            "surface_prefix": null
+          },
+          {
+            "event": "ASSIGN",
+            "ir_kind": "assignment",
+            "node_type": "assignment_expression",
+            "surface_equals": null,
+            "surface_field": "left",
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "for_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "enhanced_for_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "while_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "do_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "if_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "switch_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "ternary_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "RETURN",
+            "ir_kind": "return",
+            "node_type": "return_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "binary_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "unary_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "cast_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "update_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "comparison",
+            "node_type": "instanceof_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "array_creation_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "array_initializer",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "RAISE",
+            "ir_kind": "error",
+            "node_type": "throw_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "field_access",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "array_access",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "scoped_identifier",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "scoped_type_identifier",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "IMPORT",
+            "ir_kind": "import",
+            "node_type": "import_declaration",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          }
+        ],
+        "scope_rules": [
+          {
+            "name_field": "name",
+            "node_type": "method_declaration",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "constructor_declaration",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "lambda_expression",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "class_declaration",
+            "scope_kind": "type"
+          },
+          {
+            "name_field": "name",
+            "node_type": "interface_declaration",
+            "scope_kind": "type"
+          },
+          {
+            "name_field": "name",
+            "node_type": "enum_declaration",
+            "scope_kind": "type"
+          },
+          {
+            "name_field": "name",
+            "node_type": "record_declaration",
+            "scope_kind": "type"
+          }
+        ],
+        "semantic_spec_version": "bcnlt-language-spec-v1",
+        "uncertainty_rules": []
+      }
+    },
+    "javascript": {
+      "canonical_sha256": "1e0196f02396c2bb53ff0a1986c0716c4f90c89d407bedd78eb415339fb6f8fe",
+      "payload": {
+        "excluded_node_types": [
+          "program",
+          "statement_block",
+          "formal_parameters",
+          "arguments",
+          "expression_statement",
+          "lexical_declaration",
+          "parenthesized_expression",
+          "variable_declaration",
+          "import_clause",
+          "import_specifier",
+          "named_imports",
+          "else_clause",
+          "escape_sequence",
+          "comment"
+        ],
+        "identifier_roles": [
+          {
+            "field_name": "name",
+            "node_type": "variable_declarator",
+            "role": "definition"
+          },
+          {
+            "field_name": "",
+            "node_type": "identifier",
+            "role": "reference"
+          },
+          {
+            "field_name": "",
+            "node_type": "property_identifier",
+            "role": "reference"
+          },
+          {
+            "field_name": "",
+            "node_type": "this",
+            "role": "reference"
+          },
+          {
+            "field_name": "pattern",
+            "node_type": "required_parameter",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "function_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "function_expression",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "method_definition",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "arrow_function",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "class_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "function",
+            "node_type": "call_expression",
+            "role": "reference"
+          },
+          {
+            "field_name": "function",
+            "node_type": "new_expression",
+            "role": "reference"
+          }
+        ],
+        "node_rules": [
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "string",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "number",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "true",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "false",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "null",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "variable",
+            "node_type": "variable_declarator",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "identifier",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "property_identifier",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "this",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "parameter",
+            "node_type": "required_parameter",
+            "surface_equals": null,
+            "surface_field": "pattern",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "function_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "function_expression",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "method_definition",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "arrow_function",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "class_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "CALL",
+            "ir_kind": "call",
+            "node_type": "call_expression",
+            "surface_equals": null,
+            "surface_field": "function",
+            "surface_prefix": null
+          },
+          {
+            "event": "CALL",
+            "ir_kind": "call",
+            "node_type": "new_expression",
+            "surface_equals": null,
+            "surface_field": "function",
+            "surface_prefix": null
+          },
+          {
+            "event": "ASSIGN",
+            "ir_kind": "assignment",
+            "node_type": "assignment_expression",
+            "surface_equals": null,
+            "surface_field": "left",
+            "surface_prefix": null
+          },
+          {
+            "event": "ASSIGN",
+            "ir_kind": "assignment",
+            "node_type": "augmented_assignment_expression",
+            "surface_equals": null,
+            "surface_field": "left",
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "for_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "for_in_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "while_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "do_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "if_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "switch_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "ternary_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "RETURN",
+            "ir_kind": "return",
+            "node_type": "return_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "binary_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "unary_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "update_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "comparison",
+            "node_type": "relational_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "array",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "object",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "pair",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "RAISE",
+            "ir_kind": "error",
+            "node_type": "throw_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "member_expression",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "subscript_expression",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "IMPORT",
+            "ir_kind": "import",
+            "node_type": "import_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          }
+        ],
+        "scope_rules": [
+          {
+            "name_field": "name",
+            "node_type": "function_declaration",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "function_expression",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "method_definition",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "arrow_function",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "class_declaration",
+            "scope_kind": "type"
+          },
+          {
+            "name_field": null,
+            "node_type": "statement_block",
+            "scope_kind": "block"
+          }
+        ],
+        "semantic_spec_version": "bcnlt-language-spec-v1",
+        "uncertainty_rules": []
+      }
+    },
+    "kotlin": {
+      "canonical_sha256": "1a06fe68c39cf6417d05ad2fba4bba41c200b62ef85db729bf3d8e079756d07d",
+      "payload": {
+        "excluded_node_types": [
+          "source_file",
+          "function_body",
+          "function_value_parameters",
+          "statements",
+          "control_structure_body",
+          "call_suffix",
+          "value_arguments",
+          "value_argument",
+          "directly_assignable_expression",
+          "binding_pattern_kind",
+          "user_type",
+          "property_declaration",
+          "annotation",
+          "modifiers",
+          "member_modifier",
+          "visibility_modifier",
+          "type_arguments",
+          "type_projection",
+          "nullable_type",
+          "quest",
+          "class_body",
+          "class_parameter",
+          "primary_constructor",
+          "line_comment",
+          "multiline_comment",
+          "when_entry",
+          "when_condition",
+          "comment"
+        ],
+        "identifier_roles": [
+          {
+            "field_name": "#0",
+            "node_type": "variable_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "",
+            "node_type": "simple_identifier",
+            "role": "reference"
+          },
+          {
+            "field_name": "",
+            "node_type": "identifier",
+            "role": "reference"
+          },
+          {
+            "field_name": "",
+            "node_type": "type_identifier",
+            "role": "reference"
+          },
+          {
+            "field_name": "#0",
+            "node_type": "parameter",
+            "role": "definition"
+          },
+          {
+            "field_name": "#0",
+            "node_type": "function_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "lambda_literal",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "class_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "object_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "#0",
+            "node_type": "call_expression",
+            "role": "reference"
+          }
+        ],
+        "node_rules": [
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "string_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "character_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "integer_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "real_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "boolean_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "null_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "variable",
+            "node_type": "variable_declaration",
+            "surface_equals": null,
+            "surface_field": "#0",
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "simple_identifier",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "identifier",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "type_identifier",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "parameter",
+            "node_type": "parameter",
+            "surface_equals": null,
+            "surface_field": "#0",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "function_declaration",
+            "surface_equals": null,
+            "surface_field": "#0",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "lambda_literal",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "class_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "object_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "CALL",
+            "ir_kind": "call",
+            "node_type": "call_expression",
+            "surface_equals": null,
+            "surface_field": "#0",
+            "surface_prefix": null
+          },
+          {
+            "event": "ASSIGN",
+            "ir_kind": "assignment",
+            "node_type": "assignment",
+            "surface_equals": null,
+            "surface_field": "left",
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "for_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "while_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "do_while_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "if_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "when_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "RETURN",
+            "ir_kind": "return",
+            "node_type": "jump_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": "return"
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "binary_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "additive_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "comparison_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "equality_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "infix_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "unary_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "prefix_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "comparison",
+            "node_type": "range_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "collection_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "RAISE",
+            "ir_kind": "error",
+            "node_type": "throw_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "navigation_expression",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "navigation_suffix",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "indexing_expression",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "indexing_suffix",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "IMPORT",
+            "ir_kind": "import",
+            "node_type": "import_header",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          }
+        ],
+        "scope_rules": [
+          {
+            "name_field": "#0",
+            "node_type": "function_declaration",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "lambda_literal",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "class_declaration",
+            "scope_kind": "type"
+          },
+          {
+            "name_field": "name",
+            "node_type": "object_declaration",
+            "scope_kind": "type"
+          }
+        ],
+        "semantic_spec_version": "bcnlt-language-spec-v1",
+        "uncertainty_rules": []
+      }
+    },
+    "php": {
+      "canonical_sha256": "987ca0a3ec87f5289017e9bc16876a70893d484ce628c8292fffb6feecf92ffd",
+      "payload": {
+        "excluded_node_types": [
+          "program",
+          "php_tag",
+          "compound_statement",
+          "formal_parameters",
+          "arguments",
+          "argument",
+          "expression_statement",
+          "name",
+          "parenthesized_expression",
+          "named_type",
+          "visibility_modifier",
+          "cast_type",
+          "namespace_use_clause",
+          "declaration_list",
+          "base_clause",
+          "php_end_tag",
+          "text_interpolation",
+          "property_declaration",
+          "static_modifier",
+          "relative_scope",
+          "comment"
+        ],
+        "identifier_roles": [
+          {
+            "field_name": "left",
+            "node_type": "assignment_expression",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "property_element",
+            "role": "definition"
+          },
+          {
+            "field_name": "",
+            "node_type": "variable_name",
+            "role": "reference"
+          },
+          {
+            "field_name": "name",
+            "node_type": "simple_parameter",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "function_definition",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "method_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "anonymous_function",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "class_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "interface_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "trait_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "enum_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "namespace_definition",
+            "role": "definition"
+          },
+          {
+            "field_name": "function",
+            "node_type": "function_call_expression",
+            "role": "reference"
+          },
+          {
+            "field_name": "function",
+            "node_type": "member_call_expression",
+            "role": "reference"
+          },
+          {
+            "field_name": "function",
+            "node_type": "object_creation_expression",
+            "role": "reference"
+          }
+        ],
+        "node_rules": [
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "string",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "encapsed_string",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "integer",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "float",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "boolean",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "null",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "variable",
+            "node_type": "assignment_expression",
+            "surface_equals": null,
+            "surface_field": "left",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "variable",
+            "node_type": "property_element",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "variable_name",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "parameter",
+            "node_type": "simple_parameter",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "function_definition",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "method_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "anonymous_function",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "class_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "interface_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "trait_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "enum_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "namespace_definition",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "CALL",
+            "ir_kind": "call",
+            "node_type": "function_call_expression",
+            "surface_equals": null,
+            "surface_field": "function",
+            "surface_prefix": null
+          },
+          {
+            "event": "CALL",
+            "ir_kind": "call",
+            "node_type": "member_call_expression",
+            "surface_equals": null,
+            "surface_field": "function",
+            "surface_prefix": null
+          },
+          {
+            "event": "CALL",
+            "ir_kind": "call",
+            "node_type": "object_creation_expression",
+            "surface_equals": null,
+            "surface_field": "function",
+            "surface_prefix": null
+          },
+          {
+            "event": "ASSIGN",
+            "ir_kind": "assignment",
+            "node_type": "assignment_expression",
+            "surface_equals": null,
+            "surface_field": "left",
+            "surface_prefix": null
+          },
+          {
+            "event": "ASSIGN",
+            "ir_kind": "assignment",
+            "node_type": "augmented_assignment_expression",
+            "surface_equals": null,
+            "surface_field": "left",
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "for_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "foreach_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "while_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "do_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "if_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "switch_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "conditional_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "RETURN",
+            "ir_kind": "return",
+            "node_type": "return_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "binary_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "unary_op_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "cast_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "comparison",
+            "node_type": "relational_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "array_creation_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "array_element_initializer",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "RAISE",
+            "ir_kind": "error",
+            "node_type": "throw_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "member_access_expression",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "subscript_expression",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "qualified_name",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "namespace_name",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "scoped_call_expression",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "class_constant_access_expression",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "IMPORT",
+            "ir_kind": "import",
+            "node_type": "namespace_use_declaration",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "IMPORT",
+            "ir_kind": "import",
+            "node_type": "include_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "CALL",
+            "ir_kind": "io",
+            "node_type": "echo_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "CALL",
+            "ir_kind": "io",
+            "node_type": "print_intrinsic",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          }
+        ],
+        "scope_rules": [
+          {
+            "name_field": "name",
+            "node_type": "function_definition",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "method_declaration",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "anonymous_function",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "class_declaration",
+            "scope_kind": "type"
+          },
+          {
+            "name_field": "name",
+            "node_type": "interface_declaration",
+            "scope_kind": "type"
+          },
+          {
+            "name_field": "name",
+            "node_type": "trait_declaration",
+            "scope_kind": "type"
+          },
+          {
+            "name_field": "name",
+            "node_type": "enum_declaration",
+            "scope_kind": "type"
+          },
+          {
+            "name_field": "name",
+            "node_type": "namespace_definition",
+            "scope_kind": "type"
+          }
+        ],
+        "semantic_spec_version": "bcnlt-language-spec-v1",
+        "uncertainty_rules": []
+      }
+    },
+    "python": {
+      "canonical_sha256": "3e6f7eef596634af3de66eb476892f2e4515780cd5670198f7c548b91496e118",
+      "payload": {
+        "excluded_node_types": [
+          "module",
+          "block",
+          "parameters",
+          "argument_list",
+          "parenthesized_expression",
+          "dotted_name",
+          "keyword_argument",
+          "type",
+          "generic_type",
+          "type_parameter",
+          "decorator",
+          "decorated_definition",
+          "else_clause",
+          "aliased_import",
+          "as_pattern",
+          "as_pattern_target",
+          "comment"
+        ],
+        "identifier_roles": [
+          {
+            "field_name": "left",
+            "node_type": "assignment",
+            "role": "definition"
+          },
+          {
+            "field_name": "",
+            "node_type": "identifier",
+            "role": "reference"
+          },
+          {
+            "field_name": "name",
+            "node_type": "default_parameter",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "typed_parameter",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "typed_default_parameter",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "function_definition",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "lambda",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "class_definition",
+            "role": "definition"
+          },
+          {
+            "field_name": "function",
+            "node_type": "call",
+            "role": "reference"
+          }
+        ],
+        "node_rules": [
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "string",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "integer",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "float",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "true",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "false",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "none",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "variable",
+            "node_type": "assignment",
+            "surface_equals": null,
+            "surface_field": "left",
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "identifier",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "parameter",
+            "node_type": "default_parameter",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "parameter",
+            "node_type": "typed_parameter",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "parameter",
+            "node_type": "typed_default_parameter",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "function_definition",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "lambda",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "class_definition",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "CALL",
+            "ir_kind": "call",
+            "node_type": "call",
+            "surface_equals": null,
+            "surface_field": "function",
+            "surface_prefix": null
+          },
+          {
+            "event": "ASSIGN",
+            "ir_kind": "assignment",
+            "node_type": "assignment",
+            "surface_equals": null,
+            "surface_field": "left",
+            "surface_prefix": null
+          },
+          {
+            "event": "ASSIGN",
+            "ir_kind": "assignment",
+            "node_type": "augmented_assignment",
+            "surface_equals": null,
+            "surface_field": "left",
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "for_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "while_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "if_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "match_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "RETURN",
+            "ir_kind": "return",
+            "node_type": "return_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "binary_operator",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "unary_operator",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "boolean_operator",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "not_operator",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "comparison",
+            "node_type": "comparison_operator",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "list",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "dictionary",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "set",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "tuple",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "pair",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "RAISE",
+            "ir_kind": "error",
+            "node_type": "raise_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "attribute",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "subscript",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "IMPORT",
+            "ir_kind": "import",
+            "node_type": "import_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "IMPORT",
+            "ir_kind": "import",
+            "node_type": "import_from_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          }
+        ],
+        "scope_rules": [
+          {
+            "name_field": "name",
+            "node_type": "function_definition",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "lambda",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "class_definition",
+            "scope_kind": "type"
+          }
+        ],
+        "semantic_spec_version": "bcnlt-language-spec-v1",
+        "uncertainty_rules": []
+      }
+    },
+    "ruby": {
+      "canonical_sha256": "0e5549f3028b213e0590076b220d79b878248e862e93ac04df7c31f92ca10b2e",
+      "payload": {
+        "excluded_node_types": [
+          "program",
+          "body_statement",
+          "argument_list",
+          "do",
+          "in",
+          "then",
+          "range",
+          "block",
+          "block_body",
+          "block_parameters",
+          "do_block",
+          "bare_string",
+          "hash_key_symbol",
+          "simple_symbol",
+          "string_content",
+          "superclass",
+          "comment"
+        ],
+        "identifier_roles": [
+          {
+            "field_name": "left",
+            "node_type": "assignment",
+            "role": "definition"
+          },
+          {
+            "field_name": "",
+            "node_type": "identifier",
+            "role": "reference"
+          },
+          {
+            "field_name": "",
+            "node_type": "constant",
+            "role": "reference"
+          },
+          {
+            "field_name": "",
+            "node_type": "instance_variable",
+            "role": "reference"
+          },
+          {
+            "field_name": "",
+            "node_type": "self",
+            "role": "reference"
+          },
+          {
+            "field_name": "",
+            "node_type": "method_parameters",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "method",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "singleton_method",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "lambda",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "class",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "module",
+            "role": "definition"
+          },
+          {
+            "field_name": "method",
+            "node_type": "call",
+            "role": "reference"
+          },
+          {
+            "field_name": "function",
+            "node_type": "method_call",
+            "role": "reference"
+          }
+        ],
+        "node_rules": [
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "string",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "integer",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "float",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "true",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "false",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "nil",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "variable",
+            "node_type": "assignment",
+            "surface_equals": null,
+            "surface_field": "left",
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "identifier",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "constant",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "instance_variable",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "self",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "parameter",
+            "node_type": "method_parameters",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "method",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "singleton_method",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "lambda",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "class",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "module",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "CALL",
+            "ir_kind": "call",
+            "node_type": "call",
+            "surface_equals": null,
+            "surface_field": "method",
+            "surface_prefix": null
+          },
+          {
+            "event": "CALL",
+            "ir_kind": "call",
+            "node_type": "method_call",
+            "surface_equals": null,
+            "surface_field": "function",
+            "surface_prefix": null
+          },
+          {
+            "event": "ASSIGN",
+            "ir_kind": "assignment",
+            "node_type": "assignment",
+            "surface_equals": null,
+            "surface_field": "left",
+            "surface_prefix": null
+          },
+          {
+            "event": "ASSIGN",
+            "ir_kind": "assignment",
+            "node_type": "operator_assignment",
+            "surface_equals": null,
+            "surface_field": "left",
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "for",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "while",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "until",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "if",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "unless",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "case",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "RETURN",
+            "ir_kind": "return",
+            "node_type": "return",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "binary",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "unary",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "comparison",
+            "node_type": "comparison",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "array",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "hash",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "pair",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "scope_resolution",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "element_reference",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "IMPORT",
+            "ir_kind": "import",
+            "node_type": "call",
+            "surface_equals": "require",
+            "surface_field": "method",
+            "surface_prefix": null
+          },
+          {
+            "event": "IMPORT",
+            "ir_kind": "import",
+            "node_type": "call",
+            "surface_equals": "require_relative",
+            "surface_field": "method",
+            "surface_prefix": null
+          },
+          {
+            "event": "IMPORT",
+            "ir_kind": "import",
+            "node_type": "call",
+            "surface_equals": "load",
+            "surface_field": "method",
+            "surface_prefix": null
+          }
+        ],
+        "scope_rules": [
+          {
+            "name_field": "name",
+            "node_type": "method",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "singleton_method",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "lambda",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "class",
+            "scope_kind": "type"
+          },
+          {
+            "name_field": "name",
+            "node_type": "module",
+            "scope_kind": "type"
+          }
+        ],
+        "semantic_spec_version": "bcnlt-language-spec-v1",
+        "uncertainty_rules": []
+      }
+    },
+    "rust": {
+      "canonical_sha256": "202d4db9c497b22ac5f6ae79eb3e7567b0069d59f0cb0d74ca3c5d0716d914e0",
+      "payload": {
+        "excluded_node_types": [
+          "source_file",
+          "block",
+          "parameters",
+          "arguments",
+          "expression_statement",
+          "mutable_specifier",
+          "primitive_type",
+          "line_comment",
+          "doc_comment",
+          "attribute",
+          "attribute_item",
+          "type_arguments",
+          "generic_type",
+          "visibility_modifier",
+          "token_tree",
+          "outer_doc_comment_marker",
+          "reference_type",
+          "match_pattern",
+          "declaration_list",
+          "impl_item",
+          "trait_bounds",
+          "type_parameter",
+          "type_parameters",
+          "field_declaration_list",
+          "tuple_struct_pattern",
+          "field_initializer_list",
+          "comment"
+        ],
+        "identifier_roles": [
+          {
+            "field_name": "pattern",
+            "node_type": "let_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "field_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "",
+            "node_type": "identifier",
+            "role": "reference"
+          },
+          {
+            "field_name": "",
+            "node_type": "field_identifier",
+            "role": "reference"
+          },
+          {
+            "field_name": "",
+            "node_type": "type_identifier",
+            "role": "reference"
+          },
+          {
+            "field_name": "",
+            "node_type": "self",
+            "role": "reference"
+          },
+          {
+            "field_name": "pattern",
+            "node_type": "parameter",
+            "role": "definition"
+          },
+          {
+            "field_name": "self",
+            "node_type": "self_parameter",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "function_item",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "closure_expression",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "struct_item",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "enum_item",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "trait_item",
+            "role": "definition"
+          },
+          {
+            "field_name": "function",
+            "node_type": "call_expression",
+            "role": "reference"
+          },
+          {
+            "field_name": "function",
+            "node_type": "macro_invocation",
+            "role": "reference"
+          }
+        ],
+        "node_rules": [
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "string_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "char_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "integer_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "float_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "boolean_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "variable",
+            "node_type": "let_declaration",
+            "surface_equals": null,
+            "surface_field": "pattern",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "variable",
+            "node_type": "field_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "identifier",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "field_identifier",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "type_identifier",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "self",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "parameter",
+            "node_type": "parameter",
+            "surface_equals": null,
+            "surface_field": "pattern",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "parameter",
+            "node_type": "self_parameter",
+            "surface_equals": null,
+            "surface_field": "self",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "function_item",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "closure_expression",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "struct_item",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "enum_item",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "trait_item",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "CALL",
+            "ir_kind": "call",
+            "node_type": "call_expression",
+            "surface_equals": null,
+            "surface_field": "function",
+            "surface_prefix": null
+          },
+          {
+            "event": "CALL",
+            "ir_kind": "call",
+            "node_type": "macro_invocation",
+            "surface_equals": null,
+            "surface_field": "function",
+            "surface_prefix": null
+          },
+          {
+            "event": "ASSIGN",
+            "ir_kind": "assignment",
+            "node_type": "assignment_expression",
+            "surface_equals": null,
+            "surface_field": "left",
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "for_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "while_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "loop_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "if_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "match_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "match_arm",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "RETURN",
+            "ir_kind": "return",
+            "node_type": "return_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "binary_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "unary_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "reference_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "comparison",
+            "node_type": "range_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "array_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "tuple_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "struct_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "RAISE",
+            "ir_kind": "error",
+            "node_type": "try_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "field_expression",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "index_expression",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "scoped_identifier",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "scoped_type_identifier",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "IMPORT",
+            "ir_kind": "import",
+            "node_type": "use_declaration",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "IMPORT",
+            "ir_kind": "import",
+            "node_type": "mod_item",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          }
+        ],
+        "scope_rules": [
+          {
+            "name_field": "name",
+            "node_type": "function_item",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "closure_expression",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "struct_item",
+            "scope_kind": "type"
+          },
+          {
+            "name_field": "name",
+            "node_type": "enum_item",
+            "scope_kind": "type"
+          },
+          {
+            "name_field": "name",
+            "node_type": "trait_item",
+            "scope_kind": "type"
+          }
+        ],
+        "semantic_spec_version": "bcnlt-language-spec-v1",
+        "uncertainty_rules": []
+      }
+    },
+    "swift": {
+      "canonical_sha256": "dd6d38e81375c85c69e1aecce23132a2703ea64dd19162a2b3ec7c6419aaabaa",
+      "payload": {
+        "excluded_node_types": [
+          "source_file",
+          "function_body",
+          "statements",
+          "call_suffix",
+          "value_arguments",
+          "value_argument",
+          "directly_assignable_expression",
+          "pattern",
+          "value_binding_pattern",
+          "user_type",
+          "attribute",
+          "modifiers",
+          "visibility_modifier",
+          "type_annotation",
+          "value_argument_label",
+          "lambda_function_type",
+          "lambda_function_type_parameters",
+          "lambda_parameter",
+          "class_body",
+          "switch_entry",
+          "switch_pattern",
+          "bang",
+          "comment"
+        ],
+        "identifier_roles": [
+          {
+            "field_name": "name.bound_identifier",
+            "node_type": "property_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "",
+            "node_type": "simple_identifier",
+            "role": "reference"
+          },
+          {
+            "field_name": "",
+            "node_type": "identifier",
+            "role": "reference"
+          },
+          {
+            "field_name": "",
+            "node_type": "type_identifier",
+            "role": "reference"
+          },
+          {
+            "field_name": "",
+            "node_type": "self_expression",
+            "role": "reference"
+          },
+          {
+            "field_name": "#1",
+            "node_type": "parameter",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "function_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "initializer_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "lambda_literal",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "class_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "struct_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "protocol_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "enum_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "#0",
+            "node_type": "call_expression",
+            "role": "reference"
+          }
+        ],
+        "node_rules": [
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "line_string_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "multiline_string_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "integer_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "real_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "boolean_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "nil",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "variable",
+            "node_type": "property_declaration",
+            "surface_equals": null,
+            "surface_field": "name.bound_identifier",
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "simple_identifier",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "identifier",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "type_identifier",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "self_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "parameter",
+            "node_type": "parameter",
+            "surface_equals": null,
+            "surface_field": "#1",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "function_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "initializer_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "lambda_literal",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "class_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "struct_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "protocol_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "enum_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "CALL",
+            "ir_kind": "call",
+            "node_type": "call_expression",
+            "surface_equals": null,
+            "surface_field": "#0",
+            "surface_prefix": null
+          },
+          {
+            "event": "ASSIGN",
+            "ir_kind": "assignment",
+            "node_type": "assignment",
+            "surface_equals": null,
+            "surface_field": "left",
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "for_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "while_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "repeat_while_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "if_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "switch_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "guard_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "RETURN",
+            "ir_kind": "return",
+            "node_type": "control_transfer_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": "return"
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "binary_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "additive_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "comparison_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "prefix_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "as_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "comparison",
+            "node_type": "comparison_operator",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "array_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "dictionary_literal",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "range_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "RAISE",
+            "ir_kind": "error",
+            "node_type": "throw_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "navigation_expression",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "navigation_suffix",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "subscript_expression",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "IMPORT",
+            "ir_kind": "import",
+            "node_type": "import_declaration",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          }
+        ],
+        "scope_rules": [
+          {
+            "name_field": "name",
+            "node_type": "function_declaration",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "initializer_declaration",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "lambda_literal",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "class_declaration",
+            "scope_kind": "type"
+          },
+          {
+            "name_field": "name",
+            "node_type": "struct_declaration",
+            "scope_kind": "type"
+          },
+          {
+            "name_field": "name",
+            "node_type": "protocol_declaration",
+            "scope_kind": "type"
+          },
+          {
+            "name_field": "name",
+            "node_type": "enum_declaration",
+            "scope_kind": "type"
+          }
+        ],
+        "semantic_spec_version": "bcnlt-language-spec-v1",
+        "uncertainty_rules": []
+      }
+    },
+    "typescript": {
+      "canonical_sha256": "fe8bcdd0cb4f5fd3882b4409275ee6cc5ab1426ea6bc8a643f2e56b2a8743f1c",
+      "payload": {
+        "excluded_node_types": [
+          "program",
+          "statement_block",
+          "formal_parameters",
+          "arguments",
+          "expression_statement",
+          "lexical_declaration",
+          "parenthesized_expression",
+          "predefined_type",
+          "type_annotation",
+          "variable_declaration",
+          "import_clause",
+          "import_specifier",
+          "named_imports",
+          "else_clause",
+          "accessibility_modifier",
+          "type_arguments",
+          "array_type",
+          "generic_type",
+          "export_statement",
+          "comment"
+        ],
+        "identifier_roles": [
+          {
+            "field_name": "name",
+            "node_type": "variable_declarator",
+            "role": "definition"
+          },
+          {
+            "field_name": "",
+            "node_type": "identifier",
+            "role": "reference"
+          },
+          {
+            "field_name": "",
+            "node_type": "property_identifier",
+            "role": "reference"
+          },
+          {
+            "field_name": "",
+            "node_type": "type_identifier",
+            "role": "reference"
+          },
+          {
+            "field_name": "",
+            "node_type": "this",
+            "role": "reference"
+          },
+          {
+            "field_name": "pattern",
+            "node_type": "required_parameter",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "function_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "function_expression",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "method_definition",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "arrow_function",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "class_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "interface_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "name",
+            "node_type": "type_alias_declaration",
+            "role": "definition"
+          },
+          {
+            "field_name": "function",
+            "node_type": "call_expression",
+            "role": "reference"
+          },
+          {
+            "field_name": "function",
+            "node_type": "new_expression",
+            "role": "reference"
+          }
+        ],
+        "node_rules": [
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "string",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "number",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "true",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "false",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "value",
+            "node_type": "null",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "variable",
+            "node_type": "variable_declarator",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "identifier",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "property_identifier",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "type_identifier",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "REFERENCE",
+            "ir_kind": "variable",
+            "node_type": "this",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "parameter",
+            "node_type": "required_parameter",
+            "surface_equals": null,
+            "surface_field": "pattern",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "function_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "function_expression",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "method_definition",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "function",
+            "node_type": "arrow_function",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "class_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "interface_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "DEFINE",
+            "ir_kind": "type",
+            "node_type": "type_alias_declaration",
+            "surface_equals": null,
+            "surface_field": "name",
+            "surface_prefix": null
+          },
+          {
+            "event": "CALL",
+            "ir_kind": "call",
+            "node_type": "call_expression",
+            "surface_equals": null,
+            "surface_field": "function",
+            "surface_prefix": null
+          },
+          {
+            "event": "CALL",
+            "ir_kind": "call",
+            "node_type": "new_expression",
+            "surface_equals": null,
+            "surface_field": "function",
+            "surface_prefix": null
+          },
+          {
+            "event": "ASSIGN",
+            "ir_kind": "assignment",
+            "node_type": "assignment_expression",
+            "surface_equals": null,
+            "surface_field": "left",
+            "surface_prefix": null
+          },
+          {
+            "event": "ASSIGN",
+            "ir_kind": "assignment",
+            "node_type": "augmented_assignment_expression",
+            "surface_equals": null,
+            "surface_field": "left",
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "for_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "for_in_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "while_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LOOP",
+            "ir_kind": "loop",
+            "node_type": "do_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "if_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "switch_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "BRANCH",
+            "ir_kind": "branch",
+            "node_type": "ternary_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "RETURN",
+            "ir_kind": "return",
+            "node_type": "return_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "binary_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "unary_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "operator",
+            "node_type": "update_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "OPERATOR",
+            "ir_kind": "comparison",
+            "node_type": "relational_expression",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "array",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "object",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "LITERAL",
+            "ir_kind": "data_structure",
+            "node_type": "pair",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "RAISE",
+            "ir_kind": "error",
+            "node_type": "throw_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "member_expression",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "MEMBER_ACCESS",
+            "ir_kind": "member_access",
+            "node_type": "subscript_expression",
+            "surface_equals": null,
+            "surface_field": "property",
+            "surface_prefix": null
+          },
+          {
+            "event": "IMPORT",
+            "ir_kind": "import",
+            "node_type": "import_statement",
+            "surface_equals": null,
+            "surface_field": null,
+            "surface_prefix": null
+          }
+        ],
+        "scope_rules": [
+          {
+            "name_field": "name",
+            "node_type": "function_declaration",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "function_expression",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "method_definition",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "arrow_function",
+            "scope_kind": "function"
+          },
+          {
+            "name_field": "name",
+            "node_type": "class_declaration",
+            "scope_kind": "type"
+          },
+          {
+            "name_field": "name",
+            "node_type": "interface_declaration",
+            "scope_kind": "type"
+          },
+          {
+            "name_field": "name",
+            "node_type": "type_alias_declaration",
+            "scope_kind": "type"
+          },
+          {
+            "name_field": null,
+            "node_type": "statement_block",
+            "scope_kind": "block"
+          }
+        ],
+        "semantic_spec_version": "bcnlt-language-spec-v1",
+        "uncertainty_rules": []
+      }
+    }
+  }
+}

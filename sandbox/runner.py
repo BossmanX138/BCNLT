@@ -10,16 +10,17 @@ from __future__ import annotations
 import base64
 import json
 import os
-from pathlib import Path
 import selectors
+import shutil
 import signal
 import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import Any
 
-
-PROTOCOL = "bosscrafts-bcnlt-sandbox-v1"
+PROTOCOL = "bosscrafts-bcnlt-sandbox-v2"
+MODES = frozenset({"program", "test"})
 MAX_REQUEST_BYTES = 128 * 1024
 MAX_SOURCE_BYTES = 64 * 1024
 MAX_STDIN_BYTES = 16 * 1024
@@ -52,7 +53,7 @@ LANGUAGES: dict[str, dict[str, Any]] = {
         "filename": "main.c",
         "compile": [
             "gcc", "-std=c17", "-O0", "-pipe", "-fno-ident", "-Wall",
-            "-Wextra", "-o", "/work/program", "/work/main.c",
+            "-Wextra", "-o", "/work/program", "/work/main.c", "-lm",
         ],
         "run": ["/work/program"],
     },
@@ -66,13 +67,16 @@ LANGUAGES: dict[str, dict[str, Any]] = {
     },
     "c_sharp": {
         "filename": "Main.cs",
-        "compile": ["mcs", "-nologo", "-out:/work/program.exe", "/work/Main.cs"],
+        "compile": [
+            "mcs", "-nologo", "-define:DEBUG", "-r:System.Core.dll",
+            "-out:/work/program.exe", "/work/Main.cs",
+        ],
         "run": ["mono", "/work/program.exe"],
     },
     "java": {
         "filename": "Main.java",
         "compile": ["javac", "-encoding", "UTF-8", "-d", "/work", "/work/Main.java"],
-        "run": ["java", "-Xms8m", "-Xmx96m", "-cp", "/work", "Main"],
+        "run": ["java", "-ea", "-Xms8m", "-Xmx96m", "-cp", "/work", "Main"],
     },
     "go": {
         "filename": "main.go",
@@ -104,12 +108,12 @@ LANGUAGES: dict[str, dict[str, Any]] = {
         "compile": [
             "kotlinc", "/work/Main.kt", "-include-runtime", "-d", "/work/program.jar",
         ],
-        "run": ["java", "-Xms8m", "-Xmx96m", "-jar", "/work/program.jar"],
+        "run": ["java", "-ea", "-Xms8m", "-Xmx96m", "-jar", "/work/program.jar"],
     },
     "swift": {
         "filename": "main.swift",
         "compile": [
-            "swiftc", "-O", "-o", "/work/program", "/work/main.swift",
+            "swiftc", "-Onone", "-o", "/work/program", "/work/main.swift",
         ],
         "run": ["/work/program"],
     },
@@ -130,13 +134,15 @@ def _read_request() -> dict[str, object]:
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("request must be one UTF-8 JSON object") from error
     if type(payload) is not dict or set(payload) != {
-        "protocol", "language", "source", "stdin"
+        "protocol", "language", "mode", "source", "stdin"
     }:
         raise ValueError("request keys mismatch")
     if payload["protocol"] != PROTOCOL:
         raise ValueError("request protocol mismatch")
     if payload["language"] not in LANGUAGES:
         raise ValueError("language is not in the sandbox allowlist")
+    if payload["mode"] not in MODES:
+        raise ValueError("mode is not in the sandbox allowlist")
     source = payload["source"]
     stdin_text = payload["stdin"]
     if type(source) is not str or len(source.encode("utf-8")) > MAX_SOURCE_BYTES:
@@ -159,7 +165,71 @@ def _environment() -> dict[str, str]:
         "GOMODCACHE": "/work/.gomodcache",
         "GOTOOLCHAIN": "local",
         "GOMAXPROCS": "2",
+        "CARGO_HOME": "/opt/bcnlt/cargo-home",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_TARGET_DIR": "/work/target",
+        "RUSTFLAGS": "-Awarnings",
+        "RUSTDOCFLAGS": "-Awarnings",
     }
+
+
+def _prepare_execution(
+    language: str,
+    mode: str,
+) -> tuple[Path, list[str] | None, list[str]]:
+    config = LANGUAGES[language]
+    filename = str(config["filename"])
+    compile_command = config["compile"]
+    run_command = config["run"]
+    if mode != "test":
+        return (
+            WORK / filename,
+            None if compile_command is None else list(compile_command),
+            list(run_command),
+        )
+    if language == "go":
+        template = Path("/opt/bcnlt/go-template")
+        shutil.copy2(template / "go.mod", WORK / "go.mod")
+        shutil.copy2(template / "go.sum", WORK / "go.sum")
+        shutil.copytree(template / "vendor", WORK / "vendor")
+        shutil.copytree(Path("/opt/bcnlt/go-build-cache"), WORK / ".gocache")
+        return (
+            WORK / "main_test.go",
+            [
+                "go", "test", "-mod=vendor", "-p=1", "-c",
+                "-o", "/work/program", ".",
+            ],
+            ["/work/program", "-test.v=false"],
+        )
+    if language == "rust":
+        template = Path("/opt/bcnlt/rust-template")
+        shutil.copy2(template / "Cargo.toml", WORK / "Cargo.toml")
+        shutil.copy2(template / "Cargo.lock", WORK / "Cargo.lock")
+        shutil.copytree(template / "target", WORK / "target")
+        (WORK / "src").mkdir()
+        command = [
+            "cargo", "test", "--quiet", "--offline", "--locked", "--target-dir",
+            "/work/target",
+        ]
+        return (
+            WORK / "src" / "lib.rs",
+            [*command, "--no-run"],
+            [*command, "--", "--nocapture"],
+        )
+    if language == "java":
+        return (
+            WORK / "Solution.java",
+            [
+                "javac", "-encoding", "UTF-8", "-d", "/work",
+                "/work/Solution.java",
+            ],
+            ["java", "-ea", "-Xms8m", "-Xmx96m", "-cp", "/work", "Solution"],
+        )
+    return (
+        WORK / filename,
+        None if compile_command is None else list(compile_command),
+        list(run_command),
+    )
 
 
 def _terminate(process: subprocess.Popen[bytes]) -> None:
@@ -265,13 +335,15 @@ def main() -> int:
     try:
         request = _read_request()
         language = str(request["language"])
-        config = LANGUAGES[language]
+        mode = str(request["mode"])
         WORK.mkdir(parents=True, exist_ok=True)
         (WORK / "tmp").mkdir(exist_ok=True)
-        source_path = WORK / str(config["filename"])
+        source_path, compile_command, run_command = _prepare_execution(
+            language,
+            mode,
+        )
         source_path.write_text(str(request["source"]), encoding="utf-8", newline="\n")
 
-        compile_command = config["compile"]
         if compile_command is not None:
             compile_result = _run_bounded(
                 list(compile_command),
@@ -283,12 +355,18 @@ def main() -> int:
                 or compile_result["timed_out"]
                 or compile_result["output_limited"]
             ):
+                compile_status = "compile_failed"
+                if compile_result["timed_out"]:
+                    compile_status = "timed_out"
+                elif compile_result["output_limited"]:
+                    compile_status = "output_limited"
                 sys.stdout.buffer.write(
                     _response(
                         {
                             "protocol": PROTOCOL,
                             "language": language,
-                            "status": "compile_failed",
+                            "mode": mode,
+                            "status": compile_status,
                             "phase": "compile",
                             **compile_result,
                         }
@@ -297,7 +375,7 @@ def main() -> int:
                 return 0
 
         run_result = _run_bounded(
-            list(config["run"]),
+            run_command,
             stdin_bytes=str(request["stdin"]).encode("utf-8"),
             timeout_seconds=RUN_TIMEOUT_SECONDS,
         )
@@ -313,6 +391,7 @@ def main() -> int:
                 {
                     "protocol": PROTOCOL,
                     "language": language,
+                    "mode": mode,
                     "status": status,
                     "phase": "run",
                     **run_result,
@@ -326,6 +405,7 @@ def main() -> int:
                 {
                     "protocol": PROTOCOL,
                     "language": None,
+                    "mode": None,
                     "status": "invalid_request",
                     "phase": "request",
                     "exit_code": None,

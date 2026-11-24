@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
 from bosscrafts_model.bcnlt_source_pipeline import (
-    BCNLTSourcePipeline,
     PARSER_RUNTIME_IDENTITY_SHA256,
+    BCNLTSourcePipeline,
 )
 from bosscrafts_model.current_corpus import CurrentCorpusAdmission, SourceCandidate
 from bosscrafts_model.current_task_packing import CurrentCorpusTaskPacker
@@ -134,6 +136,142 @@ class CurrentCorpusTaskPackingTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("--max-sequence", completed.stdout)
+
+    def test_nonresumable_packer_fails_closed_above_pilot_limit(self):
+        candidates = (_candidate("doc-a", "value = 1\n"),)
+        with (
+            tempfile.TemporaryDirectory() as admission_dir,
+            tempfile.TemporaryDirectory() as output_dir,
+        ):
+            CurrentCorpusAdmission(self.pipeline).materialize(candidates, admission_dir)
+            with mock.patch(
+                "bosscrafts_model.current_task_packing.MAX_PILOT_DOCUMENTS",
+                0,
+            ):
+                with self.assertRaisesRegex(ValueError, "ResumableCurrentTaskPacking"):
+                    CurrentCorpusTaskPacker(self.binding).materialize(
+                        admission_dir,
+                        output_dir,
+                    )
+
+    def test_existing_task_generation_is_never_overwritten(self):
+        candidates = (_candidate("doc-a", "value = 1\n"),)
+        with (
+            tempfile.TemporaryDirectory() as admission_dir,
+            tempfile.TemporaryDirectory() as output_dir,
+        ):
+            root = Path(output_dir)
+            CurrentCorpusAdmission(self.pipeline).materialize(
+                candidates, admission_dir
+            )
+            CurrentCorpusTaskPacker(self.binding).materialize(admission_dir, root)
+            original = {
+                path.name: path.read_bytes()
+                for path in root.iterdir()
+                if path.is_file()
+            }
+
+            with self.assertRaisesRegex(ValueError, "already contains"):
+                CurrentCorpusTaskPacker(self.binding).materialize(
+                    admission_dir, root
+                )
+
+            self.assertEqual(
+                {
+                    path.name: path.read_bytes()
+                    for path in root.iterdir()
+                    if path.is_file()
+                },
+                original,
+            )
+
+    def test_rejects_self_consistent_admission_with_tampered_source(self):
+        candidates = (_candidate("doc-a", "value = 1\n"),)
+        with (
+            tempfile.TemporaryDirectory() as admission_dir,
+            tempfile.TemporaryDirectory() as output_dir,
+        ):
+            CurrentCorpusAdmission(self.pipeline).materialize(
+                candidates, admission_dir
+            )
+            admission_root = Path(admission_dir)
+            records_path = admission_root / "admitted.jsonl"
+            record = json.loads(records_path.read_text(encoding="utf-8"))
+            record["source"] = "tampered = 99\n"
+            records_text = (
+                json.dumps(
+                    record,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            )
+            records_path.write_text(records_text, encoding="utf-8", newline="\n")
+            manifest_path = admission_root / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest.pop("manifest_sha256")
+            manifest["records_sha256"] = hashlib.sha256(
+                records_text.encode("utf-8")
+            ).hexdigest()
+            canonical_manifest = json.dumps(
+                manifest,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            manifest["manifest_sha256"] = hashlib.sha256(
+                canonical_manifest.encode("utf-8")
+            ).hexdigest()
+            manifest_path.write_text(
+                json.dumps(
+                    manifest,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+
+            with self.assertRaisesRegex(ValueError, "source SHA-256"):
+                CurrentCorpusTaskPacker(self.binding).materialize(
+                    admission_root, output_dir
+                )
+
+    def test_mid_publication_failure_rolls_back_owned_task_files(self):
+        candidates = (_candidate("doc-a", "value = 1\n"),)
+        with (
+            tempfile.TemporaryDirectory() as admission_dir,
+            tempfile.TemporaryDirectory() as output_dir,
+        ):
+            root = Path(output_dir)
+            CurrentCorpusAdmission(self.pipeline).materialize(
+                candidates, admission_dir
+            )
+            real_link = os.link
+            link_calls = 0
+
+            def fail_second_link(source: str | Path, destination: str | Path) -> None:
+                nonlocal link_calls
+                link_calls += 1
+                if link_calls == 2:
+                    raise OSError("deliberate publication failure")
+                real_link(source, destination)
+
+            with (
+                mock.patch(
+                    "bosscrafts_model.current_task_packing.os.link",
+                    side_effect=fail_second_link,
+                ),
+                self.assertRaisesRegex(OSError, "deliberate publication failure"),
+            ):
+                CurrentCorpusTaskPacker(self.binding).materialize(
+                    admission_dir, root
+                )
+
+            self.assertEqual(list(root.iterdir()), [])
 
 
 if __name__ == "__main__":

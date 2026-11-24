@@ -1,13 +1,15 @@
 """Run bounded greedy inference from a lineage-verified BossCrafts checkpoint."""
+
 from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
+import os
 import sys
+import tempfile
+from pathlib import Path
 
 import torch
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -24,7 +26,12 @@ import tokenizers
 if tokenizers.__version__ != "0.23.2":
     raise RuntimeError("project-contained tokenizers runtime version mismatch")
 
+from bosscrafts_model.artifact_schemas import CHECKPOINT_INFERENCE_SCHEMA
 from bosscrafts_model.config import ModelConfig
+from bosscrafts_model.frozen_evaluation import (
+    iter_frozen_evaluation_examples,
+    load_heldout_suite_manifest,
+)
 from bosscrafts_model.inference_protocol import (
     INFERENCE_TASKS,
     build_inference_prompt,
@@ -34,13 +41,13 @@ from bosscrafts_model.inference_protocol import (
     task_end_token_id,
 )
 from bosscrafts_model.model import EngineeringModel
+from bosscrafts_model.model_acceptance import verify_heldout_suite_manifest
 from bosscrafts_model.resumable_task_packing import (
     ResumableTaskDataset,
     audit_task_database,
 )
 from bosscrafts_model.tokenizer import NativeTokenizerBinding, bound_native_65k_config
 from bosscrafts_model.training_checkpoint import load_model_checkpoint_for_inference
-
 
 DEFAULT_DATABASE = (
     PROJECT_ROOT
@@ -58,9 +65,40 @@ DEFAULT_CHECKPOINT = (
 )
 
 
+def _publish_new_inference(path: Path, rendered: str) -> None:
+    """Publish immutable inference evidence without replacing an earlier run."""
+    destination = path.resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(rendered + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, destination)
+        except FileExistsError as error:
+            raise ValueError("inference output already exists") from error
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--database", type=Path, default=DEFAULT_DATABASE)
+    parser.add_argument("--validation-database", type=Path)
+    parser.add_argument("--test-database", type=Path)
+    parser.add_argument("--heldout-suite-manifest", type=Path)
     parser.add_argument(
         "--checkpoint-database",
         type=Path,
@@ -73,7 +111,9 @@ def main() -> int:
     prompt_source = parser.add_mutually_exclusive_group(required=True)
     prompt_source.add_argument("--prompt")
     prompt_source.add_argument("--heldout-family", choices=INFERENCE_TASKS[1:])
-    parser.add_argument("--heldout-split", choices=("validation", "test"), default="test")
+    parser.add_argument(
+        "--heldout-split", choices=("validation", "test"), default="test"
+    )
     parser.add_argument("--task", choices=INFERENCE_TASKS)
     parser.add_argument("--max-new-tokens", type=int, default=32)
     parser.add_argument("--output", type=Path)
@@ -82,6 +122,17 @@ def main() -> int:
         parser.error("max-new-tokens must be between 1 and 256")
     if arguments.prompt is not None and not arguments.prompt:
         parser.error("prompt must not be empty")
+    plural_evaluation = (
+        arguments.validation_database is not None or arguments.test_database is not None
+    )
+    if (arguments.validation_database is None) != (arguments.test_database is None):
+        parser.error("validation-database and test-database must be supplied together")
+    if plural_evaluation != (arguments.heldout_suite_manifest is not None):
+        parser.error(
+            "both evaluation databases and heldout-suite-manifest must be supplied together"
+        )
+    if plural_evaluation and arguments.checkpoint_database is None:
+        parser.error("two-database inference requires checkpoint-database")
     if (
         arguments.heldout_family is not None
         and arguments.task is not None
@@ -90,17 +141,52 @@ def main() -> int:
         parser.error("held-out family and task must match")
     if arguments.device == "cuda" and not torch.cuda.is_available():
         parser.error("CUDA was requested but is unavailable")
-    if arguments.dtype == "bfloat16" and arguments.device == "cuda" and not torch.cuda.is_bf16_supported():
+    if (
+        arguments.dtype == "bfloat16"
+        and arguments.device == "cuda"
+        and not torch.cuda.is_bf16_supported()
+    ):
         parser.error("CUDA bfloat16 was requested but is unsupported")
 
     binding = NativeTokenizerBinding.load()
-    task_audit = audit_task_database(binding, arguments.database)
+    heldout_suite = None
+    evaluation_database_identities_sha256: dict[str, str] | None = None
+    if plural_evaluation:
+        if (
+            arguments.validation_database is None
+            or arguments.test_database is None
+            or arguments.heldout_suite_manifest is None
+        ):
+            raise RuntimeError("validated frozen evaluation arguments are incomplete")
+        evaluation_paths = {
+            "validation": arguments.validation_database,
+            "test": arguments.test_database,
+        }
+        evaluation_audits = {
+            split: audit_task_database(binding, path)
+            for split, path in evaluation_paths.items()
+        }
+        evaluation_database_identities_sha256 = {
+            split: audit.database_identity_sha256
+            for split, audit in evaluation_audits.items()
+        }
+        heldout_suite = verify_heldout_suite_manifest(
+            load_heldout_suite_manifest(arguments.heldout_suite_manifest),
+            task_database_identities_sha256=(
+                evaluation_database_identities_sha256
+            ),
+        )
+        evaluation_database = evaluation_paths[arguments.heldout_split]
+        task_audit = evaluation_audits[arguments.heldout_split]
+    else:
+        evaluation_database = arguments.database
+        task_audit = audit_task_database(binding, evaluation_database)
     checkpoint_task_audit = (
         audit_task_database(binding, arguments.checkpoint_database)
         if arguments.checkpoint_database is not None
         else task_audit
     )
-    dataset = ResumableTaskDataset(binding, arguments.database)
+    dataset = ResumableTaskDataset(binding, evaluation_database)
     if arguments.full_model:
         config = bound_native_65k_config(binding)
     else:
@@ -119,12 +205,36 @@ def main() -> int:
         ),
         expected_binding_sha256=binding.binding_sha256,
         expected_model_fingerprint=config.fingerprint(),
+        expected_evaluation_task_database_identities_sha256=(
+            evaluation_database_identities_sha256
+        ),
+        expected_heldout_suite_manifest_sha256=(
+            heldout_suite.manifest_sha256 if heldout_suite is not None else None
+        ),
     )
+    checkpoint_evaluation_identity = (
+        state.evaluation_task_database_identities_sha256[arguments.heldout_split]
+        if state.evaluation_task_database_identities_sha256 is not None
+        else state.evaluation_task_database_identity_sha256
+    )
+    if checkpoint_evaluation_identity is not None and (
+        checkpoint_evaluation_identity != task_audit.database_identity_sha256
+    ):
+        raise ValueError("checkpoint frozen evaluation database mismatch")
     task = arguments.heldout_family or arguments.task or "raw"
     heldout_case = None
     if arguments.heldout_family is not None:
+        heldout_examples = (
+            iter_frozen_evaluation_examples(
+                dataset,
+                heldout_suite,
+                split=arguments.heldout_split,
+            )
+            if heldout_suite is not None
+            else dataset.iter_examples(split=arguments.heldout_split)
+        )
         heldout_case = select_heldout_inference_case(
-            dataset.iter_examples(split=arguments.heldout_split),
+            heldout_examples,
             family=arguments.heldout_family,
             max_new_tokens=arguments.max_new_tokens,
             maximum_sequence=config.max_sequence,
@@ -150,18 +260,25 @@ def main() -> int:
     new_ids = full_ids[len(prompt_ids) :]
     response_ids = response_payload_token_ids(binding, task, new_ids)
     expected_ids = list(heldout_case.expected_ids) if heldout_case is not None else None
-    heldout_correct = (
-        sum(
+    heldout_accuracy = None
+    if expected_ids is not None:
+        heldout_correct = sum(
             actual == expected
             for actual, expected in zip(new_ids, expected_ids, strict=False)
         )
-        if expected_ids is not None
-        else None
-    )
+        heldout_accuracy = heldout_correct / len(expected_ids)
     payload = {
+        "schema_version": CHECKPOINT_INFERENCE_SCHEMA,
         "checkpoint_lineage_verified": True,
+        "checkpoint_sha256": state.checkpoint_sha256,
         "checkpoint_task_database_identity_sha256": (
             checkpoint_task_audit.database_identity_sha256
+        ),
+        "checkpoint_evaluation_task_database_identity_sha256": (
+            checkpoint_evaluation_identity
+        ),
+        "checkpoint_heldout_suite_manifest_sha256": (
+            state.heldout_suite_manifest_sha256
         ),
         "checkpoint_epoch_index": state.epoch_index,
         "checkpoint_step": state.step,
@@ -189,13 +306,12 @@ def main() -> int:
         "heldout_split": (
             arguments.heldout_split if heldout_case is not None else None
         ),
-        "heldout_target_token_accuracy": (
-            heldout_correct / len(expected_ids) if expected_ids is not None else None
-        ),
+        "heldout_target_token_accuracy": (heldout_accuracy),
         "model_fingerprint": config.fingerprint(),
         "new_token_count": len(new_ids),
         "new_token_ids": new_ids,
         "prompt_token_count": len(prompt_ids),
+        "prompt_token_ids": prompt_ids,
         "response_protocol_complete": response_protocol_complete(
             binding, task=task, generated_ids=new_ids
         ),
@@ -208,11 +324,7 @@ def main() -> int:
     }
     rendered = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     if arguments.output is not None:
-        destination = arguments.output.resolve()
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        temporary = destination.with_name(f".{destination.name}.tmp")
-        temporary.write_text(rendered + "\n", encoding="utf-8")
-        temporary.replace(destination)
+        _publish_new_inference(arguments.output, rendered)
     print(rendered)
     return 0
 

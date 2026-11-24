@@ -1,15 +1,14 @@
 import hashlib
+import unittest
 from dataclasses import replace
 from pathlib import Path
-import unittest
 
 from bosscrafts_model.semantic import (
-    NativeSemanticRecordCodec,
     SEMANTIC_RECORD_SCHEMA,
+    NativeSemanticRecordCodec,
     SemanticRecord,
 )
 from bosscrafts_model.tokenizer import NativeTokenizerBinding
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TOKENIZER_PATH = (

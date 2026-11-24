@@ -1,0 +1,18 @@
+{
+  "final_accepted_record_count": 987342,
+  "final_decision_count": 1235687,
+  "interruption_manifest": {
+    "path": "/mnt/d/BCNLT-runs/runeforge-mk2-bcnlt-multilingual-v1/multilingual-smoke-21b9de0343dd4bb2-gate-v2/interrupted-20261101-212641/interruption-manifest.json",
+    "sha256": "045100ba014c7b60ef4bd99d15a70a4a4c61623eac5a6ad17cdf92c54a9a3f15"
+  },
+  "recovery_script": {
+    "path": "/mnt/c/Users/bossm/Documents/Codex/BCNLT/.worktrees/bcnlt-multilingual-corpus/scripts/recover_bcnlt_validation.py",
+    "sha256": "91227881fccb60a8d3540d0c03fe60c49581a1a4bc42c5b5867109e388407747"
+  },
+  "resumed_after_decision": 1171105,
+  "schema_version": "bcnlt-validation-recovery-v1",
+  "state_database": {
+    "path": "/mnt/d/BCNLT-runs/runeforge-mk2-bcnlt-multilingual-v1/multilingual-smoke-21b9de0343dd4bb2-gate-v2/corpus-validation-recovery.sqlite3",
+    "sha256": "41c2c4ec2acb636e8dd169e9ef08c3f9f4e3e28e5b35ef837dc441beb2444b88"
+  }
+}

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from pathlib import Path
 import sys
 import tempfile
 import unittest
+from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from runtime_import import select_bcnlt_runtime
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_SOURCE = (
@@ -18,15 +19,19 @@ RUNTIME_SOURCE = (
 )
 select_bcnlt_runtime(RUNTIME_SOURCE)
 
+from bcnlt.core import ContextualUnit
 from bcnlt.scientific_learning import (
+    SANDBOX_EXECUTION_PROTOCOL,
     CodingExperimentFixture,
     HypothesisProjection,
     SandboxBackedProjectionVerifier,
+    SandboxExecutionEvidence,
     ScientificExperimentEvidence,
     VerificationStatus,
 )
-from bcnlt.core import ContextualUnit
 from bcnlt.wildcard import DefinitionState, ProvisionalMeaning, WildcardMemory
+
+from bosscrafts_model.scientific_sandbox import PROTOCOL as HOST_SANDBOX_PROTOCOL
 from bosscrafts_model.scientific_sandbox import DockerScientificSandbox
 
 
@@ -54,6 +59,7 @@ class SandboxScientificLearningTests(unittest.TestCase):
             evidence_kinds=("grammar_structure",),
         )
 
+    @pytest.mark.requires_docker
     def test_passed_evidence_requires_real_execution_and_negative_control(self) -> None:
         fixture = CodingExperimentFixture(
             experiment_id="sandbox-addition-1",
@@ -107,6 +113,8 @@ class SandboxScientificLearningTests(unittest.TestCase):
         self.assertIsNotNone(evidence.sandbox_execution)
         execution = evidence.sandbox_execution
         assert execution is not None
+        self.assertEqual(SANDBOX_EXECUTION_PROTOCOL, HOST_SANDBOX_PROTOCOL)
+        self.assertEqual(execution.protocol, SANDBOX_EXECUTION_PROTOCOL)
         self.assertEqual(execution.status, "passed")
         self.assertEqual(execution.actual_output, 5)
         self.assertEqual(execution.network_mode, "none")
@@ -116,6 +124,10 @@ class SandboxScientificLearningTests(unittest.TestCase):
             ScientificExperimentEvidence.from_dict(evidence.to_dict()),
             evidence,
         )
+        legacy = execution.to_dict()
+        legacy["protocol"] = "bosscrafts-bcnlt-sandbox-v1"
+        with self.assertRaisesRegex(ValueError, "identity mismatch"):
+            SandboxExecutionEvidence.from_dict(legacy)
 
     def test_wildcard_memory_refuses_the_unattested_default_verifier(self) -> None:
         unit = self._unit("module.first", 1)
@@ -159,6 +171,7 @@ class SandboxScientificLearningTests(unittest.TestCase):
                 negative_control=control,
             )
 
+    @pytest.mark.requires_docker
     def test_two_sandbox_reproductions_promote_and_reload_attested_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             ledger = Path(directory) / "wildcard.jsonl"

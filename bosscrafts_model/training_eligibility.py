@@ -1,19 +1,17 @@
 """Freeze the zero-finding subset of a completed full training semantic audit."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
-import os
-from pathlib import Path
 import sqlite3
-import tempfile
+from dataclasses import dataclass
+from pathlib import Path
 
+from .immutable_artifacts import publish_new_files
 from .resumable_training_semantic_audit import (
     AUDIT_SCHEMA,
     ResumableTrainingSemanticAudit,
 )
-
 
 ELIGIBILITY_MANIFEST_SCHEMA = "bosscrafts-training-eligibility-manifest-v1"
 ELIGIBLE_DOCUMENT_SCHEMA = "bosscrafts-training-eligible-document-v1"
@@ -40,23 +38,6 @@ def _is_sha256(value: object) -> bool:
         and len(value) == 64
         and all(character in "0123456789abcdef" for character in value)
     )
-
-
-def _atomic_write(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,10 +234,16 @@ class AuditedTrainingEligibilityBuilder:
         }
         manifest_sha = _sha256_bytes(_canonical(unsigned).encode("utf-8"))
         manifest = {**unsigned, "manifest_sha256": manifest_sha}
-        _atomic_write(output / "eligible.jsonl", eligible_text.encode("utf-8"))
-        _atomic_write(output / "excluded.jsonl", excluded_text.encode("utf-8"))
-        _atomic_write(
-            output / "manifest.json", f"{_canonical(manifest)}\n".encode("utf-8")
+        publish_new_files(
+            (
+                (output / "eligible.jsonl", eligible_text.encode("utf-8")),
+                (output / "excluded.jsonl", excluded_text.encode("utf-8")),
+                (
+                    output / "manifest.json",
+                    f"{_canonical(manifest)}\n".encode("utf-8"),
+                ),
+            ),
+            artifact_label="training eligibility",
         )
         return AuditedTrainingEligibilityResult(
             output_root=output,

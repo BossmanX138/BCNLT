@@ -1,0 +1,15 @@
+{
+  "attribution": "BossCrafts pre-model acceptance policy",
+  "license": "BossCrafts-Proprietary-Evaluation",
+  "regression": {
+    "minimum_subtest_count": 195,
+    "minimum_test_count": 631,
+    "suite_id": "bosscrafts-pre-model-full-regression-v1"
+  },
+  "resources": {
+    "minimum_tokens_per_second": 1.0,
+    "ram_limit_bytes": 68719476736,
+    "vram_limit_bytes": 12884901888
+  },
+  "schema_version": "bosscrafts-acceptance-policy-v1"
+}

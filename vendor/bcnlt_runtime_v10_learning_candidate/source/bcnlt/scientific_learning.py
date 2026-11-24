@@ -16,6 +16,7 @@ VERIFIER_VERSION = "1"
 SANDBOX_EVIDENCE_SCHEMA_VERSION = 3
 SANDBOX_VERIFIER_ID = "bcnlt-sandbox-backed-projection"
 SANDBOX_VERIFIER_VERSION = "1"
+SANDBOX_EXECUTION_PROTOCOL = "bosscrafts-bcnlt-sandbox-v2"
 _ALLOWED_ORACLE_KINDS = {"human_authored", "language_spec", "trusted_test_vector"}
 _MAX_SOURCE_BYTES = 64 * 1024
 _MAX_FIXTURE_BYTES = 16 * 1024
@@ -168,7 +169,7 @@ class SandboxExecutionEvidence:
     log_driver: str
 
     def __post_init__(self) -> None:
-        if self.schema_version != 1 or self.protocol != "bosscrafts-bcnlt-sandbox-v1":
+        if self.schema_version != 1 or self.protocol != SANDBOX_EXECUTION_PROTOCOL:
             raise ValueError("Sandbox execution evidence identity mismatch")
         for name, value in (
             ("request hash", self.request_sha256),

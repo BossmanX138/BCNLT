@@ -1,0 +1,111 @@
+{
+  "schema_version": "bosscrafts-bcnlt-real-output-fixtures-v1",
+  "source": {
+    "path": "C:\\Users\\bossm\\OneDrive\\Documents\\ChatGPT\\BCNLT\\foundation-bakeoff-2026-11-06\\gate3\\curriculum\\multilingual-candidates-v1\\candidates.jsonl",
+    "sha256": "af8ddc53af38edc3cb8d39e3f61cee01c1c387a449bf8be733365a64525daba4",
+    "rows": 5010,
+    "selection_manifest_sha256": "a539197de9a8e69bfe571b4dff6ec9bb3d88d7f13c3733b37f3f2526ad096029",
+    "copy_policy": "curated_verbatim_parser_output_with_independent_gold_subset"
+  },
+  "local_copy": {
+    "file": "real-output.jsonl",
+    "sha256": "e497d85b0d5ff54b21aac90569f7d9b20bc3c9268d04bd00a70ae83cc09897aa",
+    "records": 7,
+    "verbatim_source_target_match": true
+  },
+  "parser_contract": {
+    "parser_bundle_sha256": "d7df9e034b19a2a459299cecb1e14c31e4bd7b9626247f3ebd56ba258d3fecd6",
+    "extraction_rule_version": "bcnlt-multilingual-extraction-v1",
+    "grammar_package_version": "tree-sitter-language-pack@1.22.1",
+    "parser_runtime_copied": false,
+    "parser_source_available": false
+  },
+  "gold_policy": "Expected event, surface, span and confidence fields were independently derived by direct reading of each simple source snippet; parser output was not used as an oracle for those expectations.",
+  "cases": [
+    {
+      "line": 1,
+      "record_id": "cab4723b72da433db65cb61e558b7d0146552efd2fc5fd1663725438ff78624d",
+      "language": "python",
+      "semantic_spec_sha256": "fe0bb47da50274411299c39d0034eb434c2d36fc1d58d42e4e9b847403b83303",
+      "source_code": "\"\"\"TODO.\"\"\"\n",
+      "source_line_start": 1,
+      "attribution": "swfrench/nginx-access-tailer",
+      "license_spdx": "BSD-3-Clause",
+      "content_sha256": "9e0bf15ab6080bf539f901b3fd8e8540f841d39289e749e31e4db454646c581c",
+      "gold": {"event": "LITERAL", "surface": "\"\"\"TODO.\"\"\"", "span": [1, 0, 1, 11], "confidence_band": "high", "uncertainty_band": "low"}
+    },
+    {
+      "line": 2,
+      "record_id": "ce4818700f56f574446d12bcd884e7d2ce9b16c7a9ab4772da6504a340f3e606",
+      "language": "javascript",
+      "semantic_spec_sha256": "1fe022c4990ff4293e367bc4761b949ca9c5b5ba56493dec4c4fd06beddc9cb4",
+      "source_code": "'use strict';\n",
+      "source_line_start": 1,
+      "attribution": "huangjunxin/jyutping.org",
+      "license_spdx": "CC0-1.0",
+      "content_sha256": "7a13dea4bb20c77a56e7ef7fb6204d4e38808673ca0ff932f1dab55ffb748b8c",
+      "gold": {"event": "LITERAL", "surface": "'use strict'", "span": [1, 0, 1, 12], "confidence_band": "high", "uncertainty_band": "low"}
+    },
+    {
+      "line": 3,
+      "record_id": "308131d24b19375242970e92b473cb84fe1b33e1d35626a34406b46a1d7795fe",
+      "language": "go",
+      "semantic_spec_sha256": "2701f4ebcf1be3d199ade39b26f443d9309d2d03f433e6d4083876cadfa758ee",
+      "source_code": "package ui\n",
+      "source_line_start": 15,
+      "attribution": "greenpau/aaasf",
+      "license_spdx": "Apache-2.0",
+      "content_sha256": "a38992feff58bf3fca76a7d6915d6da4b887091ad37e20481080359aa9a3a5a7",
+      "gold": {"event": "IMPORT", "surface": "package ui", "span": [15, 0, 15, 10], "confidence_band": "high", "uncertainty_band": "low"}
+    },
+    {
+      "line": 4,
+      "record_id": "56e4c874704b582c22fefb7c7c41126009077938563eaeac41b29c48a0dfe994",
+      "language": "php",
+      "semantic_spec_sha256": "0aa553d70c7fd1364eb8e884942908828a9b18a1b198f94b4376bf4ab5b5fc54",
+      "source_code": "get_header();\n",
+      "source_line_start": 13,
+      "attribution": "mwalcott/db-desilvaphillips.com",
+      "license_spdx": "MIT",
+      "content_sha256": "156bf57d4399ffef935618fc4de8253d661a3536d4b59aa6d4f379e347ac466c",
+      "gold": {"event": "CALL", "surface": "get_header", "span": [13, 0, 13, 10], "confidence_band": "medium", "uncertainty_band": "medium"}
+    },
+    {
+      "line": 5,
+      "record_id": "dffa10d4dfaa1e4a6241909c51e58e471ba0cd1f8bcaf36c455e7e8f411db24f",
+      "language": "rust",
+      "semantic_spec_sha256": "345d4da1650dfc4020aed3d86205f428882bb2350974dc6c01bf1a84478deef1",
+      "source_code": "info!(\n",
+      "source_line_start": 1,
+      "attribution": "notdijon/hexavalent",
+      "license_spdx": "MIT",
+      "content_sha256": "54e106c5a9591bc01311c3046fe324e712a4e8de9113207cfad1c9a58e6ca0ae",
+      "gold": {"event": "REFERENCE", "surface": "info", "span": [1, 0, 1, 4], "confidence_band": "medium", "uncertainty_band": "medium"}
+    },
+    {
+      "line": 6,
+      "record_id": "2184909c8f47943db7f987c904ebb684b635ab6d19069dd04ab16d448cbd07a3",
+      "language": "typescript",
+      "semantic_spec_sha256": "45b4d2a264fd9629ae5c6b00567a3d0d523fc8ef13d8646e32e3aa811a76f190",
+      "source_code": "var S;\n",
+      "source_line_start": 7,
+      "attribution": "bibin301/amal",
+      "license_spdx": "Apache-2.0",
+      "content_sha256": "47a7eeff9e2239bc148a211c2b89cec492d47a215ef37bd4d0e31c0bddfc7f9c",
+      "gold": {"event": "DEFINE", "surface": "S", "span": [7, 4, 7, 5], "confidence_band": "high", "uncertainty_band": "low"}
+    },
+    {
+      "line": 7,
+      "record_id": "e349490df1268585c1a90b43f82d07d749af09fe6ded0f2f33eca29c45b707a5",
+      "language": "c_sharp",
+      "semantic_spec_sha256": "8ea03777924d8ae3a4a6a90396f72fb4027c44528c5fa9e46fc2b790db0676d3",
+      "source_code": "            noOfPossibilities++;\n",
+      "source_line_start": 27,
+      "attribution": "grajekf/advent-of-code-2021",
+      "license_spdx": "MIT",
+      "content_sha256": "d62ea8673410775d88bc2e2060c02f97ee24b613b48aee02a8a1e08c7bf8fe2e",
+      "gold": {"event": "REFERENCE", "surface": "noOfPossibilities", "span": [27, 12, 27, 29], "confidence_band": "medium", "uncertainty_band": "medium"},
+      "ambiguity_note": "The snippet does not include a visible definition; unresolved reference is an explicitly checked uncertain case."
+    }
+  ]
+}

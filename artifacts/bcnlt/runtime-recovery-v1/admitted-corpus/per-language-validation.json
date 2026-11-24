@@ -1,0 +1,206 @@
+{
+  "failure_codes": [],
+  "language_reports": [
+    {
+      "examples": 7048,
+      "family_counts": {
+        "code_to_semantic": 30677,
+        "knowledge_boundary": 5962,
+        "mixed_instruction": 30221,
+        "semantic_continuation": 3980,
+        "semantic_to_code": 30369,
+        "structural_reasoning": 4433
+      },
+      "language": "python",
+      "passed": true,
+      "training_records": 105642
+    },
+    {
+      "examples": 5679,
+      "family_counts": {
+        "code_to_semantic": 26420,
+        "knowledge_boundary": 2655,
+        "mixed_instruction": 26279,
+        "semantic_continuation": 1727,
+        "semantic_to_code": 26494,
+        "structural_reasoning": 2161
+      },
+      "language": "javascript",
+      "passed": true,
+      "training_records": 85736
+    },
+    {
+      "examples": 1150,
+      "family_counts": {
+        "code_to_semantic": 18828,
+        "knowledge_boundary": 1523,
+        "mixed_instruction": 15832,
+        "semantic_continuation": 1360,
+        "semantic_to_code": 15967,
+        "structural_reasoning": 1098
+      },
+      "language": "typescript",
+      "passed": true,
+      "training_records": 54608
+    },
+    {
+      "examples": 1101,
+      "family_counts": {
+        "code_to_semantic": 20156,
+        "knowledge_boundary": 645,
+        "mixed_instruction": 19605,
+        "semantic_continuation": 574,
+        "semantic_to_code": 19697,
+        "structural_reasoning": 926
+      },
+      "language": "c",
+      "passed": true,
+      "training_records": 61603
+    },
+    {
+      "examples": 3957,
+      "family_counts": {
+        "code_to_semantic": 16442,
+        "knowledge_boundary": 1315,
+        "mixed_instruction": 16297,
+        "semantic_continuation": 1637,
+        "semantic_to_code": 16486,
+        "structural_reasoning": 1429
+      },
+      "language": "cpp",
+      "passed": true,
+      "training_records": 53606
+    },
+    {
+      "examples": 628,
+      "family_counts": {
+        "code_to_semantic": 1621,
+        "knowledge_boundary": 3236,
+        "mixed_instruction": 1752,
+        "semantic_continuation": 1796,
+        "semantic_to_code": 1765,
+        "structural_reasoning": 1224
+      },
+      "language": "c_sharp",
+      "passed": true,
+      "training_records": 11394
+    },
+    {
+      "examples": 1052,
+      "family_counts": {
+        "code_to_semantic": 3035,
+        "knowledge_boundary": 2922,
+        "mixed_instruction": 3030,
+        "semantic_continuation": 2763,
+        "semantic_to_code": 3037,
+        "structural_reasoning": 4604
+      },
+      "language": "java",
+      "passed": true,
+      "training_records": 19391
+    },
+    {
+      "examples": 6347,
+      "family_counts": {
+        "code_to_semantic": 32158,
+        "knowledge_boundary": 5439,
+        "mixed_instruction": 32100,
+        "semantic_continuation": 2564,
+        "semantic_to_code": 32185,
+        "structural_reasoning": 1946
+      },
+      "language": "go",
+      "passed": true,
+      "training_records": 106392
+    },
+    {
+      "examples": 4445,
+      "family_counts": {
+        "code_to_semantic": 28614,
+        "knowledge_boundary": 1722,
+        "mixed_instruction": 28552,
+        "semantic_continuation": 1846,
+        "semantic_to_code": 28600,
+        "structural_reasoning": 1590
+      },
+      "language": "rust",
+      "passed": true,
+      "training_records": 90924
+    },
+    {
+      "examples": 4004,
+      "family_counts": {
+        "code_to_semantic": 27342,
+        "knowledge_boundary": 5706,
+        "mixed_instruction": 26308,
+        "semantic_continuation": 1818,
+        "semantic_to_code": 26656,
+        "structural_reasoning": 104
+      },
+      "language": "php",
+      "passed": true,
+      "training_records": 87934
+    },
+    {
+      "examples": 7075,
+      "family_counts": {
+        "code_to_semantic": 40247,
+        "knowledge_boundary": 3955,
+        "mixed_instruction": 38384,
+        "semantic_continuation": 2065,
+        "semantic_to_code": 40443,
+        "structural_reasoning": 1697
+      },
+      "language": "ruby",
+      "passed": true,
+      "training_records": 126791
+    },
+    {
+      "examples": 912,
+      "family_counts": {
+        "code_to_semantic": 4223,
+        "knowledge_boundary": 5311,
+        "mixed_instruction": 4163,
+        "semantic_continuation": 2338,
+        "semantic_to_code": 4237,
+        "structural_reasoning": 682
+      },
+      "language": "kotlin",
+      "passed": true,
+      "training_records": 20954
+    },
+    {
+      "examples": 1803,
+      "family_counts": {
+        "code_to_semantic": 5298,
+        "knowledge_boundary": 2462,
+        "mixed_instruction": 5298,
+        "semantic_continuation": 2214,
+        "semantic_to_code": 5318,
+        "structural_reasoning": 2293
+      },
+      "language": "swift",
+      "passed": true,
+      "training_records": 22883
+    },
+    {
+      "examples": 2868,
+      "family_counts": {
+        "code_to_semantic": 16417,
+        "knowledge_boundary": 2146,
+        "mixed_instruction": 16137,
+        "semantic_continuation": 1662,
+        "semantic_to_code": 16361,
+        "structural_reasoning": 1064
+      },
+      "language": "bash",
+      "passed": true,
+      "training_records": 53787
+    }
+  ],
+  "passed": true,
+  "run_kind": "smoke",
+  "schema_version": "bcnlt-multilingual-packed-audit-v1",
+  "training_records": 901645,
+  "training_tokens": 1016338614
+}

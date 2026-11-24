@@ -8,7 +8,6 @@ from .adapters.spec import IdentifierRoleRule, LanguageSemanticSpec, NodeRule, S
 from .ir import COMMON_CODING_CONCEPTS
 from .languages import CANONICAL_LANGUAGE_IDS, LANGUAGE_BY_ID
 
-
 COMMON_CORE_REGISTRY_VERSION = "bcnlt-common-core-v1"
 REQUIRED_GRAMMAR_CONCEPTS = frozenset(
     {
@@ -76,7 +75,7 @@ _NODES = {
         python=("identifier",), javascript=("identifier",), typescript=("identifier",), c=("identifier",),
         cpp=("identifier",), c_sharp=("identifier",), java=("identifier",), go=("identifier",),
         rust=("identifier",), php=("variable_name",), ruby=("identifier",), kotlin=("simple_identifier",),
-        swift=("simple_identifier",), bash=("variable_name",),
+        swift=("simple_identifier",), bash=("variable_name", "special_variable_name"),
     ),
     "parameter": _per_language(
         python=("default_parameter", "typed_parameter"), javascript=("required_parameter",),
@@ -84,14 +83,14 @@ _NODES = {
         c_sharp=("parameter",), java=("formal_parameter",),
         go=("parameter_declaration", "variadic_parameter_declaration"),
         rust=("parameter",), php=("simple_parameter",), ruby=(),
-        kotlin=("parameter",), swift=("parameter",), bash=("special_variable_name",),
+        kotlin=("parameter",), swift=("parameter",), bash=(),
     ),
     "function": _per_language(
-        python=("function_definition", "lambda"), javascript=("function_declaration", "method_definition", "arrow_function"),
-        typescript=("function_declaration", "method_definition", "arrow_function"), c=("function_definition",),
+        python=("function_definition", "lambda"), javascript=("function_declaration", "method_definition", "arrow_function", "function_expression"),
+        typescript=("function_declaration", "method_definition", "arrow_function", "function_expression"), c=("function_definition",),
         cpp=("function_definition", "lambda_expression"), c_sharp=("method_declaration", "constructor_declaration", "lambda_expression"),
         java=("method_declaration", "constructor_declaration", "lambda_expression"), go=("function_declaration", "method_declaration", "func_literal"),
-        rust=("function_item", "closure_expression"), php=("function_definition", "method_declaration", "anonymous_function"),
+        rust=("function_item", "closure_expression"), php=("function_definition", "method_declaration", "anonymous_function", "arrow_function"),
         ruby=("method", "singleton_method", "lambda"), kotlin=("function_declaration", "lambda_literal"),
         swift=("function_declaration", "initializer_declaration", "lambda_literal"), bash=("function_definition",),
     ),
@@ -450,6 +449,10 @@ def build_semantic_spec(language: str) -> LanguageSemanticSpec:
     if language in {"javascript", "typescript"}:
         scope_rules.append(ScopeRule("statement_block", "block"))
         scope_rules.append(ScopeRule("catch_clause", "block"))
+        # ECMAScript class static initialization blocks own ``var`` bindings;
+        # unlike ordinary statement blocks, those bindings must not hoist to
+        # an enclosing function or module.
+        scope_rules.append(ScopeRule("class_static_block", "static_block"))
     return LanguageSemanticSpec(
         semantic_spec_version=LANGUAGE_BY_ID[language].semantic_spec_version,
         node_rules=tuple(node_rules),

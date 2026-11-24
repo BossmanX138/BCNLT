@@ -103,6 +103,45 @@ class InferenceProtocolTests(unittest.TestCase):
         self.assertEqual(prompt[2], ids["<|bcnlt:mode:raw_code|>"])
         self.assertEqual(prompt[-1], ids["<|bcnlt:stream:end|>"])
 
+    def test_general_instruction_uses_text_stream_for_prompt_and_response(self):
+        from bosscrafts_model.inference_protocol import (
+            build_inference_prompt,
+            response_payload_token_ids,
+            response_protocol_complete,
+        )
+
+        ids = self.binding.structural_token_ids
+        prompt = build_inference_prompt(
+            self.binding,
+            task="instruction_to_response",
+            prompt="Explain why the loop terminates.",
+        )
+        self.assertEqual(prompt[0], ids["<|bcnlt:task:mixed_instruction|>"])
+        self.assertEqual(prompt[2], ids["<|bcnlt:mode:text|>"])
+        payload = self.binding.encode_payload("It terminates when the bound is reached.")
+        generated = [
+            ids["<|bcnlt:stream:begin|>"],
+            ids["<|bcnlt:mode:text|>"],
+            *payload,
+            ids["<|bcnlt:stream:end|>"],
+            ids["<|bcnlt:task:end|>"],
+        ]
+        self.assertTrue(
+            response_protocol_complete(
+                self.binding,
+                task="instruction_to_response",
+                generated_ids=generated,
+            )
+        )
+        self.assertEqual(
+            response_payload_token_ids(
+                self.binding,
+                "instruction_to_response",
+                generated,
+            ),
+            payload,
+        )
+
     def test_instruction_response_extracts_only_complete_code_payload(self):
         from bosscrafts_model.inference_protocol import response_payload_token_ids
 

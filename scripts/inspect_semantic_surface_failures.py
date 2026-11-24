@@ -4,10 +4,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
 import sqlite3
 import sys
-
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = PROJECT_ROOT / "vendor" / "bcnlt_runtime_v6_candidate"

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
 import subprocess
 import sys
 import unittest
+from pathlib import Path
 
 from bosscrafts_model.current_corpus import SourceCandidate
 from bosscrafts_model.current_task_packing import CurrentCorpusTaskPacker

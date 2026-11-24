@@ -1,0 +1,16 @@
+{
+  "ff_width": 3072,
+  "heads": 20,
+  "layers": 24,
+  "max_sequence": 2048,
+  "modular": true,
+  "module_rounds": 2,
+  "module_width": 1024,
+  "parameter_count": 540094726,
+  "schema_version": "bosscrafts-engineering-model-config-v1",
+  "tied_input_output_embeddings": true,
+  "token_id_policy": "frozen_exact_no_resize_no_renumber",
+  "tokenizer_sha256": "e1930449f3efe99bbb3f63730f75f71788d4ff21928bcae4d3ee2a520d30d407",
+  "vocab_size": 65536,
+  "width": 1280
+}

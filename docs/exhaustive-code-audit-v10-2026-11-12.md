@@ -1,5 +1,10 @@
 # BossCrafts V10 exhaustive code audit
 
+> Historical checkpoint: this document records the 2026-11-12 audit at the
+> commit named below. It is superseded for current status, schemas, counts, and
+> remaining work by `docs/pre-model-code-audit.md`. It must not be used as
+> authorization to resume training.
+
 Date: 2026-11-12
 
 Audited repair commit: `628f74071e7031ec9bb4ade6b4a6b2579fe6d28c`

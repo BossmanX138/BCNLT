@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
-from bosscrafts_model.bcnlt_source_pipeline import BCNLTSourcePipeline
-from bosscrafts_model.bcnlt_source_pipeline import PARSER_RUNTIME_IDENTITY_SHA256
+from bosscrafts_model.bcnlt_source_pipeline import (
+    PARSER_RUNTIME_IDENTITY_SHA256,
+    BCNLTSourcePipeline,
+)
 from bosscrafts_model.current_corpus import CurrentCorpusAdmission, SourceCandidate
 from bosscrafts_model.current_task_packing import CurrentCorpusTaskPacker
 from bosscrafts_model.heldout_semantic_review import (
@@ -202,6 +204,134 @@ class HeldoutSemanticReviewQueueTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "missing review decisions"):
                 HeldoutSemanticReviewAdjudicator().materialize(queue_dir, (), output_dir)
+
+    def test_queue_and_adjudication_generations_are_never_overwritten(self):
+        candidate = _candidate(_heldout_document_id(), "value = 1\n")
+        with (
+            tempfile.TemporaryDirectory() as admission_dir,
+            tempfile.TemporaryDirectory() as queue_dir,
+            tempfile.TemporaryDirectory() as output_dir,
+        ):
+            CurrentCorpusAdmission(self.pipeline).materialize(
+                (candidate,), admission_dir
+            )
+            queue_builder = HeldoutSemanticReviewQueue(
+                self.binding, per_language=1
+            )
+            queue_builder.materialize_admission_only(admission_dir, queue_dir)
+            queue_root = Path(queue_dir)
+            original_queue = {
+                path.name: path.read_bytes()
+                for path in queue_root.iterdir()
+                if path.is_file()
+            }
+            with self.assertRaisesRegex(ValueError, "already contains"):
+                queue_builder.materialize_admission_only(admission_dir, queue_dir)
+            self.assertEqual(
+                {
+                    path.name: path.read_bytes()
+                    for path in queue_root.iterdir()
+                    if path.is_file()
+                },
+                original_queue,
+            )
+
+            item = json.loads(
+                (queue_root / "review_queue.jsonl").read_text(encoding="utf-8")
+            )
+            decision = {
+                "review_id": item["review_id"],
+                "decision": "keep",
+                "reviewer": "fixture-reviewer",
+                "notes": "Source and semantic record align.",
+                "rubric": {
+                    "event_matches_source": True,
+                    "ir_kind_plausible": True,
+                    "scope_plausible": True,
+                    "span_matches_source": True,
+                    "uncertainty_calibrated": True,
+                },
+            }
+            adjudicator = HeldoutSemanticReviewAdjudicator()
+            adjudicator.materialize(queue_dir, (decision,), output_dir)
+            original_adjudication = {
+                path.name: path.read_bytes()
+                for path in Path(output_dir).iterdir()
+                if path.is_file()
+            }
+            with self.assertRaisesRegex(ValueError, "already contains"):
+                adjudicator.materialize(queue_dir, (decision,), output_dir)
+            self.assertEqual(
+                {
+                    path.name: path.read_bytes()
+                    for path in Path(output_dir).iterdir()
+                    if path.is_file()
+                },
+                original_adjudication,
+            )
+
+    def test_adjudicator_rejects_queue_file_path_escape(self):
+        candidate = _candidate(_heldout_document_id(), "value = 1\n")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            admission = root / "admission"
+            queue = root / "queue"
+            output = root / "output"
+            CurrentCorpusAdmission(self.pipeline).materialize(
+                (candidate,), admission
+            )
+            HeldoutSemanticReviewQueue(
+                self.binding, per_language=1
+            ).materialize_admission_only(admission, queue)
+            queue_text = (queue / "review_queue.jsonl").read_text(
+                encoding="utf-8"
+            )
+            (root / "outside.jsonl").write_text(
+                queue_text, encoding="utf-8", newline="\n"
+            )
+            manifest_path = queue / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest.pop("manifest_sha256")
+            manifest["queue_file"] = "../outside.jsonl"
+            canonical_manifest = json.dumps(
+                manifest,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            manifest["manifest_sha256"] = hashlib.sha256(
+                canonical_manifest.encode("utf-8")
+            ).hexdigest()
+            manifest_path.write_text(
+                json.dumps(
+                    manifest,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+            item = json.loads(queue_text)
+            decision = {
+                "review_id": item["review_id"],
+                "decision": "keep",
+                "reviewer": "fixture-reviewer",
+                "notes": "Source and semantic record align.",
+                "rubric": {
+                    "event_matches_source": True,
+                    "ir_kind_plausible": True,
+                    "scope_plausible": True,
+                    "span_matches_source": True,
+                    "uncertainty_calibrated": True,
+                },
+            }
+
+            with self.assertRaisesRegex(ValueError, "file inventory"):
+                HeldoutSemanticReviewAdjudicator().materialize(
+                    queue, (decision,), output
+                )
 
 
 if __name__ == "__main__":

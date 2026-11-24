@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 from bosscrafts_model.balanced_curriculum import build_balanced_curriculum
 from bosscrafts_model.bcnlt_source_pipeline import BCNLTSourcePipeline
+from bosscrafts_model.compact_semantic_wire import COMPACT_SEMANTIC_WIRE_SCHEMA
 from bosscrafts_model.current_corpus import SourceCandidate
 from bosscrafts_model.current_task_packing import CurrentCorpusTaskPacker
-from bosscrafts_model.compact_semantic_wire import COMPACT_SEMANTIC_WIRE_SCHEMA
 from bosscrafts_model.resumable_current_corpus import ResumableCurrentCorpusAdmission
 from bosscrafts_model.resumable_task_packing import audit_task_database
 from bosscrafts_model.tokenizer import NativeTokenizerBinding
@@ -113,6 +113,8 @@ class BalancedCurriculumTests(unittest.TestCase):
             admission = root / "admission.sqlite"
             first_database = root / "first.sqlite"
             second_database = root / "second.sqlite"
+            legacy_temporary = root / ".first.sqlite.tmp"
+            legacy_temporary.write_bytes(b"unrelated sentinel")
             _write_catalog(catalog, candidates)
             admission_writer = ResumableCurrentCorpusAdmission(
                 self.pipeline,
@@ -140,6 +142,7 @@ class BalancedCurriculumTests(unittest.TestCase):
                 languages=("python",),
                 quotas={"train": 1, "validation": 1, "test": 1},
             )
+            self.assertEqual(legacy_temporary.read_bytes(), b"unrelated sentinel")
             self.assertEqual(first.example_count, 9)
             self.assertEqual(first.cell_counts, second.cell_counts)
             self.assertEqual(
